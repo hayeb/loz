@@ -1,0 +1,45 @@
+AST ::= <FunctionDeclaration>+
+
+FunctionDeclaration ::= <FunctionType> '\n' <FunctionBody>
+
+FunctionType ::= <Identifier> '::' <Type>
+
+Type ::= 'Bool'
+	| 'Int'
+	| 'Char'
+	| 'String'
+	| 'Void'
+	| <Type> '->' <Type>
+
+FunctionBody ::= <Identifier> <Arguments>* <FunctionGuard>
+FunctionGuard ::= '\n|' <Expr> '=' <Expr> <FunctionGuard>
+	| '=' <Expr>
+
+Expr1 ::= <Expr2> '||' <Expr2>
+	| <Expr2> '&&' <Expr2>
+	| <Expr2>
+
+Expr2 ::= <Expr3> '==' <Expr3>
+	| <Expr3> '<=' <Expr3>
+	| <Expr3> '>=' <Expr3>
+	| <Expr3> '!=' <Expr3>
+	| <Expr3> '<' <Expr3>
+	| <Expr3> '>' <Expr3>
+	| <Expr3>
+
+Expr3 ::= <Expr4> '+' <Expr4>
+	| <Expr4> '-' <Expr4>
+	| <Expr4>
+
+Expr4 ::= <Expr5> '*' <Expr5>
+	| <Expr5> '/' <Expr5>
+	| <Expr5> '%' <Expr5>
+	| <Expr5>
+
+Expr5 ::= <Number>
+	| <StringLiteral>
+	| <CharLiteral>
+	| 'False'
+	| 'True'
+	| '(' <Expr> ')' // Neste expression
+	| Identifier <Expr>* // Function call
