@@ -1,174 +1,250 @@
-pub mod tokenizer {
-    use crate::tokenizer::tokenizer::TokenType::{CharacterLiteral, Identifier, Number, StringLiteral, Symbol};
+use std::fmt::{Display, Error, Formatter};
+use std::rc::Rc;
+use crate::tokenizer::TokenType::{Symbol, Identifier, StringLiteral, CharacterLiteral, Number};
+use crate::tokenizer::TokenizerErrorType::{UnterminatedString, UnexpectedCharacter, UnexpectedEOF};
 
-    #[derive(Debug)]
-    pub enum TokenType {
-        CharacterLiteral,
-        StringLiteral,
-        Identifier,
-        Symbol,
-        Number,
+#[derive(Debug)]
+pub enum TokenType {
+    CharacterLiteral,
+    StringLiteral,
+    Identifier,
+    Symbol,
+    Number,
+}
+
+#[derive(Debug)]
+pub enum TokenizerErrorType {
+    UnexpectedEOF,
+    UnexpectedCharacter(char),
+    UnterminatedString,
+}
+
+#[derive(Debug)]
+pub struct TokenizerError {
+    file: Rc<String>,
+    line: u16,
+    col: u16,
+    error: TokenizerErrorType,
+}
+
+#[derive(Debug)]
+pub struct TokenLocation {
+    line: u16,
+    column: u16,
+}
+
+#[derive(Debug)]
+pub struct Token {
+    data: String,
+    token_type: TokenType,
+    token_location: TokenLocation,
+}
+
+impl Display for TokenizerError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "[{}:{}:{}]: {}", self.file, self.line, self.col, self.error)
     }
+}
 
-    #[derive(Debug)]
-    pub struct TokenLocation {
-        line: u16,
-        column: u16,
+impl Display for TokenizerErrorType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        let err = match self {
+            UnexpectedEOF => String::from("Unexpected EOF"),
+            UnexpectedCharacter(c) => format!("Unexpected character '{}'", c),
+            UnterminatedString => String::from("String literal not terminated")
+        };
+        write!(f, "{}", err)
     }
+}
 
-    #[derive(Debug)]
-    pub struct Token {
-        data: String,
-        token_type: TokenType,
-        token_location: TokenLocation,
-    }
+struct Tokenizer {
+    input: String,
+    line: u16,
+    col: u16,
+    file_name: Rc<String>,
+}
 
-    struct Tokenizer {
-        input: String,
-        tokens: Vec<Token>,
-        line: u16,
-        col: u16,
-        file_name: String,
-    }
-
-    impl Tokenizer {
-        fn tokenize(&mut self) -> Result<Vec<Token>, String> {
-            let mut tokens = Vec::new();
-            loop {
-                match self.consume() {
-                    None => {
-                        println!("End of tokens at {}:{}", self.line, self.col);
-                        return Ok(tokens);
-                    }
-                    Some(c) => {
-                        println!("Token {:?}", c);
-                        match self.read_token(c) {
-                            Ok(None) => continue,
-                            Ok(Some(token)) => tokens.push(token),
-                            Err(e) => return Err(e)
-                        }
+impl Tokenizer {
+    fn tokenize(&mut self) -> Result<Vec<Token>, TokenizerError> {
+        let mut tokens = Vec::new();
+        loop {
+            match self.peek(0) {
+                None => {
+                    return Ok(tokens);
+                }
+                Some(c) => {
+                    match self.read_token(c) {
+                        Ok(None) => continue,
+                        Ok(Some(token)) => tokens.push(token),
+                        Err(e) => return Err(e)
                     }
                 }
             }
         }
+    }
 
-        fn read_token(&mut self, c: char) -> Result<Option<Token>, String> {
-            println!("read_token {}", c);
-            if c == ' ' || c == '\t' || c == '\n' {
-                return Ok(None);
-
-            }
-            match Tokenizer::guess_token_type(c) {
-                Number => self.read_number(c),
-                CharacterLiteral => self.read_character_literal(c),
-                StringLiteral => self.read_string_literal(c),
-                Identifier => self.read_identifier(c),
-                Symbol => self.read_symbol(c)
-            }
+    fn read_token(&mut self, c: char) -> Result<Option<Token>, TokenizerError> {
+        if c == '\r' && self.peek(1).filter(|cr| *cr == '\n').is_some() {
+            self.consume();
+            self.consume();
+            self.col = 1;
+            return Ok(None);
         }
-
-        fn read_number(&mut self, start: char) -> Result<Option<Token>, String> {
-            println!("read_number");
-            let mut num = String::new();
-            num.push(start);
-
-            let column = self.col;
-            let mut mc = self.peek();
-            while let Some(c) = mc {
-                println!("Read number {}", c);
-                if c.is_digit(10) {
-                    self.consume();
-                    mc = self.peek();
-                    num.push(c)
-                } else if num.len() > 0 {
-                    return Ok(Some(Token { data: num, token_type: Number, token_location: TokenLocation { line: self.line, column} }));
-                } else {
-                    return Err(format!("[{}][{}]: Unexpected character {}", self.line, self.col, c));
-                }
-            }
-            if num.len() > 0 {
-                return Ok(Some(Token { data: num, token_type: Number, token_location: TokenLocation { line: self.line, column} }));
-            }
-            Err(format!("[{}][{}]: Unexpected EOF", self.line, self.col))
+        if c == ' ' || c == '\t' || c == '\n' {
+            self.consume();
+            return Ok(None);
         }
-
-        fn read_character_literal(&mut self, start: char) -> Result<Option<Token>, String> {
-            println!("read_character_literal {}", start);
-            let col = self.col;
-
-            let c = self.consume();
-
-            if let None = c {
-                return Err(format!("[{}][{}]: Expected char literal content", self.line, self.col));
-            }
-
-            // Consume ', hopefully
-            let end = self.consume();
-            println!("{:?} {:?}", c, end);
-            match end {
-                None => return Err(format!("[{}][{}]: Expected char literal end '", self.line, self.col)),
-                Some('\'') => (),
-                Some(c) => return Err(format!("[{}][{}]: Expected char literal end ', got {}", self.line, self.col, c))
-            }
-
-            let mut data = String::new();
-            data.push(c.expect("easd"));
-
-            Ok(Some(Token { data, token_type: CharacterLiteral, token_location: TokenLocation { line: self.line, column: self.col } }))
+        match Tokenizer::guess_token_type(c) {
+            Number => self.read_number(c),
+            CharacterLiteral => self.read_character_literal(c),
+            StringLiteral => self.read_string_literal(c),
+            Identifier => self.read_identifier(c),
+            Symbol => self.read_symbol(c)
         }
+    }
 
-        fn read_string_literal(&self, c: char) -> Result<Option<Token>, String> { Err(String::from("read_string_literal Not implemented")) }
+    fn read_number(&mut self, start: char) -> Result<Option<Token>, TokenizerError> {
+        let mut num = String::new();
+        num.push(start);
 
-        fn read_identifier(&self, c: char) -> Result<Option<Token>, String> { Err(String::from("read_identifier Not implemented")) }
-
-        fn read_symbol(&self, c: char) -> Result<Option<Token>, String> { Err(String::from("read_symbol Not implemented")) }
-
-        fn guess_token_type(c: char) -> TokenType {
+        let column = self.col;
+        self.consume();
+        while let Some(c) = self.peek(0) {
             if c.is_digit(10) {
-                return Number;
-            } else if c == '\'' {
-                return CharacterLiteral;
-            } else if c == '"' {
-                return StringLiteral;
-            } else if Tokenizer::is_identifier(c) {
-                return Identifier;
+                self.consume();
+                num.push(c)
+            } else if c.is_alphabetic() {
+                return Err(self.error(UnexpectedCharacter(c)));
+            } else if num.len() > 0 {
+                return Ok(Some(Token { data: num, token_type: Number, token_location: TokenLocation { line: self.line, column } }));
+            } else {
+                return Err(self.error(UnexpectedCharacter(c)));
             }
-            Number
+        }
+        if num.len() > 0 {
+            return Ok(Some(Token { data: num, token_type: Number, token_location: TokenLocation { line: self.line, column } }));
+        }
+        Err(self.error(UnexpectedEOF))
+    }
+
+    fn read_character_literal(&mut self, _start: char) -> Result<Option<Token>, TokenizerError> {
+        let column = self.col;
+
+        self.consume();
+        let c = self.consume();
+
+        if let None = c {
+            return Err(self.error(UnexpectedEOF));
+        }
+        let c = c.unwrap();
+
+        // Consume ', hopefully
+        let end = self.consume();
+        match end {
+            None => return Err(self.error(UnexpectedEOF)),
+            Some('\'') => (),
+            Some(c) => return Err(self.error(UnexpectedCharacter(c)))
         }
 
-        fn is_identifier(c: char) -> bool {
-            c == '_' || c.is_alphabetic()
+        let mut data = String::new();
+        data.push(c);
+
+        Ok(Some(Token { data, token_type: CharacterLiteral, token_location: TokenLocation { line: self.line, column } }))
+    }
+
+    fn read_string_literal(&mut self, _c: char) -> Result<Option<Token>, TokenizerError> {
+        let column = self.col;
+
+        // Consume "
+        self.consume();
+
+        let mut data = String::new();
+        while let Some(c) = self.consume() {
+            if c == '"' {
+                return Ok(Some(Token { data, token_type: StringLiteral, token_location: TokenLocation { line: self.line, column } }));
+            }
+            data.push(c);
+        }
+        return Err(self.error(UnterminatedString));
+    }
+
+    fn read_identifier(&mut self, c: char) -> Result<Option<Token>, TokenizerError> {
+        let column = self.col;
+
+        self.consume();
+
+        let mut data = String::new();
+        data.push(c);
+
+        while let Some(c) = self.peek(0) {
+            if c.is_alphabetic() || c.is_numeric() || c == '_' {
+                data.push(c);
+                self.consume();
+            } else {
+                return Ok(Some(Token { data, token_type: Identifier, token_location: TokenLocation { line: self.line, column } }));
+            }
         }
 
-        fn consume(&mut self) -> Option<char> {
-            let c = self.input.chars().nth(0);
+        Ok(Some(Token { data, token_type: Identifier, token_location: TokenLocation { line: self.line, column } }))
+    }
 
-            if let None = c {
-                return None
-            }
-            self.input = self.input[1..].to_string();
+    fn read_symbol(&mut self, c: char) -> Result<Option<Token>, TokenizerError> {
+        let column = self.col;
+        let mut data = String::new();
+        self.consume();
+        data.push(c);
+        Ok(Some(Token { data, token_type: Symbol, token_location: TokenLocation { line: self.line, column } }))
+    }
 
-            if let Some('\n') = c {
-                self.line += 1
-            }
-            if let Some(' ') = c {
+    fn guess_token_type(c: char) -> TokenType {
+        if c.is_digit(10) {
+            return Number;
+        } else if c == '\'' {
+            return CharacterLiteral;
+        } else if c == '"' {
+            return StringLiteral;
+        } else if Tokenizer::is_identifier(c) {
+            return Identifier;
+        } else if c.is_ascii_punctuation() {
+            return Symbol;
+        }
+        panic!("Could not determine token type: {:?}", c)
+    }
+
+    fn is_identifier(c: char) -> bool {
+        c == '_' || c.is_alphabetic()
+    }
+
+    fn consume(&mut self) -> Option<char> {
+        let c = self.input.chars().nth(0)?;
+        self.input = self.input[1..].to_string();
+
+        if '\n' == c {
+            self.line += 1;
+            self.col = 1;
+        } else if '\t' == c {
+            self.col += 4
+        } else {
+            if c != '\n' {
                 self.col += 1
             }
-            if let Some('\t') = c {
-                self.col += 4
-            }
-            return c;
         }
-
-        fn peek(&self) -> Option<char> {
-            self.input.chars().nth(0)
-        }
+        Some(c)
+    }
+    fn peek(&self, offset: usize) -> Option<char> {
+        self.input.chars().nth(offset)
     }
 
-    pub fn tokenize(input: String, file_name: String) -> Result<Vec<Token>, String> {
-        println!("Reading tokens from {}", file_name);
-
-        let mut tokenizer = Tokenizer { input, tokens: Vec::new(), line: 1, col: 1, file_name };
-        tokenizer.tokenize()
+    fn error(&self, e: TokenizerErrorType) -> TokenizerError {
+        TokenizerError {
+            file: Rc::clone(&self.file_name),
+            line: self.line,
+            col: self.col,
+            error: e,
+        }
     }
+}
+
+pub fn tokenize(input: String, file_name: Rc<String>) -> Result<Vec<Token>, TokenizerError> {
+    Tokenizer { input, line: 1, col: 1, file_name }.tokenize()
 }
