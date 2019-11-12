@@ -1,0 +1,83 @@
+WHITESPACE = _{ " " | "\t"}
+COMMENT = _{ "/*" ~ (!"*/" ~ ANY)* ~ "*/" | "//" ~ (!NEWLINE ~ ANY) ~ NEWLINE }
+
+number = @{
+    "-"?
+    ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*)
+    ~ ("." ~ ASCII_DIGIT*)?
+    ~ (^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+)?
+}
+
+identifier = @{
+    (LETTER | "_" ) ~ (LETTER | DECIMAL_NUMBER )*
+}
+
+char_literal = @{
+    "'" ~ (CASED_LETTER | TITLECASE_LETTER) ~ "'"
+}
+
+string_literal = ${
+    "\"" ~ string_inner ~ "\""
+}
+
+string_inner = @{
+    string_char*
+}
+
+string_char = {
+    !("\"" | "\\") ~ ANY
+    | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
+    | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
+}
+
+function_definition = {
+    PUSH(identifier) ~ NEWLINE* ~ "::" ~ NEWLINE* ~ function_type ~ NEWLINE+ ~ function_body+
+}
+
+loz_type = {
+    "Bool"
+    | "String"
+    | "Int"
+    | "Char"
+}
+
+function_header = ${ PEEK ~ (WHITESPACE+ ~ identifier)*}
+
+function_conditional_rule = { NEWLINE ~ function_conditional}
+
+function_expression_rule = {NEWLINE* ~ "=" ~ NEWLINE* ~ expression ~ NEWLINE+}
+
+function_body = {
+    function_header ~
+    (
+        function_conditional_rule* ~ NEWLINE+
+    |   function_expression_rule
+    )
+}
+
+function_conditional = {
+    "|" ~ expression ~ "=" ~ expression
+}
+
+function_type = {
+    (loz_type ~ NEWLINE*)* ~ NEWLINE? ~ "->" ~ NEWLINE? ~ loz_type
+}
+
+call = {
+    identifier ~ expression+
+}
+
+expression = {
+    string_literal
+    | char_literal
+    | number
+    | call // Function call
+    | identifier // Variable reference
+}
+
+main = {"Main" ~ "=" ~ expression }
+
+ast = {
+   (function_definition ~ NEWLINE?)* ~ main
+}
+

@@ -1,7 +1,10 @@
 use std::{fs, env};
 use std::rc::Rc;
 
-mod tokenizer;
+mod parser;
+
+#[macro_use]
+extern crate pest_derive;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -10,10 +13,6 @@ fn main() {
 
     let contents = fs::read_to_string(filename)
         .expect("Error reading from file: test/test.loz");
-    let res = tokenizer::tokenize(contents, Rc::new(String::from(filename)));
 
-    match res {
-        Ok(tokens) => println!("{:?}", tokens),
-        Err(err) => println!("{}", err)
-    }
+   println!("{:?}", parser::parse(&contents[..]));
 }
