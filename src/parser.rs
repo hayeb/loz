@@ -1,16 +1,12 @@
 extern crate pest;
 
-use std::any::Any;
-
 use pest::error::Error;
 use pest::iterators::Pair;
 use pest::Parser;
 
 use Expression::StringLiteral;
 
-use crate::parser::Type::{Bool, NoType};
 use crate::parser::Expression::{CharacterLiteral, Number, Call, Variable};
-use std::hint::unreachable_unchecked;
 
 #[derive(Debug)]
 pub enum FunctionRule {
@@ -51,7 +47,6 @@ pub enum Expression {
     StringLiteral(String),
     CharacterLiteral(char),
     Number(usize),
-    Identifier(String),
     Call(String, Vec<String>),
     Variable(String)
 }
@@ -67,10 +62,7 @@ pub struct AST {
 pub struct LOZParser;
 
 pub fn parse(input: &str) -> Result<AST, Error<Rule>> {
-    let mut ast = LOZParser::parse(Rule::ast, input)?.next().unwrap();
-
-    println!("{:?}", ast);
-
+    let ast = LOZParser::parse(Rule::ast, input)?.next().unwrap();
     Ok(to_ast(ast))
 }
 
@@ -96,7 +88,6 @@ fn to_ast(pair: Pair<Rule>) -> AST {
 }
 
 fn to_function_declaration(pair: Pair<Rule>) -> FunctionDeclaration {
-    println!("to_function_declaration: {:?}", pair);
     let mut inner_rules = pair.into_inner();
     let name = inner_rules.next().unwrap().as_str();
     let function_type = to_function_type(inner_rules.next().unwrap());
@@ -108,7 +99,6 @@ fn to_function_declaration(pair: Pair<Rule>) -> FunctionDeclaration {
 }
 
 fn to_expression(pair: Pair<Rule>) -> Expression {
-    println!("to_expression: {:?}", pair);
     let sub = pair.into_inner().next().unwrap();
     match sub.as_rule() {
         Rule::string_literal => StringLiteral(sub.into_inner().next().unwrap().as_str().to_string()),
@@ -126,7 +116,6 @@ fn to_expression(pair: Pair<Rule>) -> Expression {
 }
 
 fn to_function_type(pair: Pair<Rule>) -> FunctionType {
-    println!("to_function_type {:?}", pair);
 
     let mut types = pair.into_inner().peekable();
     let mut from_types = Vec::new();
@@ -144,7 +133,6 @@ fn to_function_type(pair: Pair<Rule>) -> FunctionType {
 }
 
 fn to_function_body(pair: Pair<Rule>) -> FunctionBody {
-    println!("to_function_body {:?}", pair);
     let mut rules = pair.into_inner();
     let parameters = to_parameter_names(rules.next().unwrap());
     let function_rules = rules.map(to_function_rule).collect();
@@ -152,11 +140,9 @@ fn to_function_body(pair: Pair<Rule>) -> FunctionBody {
 }
 
 fn to_function_rule(pair: Pair<Rule>) -> FunctionRule {
-    println!("to_function_rule {:?}", pair);
     match pair.as_rule() {
         Rule::function_conditional_rule => {
             let mut rules = pair.into_inner().next().unwrap().into_inner();
-            println!("rules: {:?}", rules);
             let left = to_expression(rules.next().unwrap());
             let right = to_expression(rules.next().unwrap());
             FunctionRule::ConditionalRule(left, right)
@@ -170,7 +156,6 @@ fn to_function_rule(pair: Pair<Rule>) -> FunctionRule {
 }
 
 fn to_parameter_names(pair: Pair<Rule>) -> Vec<String> {
-    println!("to_function_header {:?}", pair);
     pair.into_inner().map(|param| param.as_str().to_string()).collect()
 }
 
