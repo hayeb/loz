@@ -6,6 +6,9 @@ mod typer;
 #[macro_use]
 extern crate pest_derive;
 
+#[macro_use]
+extern crate lazy_static;
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -22,6 +25,7 @@ fn main() {
     }
 
     let ast = ast.unwrap();
+    println!("Parse result: {:#?}", ast);
     let typer_result = typer::_type(ast);
     if let Err(err) = typer_result {
         eprintln!("{:?}", err);

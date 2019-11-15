@@ -1,9 +1,8 @@
 WHITESPACE = _{ " " | "\t"}
-COMMENT = _{ "/*" ~ (!"*/" ~ ANY)* ~ "*/" | "//" ~ (!NEWLINE ~ ANY) ~ NEWLINE }
+COMMENT = _{ ("/*" ~ (!"*/" ~ ANY)* ~ "*/") | "//" ~ (!NEWLINE ~ ANY) ~ NEWLINE }
 
 number = @{
-    "-"?
-    ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*)
+      ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*)
     ~ ("." ~ ASCII_DIGIT*)?
     ~ (^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+)?
 }
@@ -45,14 +44,13 @@ function_header = ${ PEEK ~ (WHITESPACE+ ~ identifier)*}
 
 function_conditional_rule = { NEWLINE ~ function_conditional}
 
-function_expression_rule = {NEWLINE* ~ "=" ~ NEWLINE* ~ expression ~ NEWLINE+}
+function_expression_rule = {NEWLINE* ~ "=" ~ expression}
 
 function_body = {
     function_header ~
     (
-        function_conditional_rule* ~ NEWLINE+
-    |   function_expression_rule
-    )
+        function_conditional_rule* ~ function_expression_rule?
+    ) ~ NEWLINE+
 }
 
 function_conditional = {
@@ -64,16 +62,73 @@ function_type = {
 }
 
 call = {
-    identifier ~ expression+
+    identifier ~ function_argument+
 }
 
-expression = {
-    string_literal
+function_argument = {
+    simple_term
+    | identifier
+}
+
+simple_term = _{
+      bool_literal
+    | string_literal
     | char_literal
     | number
+    | subexpr
+    | negation
+    | minus
+}
+
+minus = @{"-" ~ expression}
+
+term = {
+      simple_term
     | call // Function call
     | identifier // Variable reference
 }
+bool_literal = {"false" | "true"}
+subexpr = {"(" ~ expression ~ ")"}
+negation = {"!" ~ expression}
+
+expression = { term ~ (operation ~ term)* }
+
+operation = _{
+        times | divide | modulo
+
+    | add | substract
+    | shift_left | shift_right
+
+    | lesser | leq | greater | greq
+
+    | eq | neq
+
+    | and
+
+    | or
+
+    }
+
+    times = {"*"}
+    divide = {"/"}
+    modulo = {"%"}
+
+    add = {"+"}
+    substract = {"-"}
+
+    shift_left = {"<<"}
+    shift_right = {">>"}
+
+    lesser = {"<"}
+    leq = {"<="}
+    greater = {">"}
+    greq = {">="}
+
+    eq = {"=="}
+    neq = {"!="}
+
+    and = {"&&"}
+    or = {"||"}
 
 main = {"Main" ~ "=" ~ expression }
 

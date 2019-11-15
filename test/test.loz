@@ -1,14 +1,16 @@
 choose :: Bool -> String
 choose bool
-| bool = 'c'
-| not bool = "false"
+| bool = 1 * ( 2 + 3 ) / 2
+| not bool = !false
 
-choose bool = "trueBLABLA"
+fac :: Int -> Int
+fac n
+| n == 1 = 1
+= n * fac (n - 1)
 
-choose2 :: Bool String String -> String
-choose2 bool bla bla
-| bool = 18
-| not bool = "false"
-| bla bla bool = bla
+pow :: Int -> Int
+pow n m
+| m == 0 = 1
+= n * pow n (m - 1)
 
 Main = choose True
