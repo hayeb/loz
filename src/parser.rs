@@ -119,26 +119,24 @@ pub fn parse(file_name: &String, input: &str) -> Result<AST, Error<Rule>> {
     let ast = LOZParser::parse(Rule::ast, input)?.next().unwrap();
     println!("raw ast: {:#?}", ast);
     let line_starts = build_line_start_cache(input);
-    //println!("line starts {:?}", line_starts);
+    println!("line starts {:?}", line_starts);
     Ok(to_ast(ast, file_name, &line_starts))
 }
 
 fn build_line_start_cache(input: &str) -> Vec<usize> {
-    let mut line_starts = Vec::new();
-    let mut start = 0;
-    let mut end = false;
+    let mut line_starts: Vec<usize> = Vec::new();
+    let mut start_current_line = 0;
+    let mut previous_character = '\0';
     for (i, c) in input.char_indices() {
-        if c == '\r' {
-            continue;
+        if previous_character == '\n' {
+            start_current_line = i;
         }
-        if end && c != '\n' {
-            start = i;
-            end = false;
-        } else if c == '\n' {
-            line_starts.push(start);
-            end = true;
+        if c == '\n' {
+            line_starts.push(start_current_line);
         }
+        previous_character = c;
     }
+
     line_starts
 }
 
@@ -147,14 +145,13 @@ fn line_col_number(line_starts: &Vec<usize>, pos: usize) -> (usize, usize) {
     let mut previous_start = 0;
     for (i, line_start) in line_starts.iter().enumerate() {
         if *line_start >= pos {
-            //println!("Found line start {} for pos {} index {}", *line_start, pos, i);
-            return (previous_index, pos - previous_start + 1);
+            return (previous_index + 1, pos - previous_start + 1);
         }
         previous_index = i;
         previous_start = *line_start;
     }
 
-    (previous_index, previous_start + 1)
+    (previous_index + 1, pos - previous_start + 1)
 }
 
 fn to_ast(pair: Pair<Rule>, file_name: &String, line_starts: &Vec<usize>) -> AST {
@@ -281,15 +278,19 @@ fn to_function_body(file_name: &String, function_name: &String, pair: Pair<Rule>
 }
 
 fn to_function_rule(pair: Pair<Rule>, file_name: &String, function_name: &String, line_starts: &Vec<usize>) -> FunctionRule {
-    let (line, col) = line_col_number(line_starts, pair.as_span().start());
     match pair.as_rule() {
         Rule::function_conditional_rule => {
-            let mut rules = pair.into_inner().next().unwrap().into_inner();
+            let pair = pair.into_inner().next().unwrap();
+            let (line, col) = line_col_number(line_starts, pair.as_span().start());
+            let mut rules = pair.into_inner();
             let left = to_expression(rules.next().unwrap(), file_name, function_name, line_starts);
             let right = to_expression(rules.next().unwrap(), file_name, function_name, line_starts);
             FunctionRule::ConditionalRule(LocationInformation { file: file_name.clone(), function: function_name.clone(), line, col }, left, right)
         }
-        Rule::function_expression_rule => FunctionRule::ExpressionRule(LocationInformation { file: file_name.clone(), function: function_name.clone(), line, col }, to_expression(pair.into_inner().next().unwrap(), file_name, function_name, line_starts)),
+        Rule::function_expression_rule => {
+            let (line, col) = line_col_number(line_starts, pair.as_span().start());
+            FunctionRule::ExpressionRule(LocationInformation { file: file_name.clone(), function: function_name.clone(), line, col }, to_expression(pair.into_inner().next().unwrap(), file_name, function_name, line_starts))
+        }
         _ => unreachable!()
     }
 }
