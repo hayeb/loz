@@ -11,6 +11,10 @@ extern crate lazy_static;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+    if args.len() < 2 {
+        eprintln!("Usage: loz <file>");
+        process::exit(2);
+    }
 
     let filename = &args[1];
 
