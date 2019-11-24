@@ -1,5 +1,7 @@
 extern crate pest;
 
+use std::collections::HashMap;
+
 use pest::error::Error;
 use pest::iterators::Pair;
 use pest::Parser;
@@ -9,21 +11,28 @@ use Expression::StringLiteral;
 
 use crate::parser::Expression::*;
 
-use self::pest::iterators::Pairs;
+#[derive(Debug, Clone)]
+pub struct LocationInformation {
+    pub file: String,
+    pub function: String,
+    pub line: usize,
+    pub col: usize,
+}
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum FunctionRule {
-    ConditionalRule(Expression, Expression),
-    ExpressionRule(Expression),
+    ConditionalRule(LocationInformation, Expression, Expression),
+    ExpressionRule(LocationInformation, Expression),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FunctionBody {
-    parameters: Vec<String>,
-    rules: Vec<FunctionRule>,
+    pub location: LocationInformation,
+    pub parameters: Vec<String>,
+    pub rules: Vec<FunctionRule>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     NoType,
     Bool,
@@ -32,20 +41,22 @@ pub enum Type {
     Int,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FunctionType {
-    from: Vec<Type>,
-    to: Type,
+    pub location: LocationInformation,
+    pub from: Vec<Type>,
+    pub to: Type,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FunctionDeclaration {
-    name: String,
-    function_type: FunctionType,
-    function_bodies: Vec<FunctionBody>,
+    pub location: LocationInformation,
+    pub name: String,
+    pub function_type: FunctionType,
+    pub function_bodies: Vec<FunctionBody>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expression {
     BoolLiteral(bool),
     StringLiteral(String),
@@ -75,13 +86,13 @@ pub enum Expression {
     Neq(Box<Expression>, Box<Expression>),
 
     And(Box<Expression>, Box<Expression>),
-    Or(Box<Expression>, Box<Expression>)
+    Or(Box<Expression>, Box<Expression>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AST {
-    function_declarations: Vec<FunctionDeclaration>,
-    main: Expression,
+    pub function_declarations: HashMap<String, FunctionDeclaration>,
+    pub main: Expression,
 }
 
 #[derive(Parser)]
@@ -104,24 +115,25 @@ lazy_static! {
 }
 
 
-pub fn parse(input: &str) -> Result<AST, Error<Rule>> {
+pub fn parse(file_name: &String, input: &str) -> Result<AST, Error<Rule>> {
     let ast = LOZParser::parse(Rule::ast, input)?.next().unwrap();
-    Ok(to_ast(ast))
+    Ok(to_ast(file_name, ast))
 }
 
-fn to_ast(pair: Pair<Rule>) -> AST {
+fn to_ast(file_name: &String, pair: Pair<Rule>) -> AST {
     match pair.as_rule() {
         Rule::ast => {
             let mut rules = pair.into_inner().peekable();
-            let mut function_declarations = Vec::new();
+            let mut decls = HashMap::new();
 
             while let Some(rule) = rules.next() {
                 if rules.peek().is_some() {
                     // Not the last one, function declaration.
-                    function_declarations.push(to_function_declaration(rule));
+                    let fd = to_function_declaration(file_name, rule);
+                    decls.insert(fd.clone().name, fd.clone());
                 } else {
                     // Not the last one, function declaration.
-                    return AST { function_declarations, main: to_expression(rule.into_inner().next().unwrap()) };
+                    return AST { function_declarations: decls, main: to_expression(rule.into_inner().next().unwrap()) };
                 }
             }
             unreachable!()
@@ -130,14 +142,15 @@ fn to_ast(pair: Pair<Rule>) -> AST {
     }
 }
 
-fn to_function_declaration(pair: Pair<Rule>) -> FunctionDeclaration {
+fn to_function_declaration(file_name: &String, pair: Pair<Rule>) -> FunctionDeclaration {
     let mut inner_rules = pair.into_inner();
     let name = inner_rules.next().unwrap().as_str();
-    let function_type = to_function_type(inner_rules.next().unwrap());
+    let function_type = to_function_type(file_name, &name.to_string(), inner_rules.next().unwrap());
     FunctionDeclaration {
+        location: LocationInformation { file: file_name.clone(), function: name.to_string(), line: 0, col: 0 },
         name: name.to_string(),
         function_type,
-        function_bodies: inner_rules.map(|b| to_function_body(b)).collect(),
+        function_bodies: inner_rules.map(|b| to_function_body(file_name, &name.to_string(), b)).collect(),
     }
 }
 
@@ -177,7 +190,6 @@ fn to_expression(expression: Pair<Rule>) -> Expression {
 }
 
 fn to_term(pair: Pair<Rule>) -> Expression {
-    println!("to_term {:#?}", pair);
     let sub = pair.into_inner().next().unwrap();
     match sub.as_rule() {
         Rule::bool_literal => BoolLiteral(sub.as_str().parse::<bool>().unwrap()),
@@ -187,7 +199,6 @@ fn to_term(pair: Pair<Rule>) -> Expression {
         Rule::call => {
             let mut subs = sub.into_inner();
             let function = subs.next().unwrap().as_str();
-            println!("args: {:#?}", subs);
             let arguments = subs.map(to_term).collect();
             Call(function.to_string(), arguments)
         }
@@ -199,41 +210,39 @@ fn to_term(pair: Pair<Rule>) -> Expression {
     }
 }
 
-fn to_function_type(pair: Pair<Rule>) -> FunctionType {
+fn to_function_type(file_name: &String, function_name: &String, pair: Pair<Rule>) -> FunctionType {
     let mut types = pair.into_inner().peekable();
     let mut from_types = Vec::new();
 
+    // f :: From From From -> To
     while let Some(t) = types.next() {
         if types.peek().is_some() {
             // Not the last, from type
             from_types.push(to_type(t));
         } else {
             // The last, to type
-            return FunctionType { from: from_types, to: to_type(t) };
+            return FunctionType { location: LocationInformation { file: file_name.clone(), function: function_name.clone(), line: 0, col: 0 }, from: from_types, to: to_type(t) };
         }
     }
     unreachable!()
 }
 
-fn to_function_body(pair: Pair<Rule>) -> FunctionBody {
+fn to_function_body(file_name: &String, function_name: &String, pair: Pair<Rule>) -> FunctionBody {
     let mut rules = pair.into_inner();
     let parameters = to_parameter_names(rules.next().unwrap());
-    let function_rules = rules.map(to_function_rule).collect();
-    FunctionBody { parameters, rules: function_rules }
+    let function_rules = rules.map(|b| to_function_rule(file_name, function_name, b)).collect();
+    FunctionBody { location: LocationInformation { file: file_name.clone(), function: function_name.clone(), line: 0, col: 0 }, parameters, rules: function_rules }
 }
 
-fn to_function_rule(pair: Pair<Rule>) -> FunctionRule {
+fn to_function_rule(file_name: &String, function_name: &String, pair: Pair<Rule>) -> FunctionRule {
     match pair.as_rule() {
         Rule::function_conditional_rule => {
             let mut rules = pair.into_inner().next().unwrap().into_inner();
             let left = to_expression(rules.next().unwrap());
             let right = to_expression(rules.next().unwrap());
-            FunctionRule::ConditionalRule(left, right)
+            FunctionRule::ConditionalRule(LocationInformation { file: file_name.clone(), function: function_name.clone(), line: 0, col: 0 }, left, right)
         }
-        Rule::function_expression_rule => {
-            let mut rules = pair.into_inner();
-            FunctionRule::ExpressionRule(to_expression(rules.next().unwrap()))
-        }
+        Rule::function_expression_rule => FunctionRule::ExpressionRule(LocationInformation { file: file_name.clone(), function: function_name.clone(), line: 0, col: 0 }, to_expression(pair.into_inner().next().unwrap())),
         _ => unreachable!()
     }
 }
