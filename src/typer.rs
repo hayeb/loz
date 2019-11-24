@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Error, Formatter};
-use std::panic::Location;
 
 use crate::parser::{AST, Expression, FunctionBody, FunctionDeclaration, FunctionRule, FunctionType, LocationInformation, Type};
 use crate::parser::FunctionRule::{ConditionalRule, ExpressionRule};
@@ -76,11 +75,16 @@ impl TyperState {
     }
 
     fn check_types(&self) -> Result<TypeResult, Vec<TypeError>> {
-        let errors: Vec<TypeError> = self.ast.function_declarations.iter()
+        let mut errors: Vec<TypeError> = self.ast.function_declarations.iter()
             .map(|(_, d)| self.check_function_declaration(d))
             .filter(|r| r.is_err())
             .flat_map(|err| err.err().unwrap().into_iter())
             .collect();
+
+        let res = self.check_expression(&self.ast.main, Type::Int, &HashMap::new());
+        if let Err(mut e) = res {
+            errors.append(&mut e);
+        }
 
         if errors.len() > 0 {
             Err(errors)
@@ -112,7 +116,7 @@ impl TyperState {
             .collect();
 
         let errors: Vec<TypeError> = (&body.rules).into_iter()
-            .map(|r| self.check_function_rule(name, &function_type.clone().to, &parameter_to_type, r))
+            .map(|r| self.check_function_rule(&function_type.clone().to, &parameter_to_type, r))
             .filter(|r| r.is_err())
             .flat_map(|err| err.err().unwrap().into_iter())
             .collect();
@@ -124,10 +128,10 @@ impl TyperState {
         }
     }
 
-    fn check_function_rule(&self, function_name: &String, result_type: &Type, parameter_to_type: &HashMap<&String, Type>, rule: &FunctionRule) -> Result<TypeResult, Vec<TypeError>> {
+    fn check_function_rule(&self, result_type: &Type, parameter_to_type: &HashMap<&String, Type>, rule: &FunctionRule) -> Result<TypeResult, Vec<TypeError>> {
        // print!("check function rule {} ", function_name);
         match rule {
-            ConditionalRule(loc_info, condition, expression) => {
+            ConditionalRule(_, condition, expression) => {
                 let e1r = self.check_expression(condition, Type::Bool, parameter_to_type);
                 let e2r = self.check_expression(expression, result_type.clone(), parameter_to_type);
                 match (e1r, e2r) {
@@ -136,8 +140,8 @@ impl TyperState {
                     (Err(e1), _) => Err(e1),
                     (_, Err(e2)) => Err(e2),
                 }
-            }
-            ExpressionRule(loc_info, e) => self.check_expression(e, result_type.clone(), parameter_to_type).map(|_| TypeResult {}),
+            },
+            ExpressionRule(_, e) => self.check_expression(e, result_type.clone(), parameter_to_type).map(|_| TypeResult {}),
         }
     }
 
