@@ -11,6 +11,6 @@ fac n
 pow :: Int -> Int
 pow n
 | n == 0 = 1
-= n * pow n (n - 1)
+= pow n (n - 1)
 
 Main = choose True

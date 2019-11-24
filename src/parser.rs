@@ -58,35 +58,35 @@ pub struct FunctionDeclaration {
 
 #[derive(Debug, Clone)]
 pub enum Expression {
-    BoolLiteral(bool),
-    StringLiteral(String),
-    CharacterLiteral(char),
-    Number(usize),
-    Call(String, Vec<Expression>),
-    Variable(String),
-    Negation(Box<Expression>),
-    Minus(Box<Expression>),
+    BoolLiteral(LocationInformation, bool),
+    StringLiteral(LocationInformation, String),
+    CharacterLiteral(LocationInformation, char),
+    Number(LocationInformation, usize),
+    Call(LocationInformation, String, Vec<Expression>),
+    Variable(LocationInformation, String),
+    Negation(LocationInformation, Box<Expression>),
+    Minus(LocationInformation, Box<Expression>),
 
-    Times(Box<Expression>, Box<Expression>),
-    Divide(Box<Expression>, Box<Expression>),
-    Modulo(Box<Expression>, Box<Expression>),
+    Times(LocationInformation, Box<Expression>, Box<Expression>),
+    Divide(LocationInformation, Box<Expression>, Box<Expression>),
+    Modulo(LocationInformation, Box<Expression>, Box<Expression>),
 
-    Add(Box<Expression>, Box<Expression>),
-    Substract(Box<Expression>, Box<Expression>),
+    Add(LocationInformation, Box<Expression>, Box<Expression>),
+    Substract(LocationInformation, Box<Expression>, Box<Expression>),
 
-    ShiftLeft(Box<Expression>, Box<Expression>),
-    ShiftRight(Box<Expression>, Box<Expression>),
+    ShiftLeft(LocationInformation, Box<Expression>, Box<Expression>),
+    ShiftRight(LocationInformation, Box<Expression>, Box<Expression>),
 
-    Greater(Box<Expression>, Box<Expression>),
-    Greq(Box<Expression>, Box<Expression>),
-    Leq(Box<Expression>, Box<Expression>),
-    Lesser(Box<Expression>, Box<Expression>),
+    Greater(LocationInformation, Box<Expression>, Box<Expression>),
+    Greq(LocationInformation, Box<Expression>, Box<Expression>),
+    Leq(LocationInformation, Box<Expression>, Box<Expression>),
+    Lesser(LocationInformation, Box<Expression>, Box<Expression>),
 
-    Eq(Box<Expression>, Box<Expression>),
-    Neq(Box<Expression>, Box<Expression>),
+    Eq(LocationInformation, Box<Expression>, Box<Expression>),
+    Neq(LocationInformation, Box<Expression>, Box<Expression>),
 
-    And(Box<Expression>, Box<Expression>),
-    Or(Box<Expression>, Box<Expression>),
+    And(LocationInformation, Box<Expression>, Box<Expression>),
+    Or(LocationInformation, Box<Expression>, Box<Expression>),
 }
 
 #[derive(Debug, Clone)]
@@ -117,10 +117,47 @@ lazy_static! {
 
 pub fn parse(file_name: &String, input: &str) -> Result<AST, Error<Rule>> {
     let ast = LOZParser::parse(Rule::ast, input)?.next().unwrap();
-    Ok(to_ast(file_name, ast))
+    println!("raw ast: {:#?}", ast);
+    let line_starts = build_line_start_cache(input);
+    //println!("line starts {:?}", line_starts);
+    Ok(to_ast(ast, file_name, &line_starts))
 }
 
-fn to_ast(file_name: &String, pair: Pair<Rule>) -> AST {
+fn build_line_start_cache(input: &str) -> Vec<usize> {
+    let mut line_starts = Vec::new();
+    let mut start = 0;
+    let mut end = false;
+    for (i, c) in input.char_indices() {
+        if c == '\r' {
+            continue;
+        }
+        if end && c != '\n' {
+            start = i;
+            end = false;
+        } else if c == '\n' {
+            line_starts.push(start);
+            end = true;
+        }
+    }
+    line_starts
+}
+
+fn line_col_number(line_starts: &Vec<usize>, pos: usize) -> (usize, usize) {
+    let mut previous_index = 1;
+    let mut previous_start = 0;
+    for (i, line_start) in line_starts.iter().enumerate() {
+        if *line_start >= pos {
+            //println!("Found line start {} for pos {} index {}", *line_start, pos, i);
+            return (previous_index, pos - previous_start + 1);
+        }
+        previous_index = i;
+        previous_start = *line_start;
+    }
+
+    (previous_index, previous_start + 1)
+}
+
+fn to_ast(pair: Pair<Rule>, file_name: &String, line_starts: &Vec<usize>) -> AST {
     match pair.as_rule() {
         Rule::ast => {
             let mut rules = pair.into_inner().peekable();
@@ -129,11 +166,11 @@ fn to_ast(file_name: &String, pair: Pair<Rule>) -> AST {
             while let Some(rule) = rules.next() {
                 if rules.peek().is_some() {
                     // Not the last one, function declaration.
-                    let fd = to_function_declaration(file_name, rule);
+                    let fd = to_function_declaration(file_name, rule, line_starts);
                     decls.insert(fd.clone().name, fd.clone());
                 } else {
                     // Not the last one, function declaration.
-                    return AST { function_declarations: decls, main: to_expression(rule.into_inner().next().unwrap()) };
+                    return AST { function_declarations: decls, main: to_expression(rule.into_inner().next().unwrap(), file_name, &"StartRule".to_string(), line_starts) };
                 }
             }
             unreachable!()
@@ -142,75 +179,83 @@ fn to_ast(file_name: &String, pair: Pair<Rule>) -> AST {
     }
 }
 
-fn to_function_declaration(file_name: &String, pair: Pair<Rule>) -> FunctionDeclaration {
+fn to_function_declaration(file_name: &String, pair: Pair<Rule>, line_starts: &Vec<usize>) -> FunctionDeclaration {
+    let (line, col) = line_col_number(line_starts, pair.as_span().start());
     let mut inner_rules = pair.into_inner();
     let name = inner_rules.next().unwrap().as_str();
-    let function_type = to_function_type(file_name, &name.to_string(), inner_rules.next().unwrap());
+    let function_type = to_function_type(file_name, &name.to_string(), inner_rules.next().unwrap(), line_starts);
     FunctionDeclaration {
-        location: LocationInformation { file: file_name.clone(), function: name.to_string(), line: 0, col: 0 },
+        location: LocationInformation { file: file_name.clone(), function: name.to_string(), line, col },
         name: name.to_string(),
         function_type,
-        function_bodies: inner_rules.map(|b| to_function_body(file_name, &name.to_string(), b)).collect(),
+        function_bodies: inner_rules.map(|b| to_function_body(file_name, &name.to_string(), b, line_starts)).collect(),
     }
 }
 
-fn to_expression(expression: Pair<Rule>) -> Expression {
+fn to_expression(expression: Pair<Rule>, file_name: &String, function_name: &String, line_starts: &Vec<usize>) -> Expression {
     PREC_CLIMBER.climb(
         expression.into_inner(),
         |pair: Pair<Rule>| {
             match pair.as_rule() {
-                Rule::term => to_term(pair),
+                Rule::term => to_term(pair, file_name, function_name, line_starts),
                 _ => unreachable!(),
             }
         },
-        |lhs: Expression, op: Pair<Rule>, rhs: Expression| match op.as_rule() {
-            Rule::times => Times(Box::new(lhs), Box::new(rhs)),
-            Rule::divide => Divide(Box::new(lhs), Box::new(rhs)),
-            Rule::modulo => Modulo(Box::new(lhs), Box::new(rhs)),
+        |lhs: Expression, op: Pair<Rule>, rhs: Expression| {
+            let (line, col) = line_col_number(line_starts, op.as_span().start());
+            let loc_info = LocationInformation { file: file_name.clone(), function: function_name.clone(), line, col };
+            match op.as_rule() {
+                Rule::times => Times(loc_info, Box::new(lhs), Box::new(rhs)),
+                Rule::divide => Divide(loc_info, Box::new(lhs), Box::new(rhs)),
+                Rule::modulo => Modulo(loc_info, Box::new(lhs), Box::new(rhs)),
 
-            Rule::add => Add(Box::new(lhs), Box::new(rhs)),
-            Rule::substract => Substract(Box::new(lhs), Box::new(rhs)),
+                Rule::add => Add(loc_info, Box::new(lhs), Box::new(rhs)),
+                Rule::substract => Substract(loc_info, Box::new(lhs), Box::new(rhs)),
 
-            Rule::shift_left => ShiftLeft(Box::new(lhs), Box::new(rhs)),
-            Rule::shift_right => ShiftRight(Box::new(lhs), Box::new(rhs)),
+                Rule::shift_left => ShiftLeft(loc_info, Box::new(lhs), Box::new(rhs)),
+                Rule::shift_right => ShiftRight(loc_info, Box::new(lhs), Box::new(rhs)),
 
-            Rule::lesser => Lesser(Box::new(lhs), Box::new(rhs)),
-            Rule::leq => Leq(Box::new(lhs), Box::new(rhs)),
-            Rule::greater => Greater(Box::new(lhs), Box::new(rhs)),
-            Rule::greq => Greq(Box::new(lhs), Box::new(rhs)),
+                Rule::lesser => Lesser(loc_info, Box::new(lhs), Box::new(rhs)),
+                Rule::leq => Leq(loc_info, Box::new(lhs), Box::new(rhs)),
+                Rule::greater => Greater(loc_info, Box::new(lhs), Box::new(rhs)),
+                Rule::greq => Greq(loc_info, Box::new(lhs), Box::new(rhs)),
 
-            Rule::eq => Eq(Box::new(lhs), Box::new(rhs)),
-            Rule::neq => Neq(Box::new(lhs), Box::new(rhs)),
+                Rule::eq => Eq(loc_info, Box::new(lhs), Box::new(rhs)),
+                Rule::neq => Neq(loc_info, Box::new(lhs), Box::new(rhs)),
 
-            Rule::and => And(Box::new(lhs), Box::new(rhs)),
-            Rule::or => Or(Box::new(lhs), Box::new(rhs)),
-            r => panic!("Prec climber unhandled rule: {:#?}", r)
+                Rule::and => And(loc_info, Box::new(lhs), Box::new(rhs)),
+                Rule::or => Or(loc_info, Box::new(lhs), Box::new(rhs)),
+                r => panic!("Prec climber unhandled rule: {:#?}", r)
+            }
         },
     )
 }
 
-fn to_term(pair: Pair<Rule>) -> Expression {
+fn to_term(pair: Pair<Rule>, file_name: &String, function_name: &String, line_starts: &Vec<usize>) -> Expression {
+    let (line, col) = line_col_number(line_starts, pair.as_span().start());
+    let loc_info = LocationInformation { file: file_name.clone(), function: function_name.clone(), line, col };
     let sub = pair.into_inner().next().unwrap();
     match sub.as_rule() {
-        Rule::bool_literal => BoolLiteral(sub.as_str().parse::<bool>().unwrap()),
-        Rule::string_literal => StringLiteral(sub.into_inner().next().unwrap().as_str().to_string()),
-        Rule::char_literal => CharacterLiteral(sub.as_str().to_string().chars().nth(1).unwrap()),
-        Rule::number => Number(sub.as_str().parse::<usize>().unwrap()),
+        Rule::bool_literal => BoolLiteral(loc_info, sub.as_str().parse::<bool>().unwrap()),
+        Rule::string_literal => StringLiteral(loc_info, sub.into_inner().next().unwrap().as_str().to_string()),
+        Rule::char_literal => CharacterLiteral(loc_info, sub.as_str().to_string().chars().nth(1).unwrap()),
+        Rule::number => Number(loc_info, sub.as_str().parse::<usize>().unwrap()),
         Rule::call => {
             let mut subs = sub.into_inner();
             let function = subs.next().unwrap().as_str();
-            let arguments = subs.map(to_term).collect();
-            Call(function.to_string(), arguments)
+            let arguments = subs.map(|a| to_term(a, file_name, function_name, line_starts)).collect();
+            Call(loc_info, function.to_string(), arguments)
         }
-        Rule::identifier => Variable(sub.as_str().to_string()),
-        Rule::subexpr => to_expression(sub.into_inner().next().unwrap()),
-        Rule::negation => Negation(Box::new(to_expression(sub.into_inner().next().unwrap()))),
-        Rule::minus => Minus(Box::new(to_expression(sub.into_inner().next().unwrap()))),
+        Rule::identifier => Variable(loc_info, sub.as_str().to_string()),
+        Rule::subexpr => to_expression(sub.into_inner().next().unwrap(), file_name, function_name, line_starts),
+        Rule::negation => Negation(loc_info, Box::new(to_expression(sub.into_inner().next().unwrap(), file_name, function_name, line_starts))),
+        Rule::minus => Minus(loc_info, Box::new(to_expression(sub.into_inner().next().unwrap(), file_name, function_name, line_starts))),
         r => panic!("Reached term {:#?}", r),
     }
 }
 
-fn to_function_type(file_name: &String, function_name: &String, pair: Pair<Rule>) -> FunctionType {
+fn to_function_type(file_name: &String, function_name: &String, pair: Pair<Rule>, line_starts: &Vec<usize>) -> FunctionType {
+    let (line, col) = line_col_number(line_starts, pair.as_span().start());
     let mut types = pair.into_inner().peekable();
     let mut from_types = Vec::new();
 
@@ -221,28 +266,30 @@ fn to_function_type(file_name: &String, function_name: &String, pair: Pair<Rule>
             from_types.push(to_type(t));
         } else {
             // The last, to type
-            return FunctionType { location: LocationInformation { file: file_name.clone(), function: function_name.clone(), line: 0, col: 0 }, from: from_types, to: to_type(t) };
+            return FunctionType { location: LocationInformation { file: file_name.clone(), function: function_name.clone(), line, col }, from: from_types, to: to_type(t) };
         }
     }
     unreachable!()
 }
 
-fn to_function_body(file_name: &String, function_name: &String, pair: Pair<Rule>) -> FunctionBody {
+fn to_function_body(file_name: &String, function_name: &String, pair: Pair<Rule>, line_starts: &Vec<usize>) -> FunctionBody {
+    let (line, col) = line_col_number(line_starts, pair.as_span().start());
     let mut rules = pair.into_inner();
     let parameters = to_parameter_names(rules.next().unwrap());
-    let function_rules = rules.map(|b| to_function_rule(file_name, function_name, b)).collect();
-    FunctionBody { location: LocationInformation { file: file_name.clone(), function: function_name.clone(), line: 0, col: 0 }, parameters, rules: function_rules }
+    let function_rules = rules.map(|b| to_function_rule(b, file_name, function_name, line_starts)).collect();
+    FunctionBody { location: LocationInformation { file: file_name.clone(), function: function_name.clone(), line, col }, parameters, rules: function_rules }
 }
 
-fn to_function_rule(file_name: &String, function_name: &String, pair: Pair<Rule>) -> FunctionRule {
+fn to_function_rule(pair: Pair<Rule>, file_name: &String, function_name: &String, line_starts: &Vec<usize>) -> FunctionRule {
+    let (line, col) = line_col_number(line_starts, pair.as_span().start());
     match pair.as_rule() {
         Rule::function_conditional_rule => {
             let mut rules = pair.into_inner().next().unwrap().into_inner();
-            let left = to_expression(rules.next().unwrap());
-            let right = to_expression(rules.next().unwrap());
-            FunctionRule::ConditionalRule(LocationInformation { file: file_name.clone(), function: function_name.clone(), line: 0, col: 0 }, left, right)
+            let left = to_expression(rules.next().unwrap(), file_name, function_name, line_starts);
+            let right = to_expression(rules.next().unwrap(), file_name, function_name, line_starts);
+            FunctionRule::ConditionalRule(LocationInformation { file: file_name.clone(), function: function_name.clone(), line, col }, left, right)
         }
-        Rule::function_expression_rule => FunctionRule::ExpressionRule(LocationInformation { file: file_name.clone(), function: function_name.clone(), line: 0, col: 0 }, to_expression(pair.into_inner().next().unwrap())),
+        Rule::function_expression_rule => FunctionRule::ExpressionRule(LocationInformation { file: file_name.clone(), function: function_name.clone(), line, col }, to_expression(pair.into_inner().next().unwrap(), file_name, function_name, line_starts)),
         _ => unreachable!()
     }
 }
