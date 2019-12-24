@@ -1,16 +1,16 @@
 choose :: Bool -> String
 choose bool
-| bool = 'r'
+| bool = "r"
 | ! bool = "bloe"
 
 fac :: Int -> Int
 fac n
-| n == 1 = "1"
-= n * fac m (n - 1)
+| n == 1 = 1
+= n * fac (n - 1)
 
-pow :: Int -> Int
-pow n
-| n * 0 = 1
-= pow (n - 1)
+pow :: Int Int -> Int
+pow b n
+| n == 0 = b
+= b * pow b (n - 1)
 
-Main = choose 'c'
+Main = pow 5 5

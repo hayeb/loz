@@ -12,7 +12,7 @@ use Expression::StringLiteral;
 use crate::parser::Expression::*;
 
 #[derive(Debug, Clone)]
-pub struct LocationInformation {
+pub struct Location {
     pub file: String,
     pub function: String,
     pub line: usize,
@@ -21,13 +21,13 @@ pub struct LocationInformation {
 
 #[derive(Debug, Clone)]
 pub enum FunctionRule {
-    ConditionalRule(LocationInformation, Expression, Expression),
-    ExpressionRule(LocationInformation, Expression),
+    ConditionalRule(Location, Expression, Expression),
+    ExpressionRule(Location, Expression),
 }
 
 #[derive(Debug, Clone)]
 pub struct FunctionBody {
-    pub location: LocationInformation,
+    pub location: Location,
     pub parameters: Vec<String>,
     pub rules: Vec<FunctionRule>,
 }
@@ -43,14 +43,14 @@ pub enum Type {
 
 #[derive(Debug, Clone)]
 pub struct FunctionType {
-    pub location: LocationInformation,
+    pub location: Location,
     pub from: Vec<Type>,
     pub to: Type,
 }
 
 #[derive(Debug, Clone)]
 pub struct FunctionDeclaration {
-    pub location: LocationInformation,
+    pub location: Location,
     pub name: String,
     pub function_type: FunctionType,
     pub function_bodies: Vec<FunctionBody>,
@@ -58,35 +58,35 @@ pub struct FunctionDeclaration {
 
 #[derive(Debug, Clone)]
 pub enum Expression {
-    BoolLiteral(LocationInformation, bool),
-    StringLiteral(LocationInformation, String),
-    CharacterLiteral(LocationInformation, char),
-    Number(LocationInformation, usize),
-    Call(LocationInformation, String, Vec<Expression>),
-    Variable(LocationInformation, String),
-    Negation(LocationInformation, Box<Expression>),
-    Minus(LocationInformation, Box<Expression>),
+    BoolLiteral(Location, bool),
+    StringLiteral(Location, String),
+    CharacterLiteral(Location, char),
+    Number(Location, isize),
+    Call(Location, String, Vec<Expression>),
+    Variable(Location, String),
+    Negation(Location, Box<Expression>),
+    Minus(Location, Box<Expression>),
 
-    Times(LocationInformation, Box<Expression>, Box<Expression>),
-    Divide(LocationInformation, Box<Expression>, Box<Expression>),
-    Modulo(LocationInformation, Box<Expression>, Box<Expression>),
+    Times(Location, Box<Expression>, Box<Expression>),
+    Divide(Location, Box<Expression>, Box<Expression>),
+    Modulo(Location, Box<Expression>, Box<Expression>),
 
-    Add(LocationInformation, Box<Expression>, Box<Expression>),
-    Substract(LocationInformation, Box<Expression>, Box<Expression>),
+    Add(Location, Box<Expression>, Box<Expression>),
+    Subtract(Location, Box<Expression>, Box<Expression>),
 
-    ShiftLeft(LocationInformation, Box<Expression>, Box<Expression>),
-    ShiftRight(LocationInformation, Box<Expression>, Box<Expression>),
+    ShiftLeft(Location, Box<Expression>, Box<Expression>),
+    ShiftRight(Location, Box<Expression>, Box<Expression>),
 
-    Greater(LocationInformation, Box<Expression>, Box<Expression>),
-    Greq(LocationInformation, Box<Expression>, Box<Expression>),
-    Leq(LocationInformation, Box<Expression>, Box<Expression>),
-    Lesser(LocationInformation, Box<Expression>, Box<Expression>),
+    Greater(Location, Box<Expression>, Box<Expression>),
+    Greq(Location, Box<Expression>, Box<Expression>),
+    Leq(Location, Box<Expression>, Box<Expression>),
+    Lesser(Location, Box<Expression>, Box<Expression>),
 
-    Eq(LocationInformation, Box<Expression>, Box<Expression>),
-    Neq(LocationInformation, Box<Expression>, Box<Expression>),
+    Eq(Location, Box<Expression>, Box<Expression>),
+    Neq(Location, Box<Expression>, Box<Expression>),
 
-    And(LocationInformation, Box<Expression>, Box<Expression>),
-    Or(LocationInformation, Box<Expression>, Box<Expression>),
+    And(Location, Box<Expression>, Box<Expression>),
+    Or(Location, Box<Expression>, Box<Expression>),
 }
 
 #[derive(Debug, Clone)]
@@ -117,9 +117,9 @@ lazy_static! {
 
 pub fn parse(file_name: &String, input: &str) -> Result<AST, Error<Rule>> {
     let ast = LOZParser::parse(Rule::ast, input)?.next().unwrap();
-    println!("raw ast: {:#?}", ast);
+    //println!("raw ast: {:#?}", ast);
     let line_starts = build_line_start_cache(input);
-    println!("line starts {:?}", line_starts);
+    //println!("line starts {:?}", line_starts);
     Ok(to_ast(ast, file_name, &line_starts))
 }
 
@@ -182,7 +182,7 @@ fn to_function_declaration(file_name: &String, pair: Pair<Rule>, line_starts: &V
     let name = inner_rules.next().unwrap().as_str();
     let function_type = to_function_type(file_name, &name.to_string(), inner_rules.next().unwrap(), line_starts);
     FunctionDeclaration {
-        location: LocationInformation { file: file_name.clone(), function: name.to_string(), line, col },
+        location: Location { file: file_name.clone(), function: name.to_string(), line, col },
         name: name.to_string(),
         function_type,
         function_bodies: inner_rules.map(|b| to_function_body(file_name, &name.to_string(), b, line_starts)).collect(),
@@ -200,14 +200,14 @@ fn to_expression(expression: Pair<Rule>, file_name: &String, function_name: &Str
         },
         |lhs: Expression, op: Pair<Rule>, rhs: Expression| {
             let (line, col) = line_col_number(line_starts, op.as_span().start());
-            let loc_info = LocationInformation { file: file_name.clone(), function: function_name.clone(), line, col };
+            let loc_info = Location { file: file_name.clone(), function: function_name.clone(), line, col };
             match op.as_rule() {
                 Rule::times => Times(loc_info, Box::new(lhs), Box::new(rhs)),
                 Rule::divide => Divide(loc_info, Box::new(lhs), Box::new(rhs)),
                 Rule::modulo => Modulo(loc_info, Box::new(lhs), Box::new(rhs)),
 
                 Rule::add => Add(loc_info, Box::new(lhs), Box::new(rhs)),
-                Rule::substract => Substract(loc_info, Box::new(lhs), Box::new(rhs)),
+                Rule::substract => Subtract(loc_info, Box::new(lhs), Box::new(rhs)),
 
                 Rule::shift_left => ShiftLeft(loc_info, Box::new(lhs), Box::new(rhs)),
                 Rule::shift_right => ShiftRight(loc_info, Box::new(lhs), Box::new(rhs)),
@@ -230,13 +230,13 @@ fn to_expression(expression: Pair<Rule>, file_name: &String, function_name: &Str
 
 fn to_term(pair: Pair<Rule>, file_name: &String, function_name: &String, line_starts: &Vec<usize>) -> Expression {
     let (line, col) = line_col_number(line_starts, pair.as_span().start());
-    let loc_info = LocationInformation { file: file_name.clone(), function: function_name.clone(), line, col };
+    let loc_info = Location { file: file_name.clone(), function: function_name.clone(), line, col };
     let sub = pair.into_inner().next().unwrap();
     match sub.as_rule() {
         Rule::bool_literal => BoolLiteral(loc_info, sub.as_str().parse::<bool>().unwrap()),
         Rule::string_literal => StringLiteral(loc_info, sub.into_inner().next().unwrap().as_str().to_string()),
         Rule::char_literal => CharacterLiteral(loc_info, sub.as_str().to_string().chars().nth(1).unwrap()),
-        Rule::number => Number(loc_info, sub.as_str().parse::<usize>().unwrap()),
+        Rule::number => Number(loc_info, sub.as_str().parse::<isize>().unwrap()),
         Rule::call => {
             let mut subs = sub.into_inner();
             let function = subs.next().unwrap().as_str();
@@ -263,7 +263,7 @@ fn to_function_type(file_name: &String, function_name: &String, pair: Pair<Rule>
             from_types.push(to_type(t));
         } else {
             // The last, to type
-            return FunctionType { location: LocationInformation { file: file_name.clone(), function: function_name.clone(), line, col }, from: from_types, to: to_type(t) };
+            return FunctionType { location: Location { file: file_name.clone(), function: function_name.clone(), line, col }, from: from_types, to: to_type(t) };
         }
     }
     unreachable!()
@@ -274,7 +274,7 @@ fn to_function_body(file_name: &String, function_name: &String, pair: Pair<Rule>
     let mut rules = pair.into_inner();
     let parameters = to_parameter_names(rules.next().unwrap());
     let function_rules = rules.map(|b| to_function_rule(b, file_name, function_name, line_starts)).collect();
-    FunctionBody { location: LocationInformation { file: file_name.clone(), function: function_name.clone(), line, col }, parameters, rules: function_rules }
+    FunctionBody { location: Location { file: file_name.clone(), function: function_name.clone(), line, col }, parameters, rules: function_rules }
 }
 
 fn to_function_rule(pair: Pair<Rule>, file_name: &String, function_name: &String, line_starts: &Vec<usize>) -> FunctionRule {
@@ -285,11 +285,11 @@ fn to_function_rule(pair: Pair<Rule>, file_name: &String, function_name: &String
             let mut rules = pair.into_inner();
             let left = to_expression(rules.next().unwrap(), file_name, function_name, line_starts);
             let right = to_expression(rules.next().unwrap(), file_name, function_name, line_starts);
-            FunctionRule::ConditionalRule(LocationInformation { file: file_name.clone(), function: function_name.clone(), line, col }, left, right)
+            FunctionRule::ConditionalRule(Location { file: file_name.clone(), function: function_name.clone(), line, col }, left, right)
         }
         Rule::function_expression_rule => {
             let (line, col) = line_col_number(line_starts, pair.as_span().start());
-            FunctionRule::ExpressionRule(LocationInformation { file: file_name.clone(), function: function_name.clone(), line, col }, to_expression(pair.into_inner().next().unwrap(), file_name, function_name, line_starts))
+            FunctionRule::ExpressionRule(Location { file: file_name.clone(), function: function_name.clone(), line, col }, to_expression(pair.into_inner().next().unwrap(), file_name, function_name, line_starts))
         }
         _ => unreachable!()
     }

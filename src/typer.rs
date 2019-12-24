@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Error, Formatter};
 
-use crate::parser::{AST, Expression, FunctionBody, FunctionDeclaration, FunctionRule, FunctionType, LocationInformation, Type};
+use crate::parser::{AST, Expression, FunctionBody, FunctionDeclaration, FunctionRule, FunctionType, Location, Type};
 use crate::parser::FunctionRule::{ConditionalRule, ExpressionRule};
 use crate::typer::TypeErrorType::{ArgumentCountMismatch, ParameterCountMismatch, TypeMismatch, UndefinedFunction, UndefinedVariable};
 
@@ -48,7 +48,7 @@ impl Display for TypeError {
 }
 
 fn write_error_context(f: &mut Formatter<'_>, context: &ErrorContext) -> Result<(), Error> {
-    write!(f, "[{}]/{} [{}:{}]: ", context.file, context.function, context.line, context.col)
+    write!(f, "{}/{} [{}:{}]: ", context.file, context.function, context.line, context.col)
 }
 
 #[derive(Debug)]
@@ -154,7 +154,7 @@ impl TyperState {
             (_, Err(ers2)) => Err(ers2)
         };
 
-        let (determined_type, loc_info): (Result<Type, Vec<TypeError>>, &LocationInformation) = match expression {
+        let (determined_type, loc_info): (Result<Type, Vec<TypeError>>, &Location) = match expression {
             Expression::BoolLiteral(loc_info, _) => (Ok(Type::Bool), loc_info),
             Expression::StringLiteral(loc_info, _) => (Ok(Type::String), loc_info),
             Expression::CharacterLiteral(loc_info, _) => (Ok(Type::Char), loc_info),
@@ -176,7 +176,7 @@ impl TyperState {
                 (combine(Type::Int, self.check_expression(e1, Type::Int, parameter_to_type), self.check_expression(e2, Type::Int, parameter_to_type)),loc_info),
             Expression::Add(loc_info, e1, e2) =>
                 (combine(Type::Int, self.check_expression(e1, Type::Int, parameter_to_type), self.check_expression(e2, Type::Int, parameter_to_type)),loc_info),
-            Expression::Substract(loc_info, e1, e2) =>
+            Expression::Subtract(loc_info, e1, e2) =>
                 (combine(Type::Int, self.check_expression(e1, Type::Int, parameter_to_type), self.check_expression(e2, Type::Int, parameter_to_type)),loc_info),
             Expression::ShiftLeft(loc_info, e1, e2) =>
                 (combine(Type::Int, self.check_expression(e1, Type::Int, parameter_to_type), self.check_expression(e2, Type::Int, parameter_to_type)),loc_info),
@@ -214,7 +214,7 @@ impl TyperState {
         Ok(determined_type)
     }
 
-    fn check_function_call(&self, name: &String, args: &Vec<Expression>, required_type: Type, parameter_to_type: &HashMap<&String, Type>, loc_info: &LocationInformation) -> Result<Type, Vec<TypeError>> {
+    fn check_function_call(&self, name: &String, args: &Vec<Expression>, required_type: Type, parameter_to_type: &HashMap<&String, Type>, loc_info: &Location) -> Result<Type, Vec<TypeError>> {
         //println!("checking call {}", name);
         let ftype = self.function_name_to_type.get(name);
         if let None = ftype {
