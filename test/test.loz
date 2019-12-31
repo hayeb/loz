@@ -1,15 +1,11 @@
-pow :: Int Int -> Int
-pow b n
-# m = n + b
-| m == "a" = 1
-| m == 1 = b
-# newn = m - 1
-= b * pow b newn
-
-pow2 :: Int Int -> Int
-pow2 b n
+pow3 :: (Int, Int) -> Int
+pow3 bn
+# (b, n) = bn
 | n == 0 = 1
 | n == 1 = b
-= b * pow b (n - 1)
+= b * pow3 (b, n - 1)
 
-Main = pow 2 18 * pow2 2 18
+not :: Bool -> Bool
+not b = ! b
+
+Main = pow3 (1, 2)

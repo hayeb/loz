@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Error, Formatter};
 
-use crate::parser::{AST, Expression, FunctionBody, FunctionDeclaration, FunctionRule, FunctionType, Location, Type};
+use crate::parser::{AST, Expression, FunctionBody, FunctionDeclaration, FunctionRule, FunctionType, Location, MatchExpression, Type};
 use crate::parser::FunctionRule::{ConditionalRule, ExpressionRule, LetRule};
-use crate::typer::TypeErrorType::{ArgumentCountMismatch, OperatorArgumentsNotEqual, ParameterCountMismatch, TypeMismatch, UndefinedFunction, UndefinedVariable};
+use crate::typer::TypeErrorType::{ArgumentCountMismatch, OperatorArgumentsNotEqual, ParameterCountMismatch, TypeMismatch, UndefinedFunction, UndefinedVariable, MatchWrongType};
 
 #[derive(Debug)]
 pub struct TypeError {
@@ -37,6 +37,7 @@ pub enum TypeErrorType {
     UndefinedFunction(String),
     TypeMismatch(Vec<Type>, Type),
     OperatorArgumentsNotEqual(String, Type, Type),
+    MatchWrongType(Type),
 }
 
 #[derive(Debug)]
@@ -56,7 +57,8 @@ impl Display for TypeError {
             TypeMismatch(expected, got) => write!(f, "Expected type {:?}, got {:?}", expected, got),
             UndefinedVariable(name) => write!(f, "Undefined variable {}", name),
             UndefinedFunction(name) => write!(f, "Undefined function {}", name),
-            OperatorArgumentsNotEqual(o, l, r) => write!(f, "Arguments to {} operator do not have equal type: {:?} and {:?}", o, l, r)
+            OperatorArgumentsNotEqual(o, l, r) => write!(f, "Arguments to {} operator do not have equal type: {:?} and {:?}", o, l, r),
+            MatchWrongType(expected_type) => write!(f, "Match expression has wrong type, expected type {:#?}", expected_type)
         }
     }
 }
@@ -165,11 +167,33 @@ impl TyperState {
                 }
             }
             ExpressionRule(_, e) => self.check_expression(e, &vec![result_type.clone()], parameter_to_type).map(|_| TypeResult {}),
-            LetRule(_, identifier, e) => {
-                println!("Checking function rule {}: {:#?} ", identifier, e);
+            LetRule(loc_info, match_expression, e) => {
                 let expression_type = self.check_expression(e, &vec![], parameter_to_type)?;
-                parameter_to_type.insert(identifier.clone(), expression_type);
-                Ok(TypeResult{})
+                let match_expression_variables = self.check_match_expression(loc_info, match_expression, &expression_type)?;
+
+                parameter_to_type.extend(match_expression_variables);
+                Ok(TypeResult {})
+            }
+        }
+    }
+
+    fn check_match_expression(&self, loc_info: &Location, match_expression: &MatchExpression, expression_type: &Type) -> Result<HashMap<String, Type>, Vec<TypeError>> {
+        match (match_expression, expression_type) {
+            (MatchExpression::Identifier(identifier), expression_type) => {
+                let mut map = HashMap::new();
+                map.insert(identifier.clone(), expression_type.clone());
+                Ok(map)
+            }
+            (MatchExpression::Tuple(match_elements), Type::Tuple(element_types)) => {
+                let mut variables_to_type = HashMap::new();
+                for (match_element, element_type) in match_elements.iter().zip(element_types.iter()) {
+                    let variables = self.check_match_expression(loc_info, match_element, element_type)?;
+                    variables_to_type.extend(variables);
+                }
+                Ok(variables_to_type)
+            }
+            (match_expression, expression_type) => {
+                Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::MatchWrongType(expression_type.clone()))])
             }
         }
     }
@@ -198,8 +222,19 @@ impl TyperState {
                     None => Err(vec![TypeError::from(ErrorContext { file: loc_info.file.clone(), function: loc_info.function.clone(), line: loc_info.line, col: loc_info.col }, TypeErrorType::UndefinedVariable(v.clone()))]),
                 }, loc_info)
             }
+
+            Expression::TupleLiteral(loc_info, elements) => {
+                let mut bla = Vec::new();
+                for e in elements {
+                    bla.push(self.check_expression(e, &vec![], parameter_to_type)?)
+                }
+
+                (Ok(Type::Tuple(bla)), loc_info)
+            }
+
             Expression::Negation(loc_info, e) => (self.check_expression(e, &vec![Type::Bool], parameter_to_type), loc_info),
             Expression::Minus(loc_info, n) => (self.check_expression(n, &vec![Type::Int], parameter_to_type), loc_info),
+
             Expression::Times(loc_info, e1, e2) =>
                 (combine(type_fixed(Type::Int), self.check_expression(e1, &vec![Type::Int], parameter_to_type), self.check_expression(e2, &vec![Type::Int], parameter_to_type)), loc_info),
             Expression::Divide(loc_info, e1, e2) =>
@@ -224,7 +259,7 @@ impl TyperState {
                 (combine(type_fixed(Type::Bool), self.check_expression(e1, &vec![Type::Int], parameter_to_type), self.check_expression(e2, &vec![Type::Int], parameter_to_type)), loc_info),
             Expression::Lesser(loc_info, e1, e2) =>
                 (combine(type_fixed(Type::Bool), self.check_expression(e1, &vec![Type::Int], parameter_to_type), self.check_expression(e2, &vec![Type::Int], parameter_to_type)), loc_info),
-                        Expression::And(loc_info, e1, e2) =>
+            Expression::And(loc_info, e1, e2) =>
                 (combine(type_fixed(Type::Bool), self.check_expression(e1, &vec![Type::Bool], parameter_to_type), self.check_expression(e2, &vec![Type::Bool], parameter_to_type)), loc_info),
             Expression::Or(loc_info, e1, e2) =>
                 (combine(type_fixed(Type::Bool), self.check_expression(e1, &vec![Type::Bool], parameter_to_type), self.check_expression(e2, &vec![Type::Bool], parameter_to_type)), loc_info),
@@ -233,7 +268,6 @@ impl TyperState {
                 (combine(type_eq_fixed("==".to_string(), loc_info.clone(), Type::Bool), self.check_expression(e1, &vec![], parameter_to_type), self.check_expression(e2, &vec![], parameter_to_type)), loc_info),
             Expression::Neq(loc_info, e1, e2) =>
                 (combine(type_eq_fixed("==".to_string(), loc_info.clone(), Type::Bool), self.check_expression(e1, &vec![], parameter_to_type), self.check_expression(e2, &vec![], parameter_to_type)), loc_info),
-
         };
 
         if let Err(r) = determined_type {

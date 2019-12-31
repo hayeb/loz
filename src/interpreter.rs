@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::parser::{AST, Expression, FunctionBody, FunctionRule};
+use crate::parser::{AST, Expression, FunctionBody, FunctionRule, MatchExpression};
 use crate::interpreter::InterpreterError::DivisionByZero;
 
 #[derive(Debug, Clone)]
@@ -31,6 +31,7 @@ enum Value {
     Int(isize),
     Char(char),
     String(String),
+    Tuple(Vec<Value>)
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +54,14 @@ fn evaluate(e: &Expression, ast: &AST, state: &mut RunState) -> Result<Value, In
         Expression::Number(_, n) => Ok(Value::Int(*n)),
 
         Expression::Call(_, f, args) => eval_function_call(f, args, state, ast),
+
+        Expression::TupleLiteral(_, elements) => {
+            let mut evaluated_elements = Vec::new();
+            for e in elements {
+                evaluated_elements.push(evaluate(e, ast, state)?);
+            }
+            Ok(Value::Tuple(evaluated_elements))
+        }
 
         Expression::Variable(_, v) => Ok(state.frames.last().unwrap().variables.get(v).unwrap().clone()),
         Expression::Negation(_, e) => Ok(Value::Bool(!eval_bool(e, ast, state)?)),
@@ -114,15 +123,34 @@ fn eval_function_body(name: &String, body: &FunctionBody, state: &mut RunState, 
                 }
             },
             FunctionRule::ExpressionRule(_, result_expression) => return evaluate(&result_expression, ast, state),
-            FunctionRule::LetRule(_, identifier, e) => {
-                let result = evaluate(e, ast, state)?;
+            FunctionRule::LetRule(_, match_expression, e) => {
+                let variables = collect_match_variables(match_expression, &evaluate(e, ast, state)?);
 
-                state.frames.last_mut().unwrap().variables.insert(identifier.clone(), result);
+                state.frames.last_mut().unwrap().variables.extend(variables);
             }
         }
     }
 
     Err(InterpreterError::NoApplicableFunctionRule(name.clone()))
+}
+
+fn collect_match_variables(match_expression: &MatchExpression, evaluated_expression: &Value) -> HashMap<String, Value> {
+    match (match_expression, evaluated_expression) {
+        (MatchExpression::Identifier(identifier), value) => {
+            let mut map = HashMap::new();
+            map.insert(identifier.clone(), value.clone());
+            return map
+        },
+        (MatchExpression::Tuple(elements), Value::Tuple(values)) => {
+            let mut map = HashMap::new();
+            for (e , v) in elements.iter().zip(values.iter()) {
+                map.extend(collect_match_variables(e, v));
+            }
+            return map;
+        },
+        _ => unreachable!()
+
+    }
 }
 
 fn eval_bool(e: &Expression, ast: &AST, state: &mut RunState) -> Result<bool, InterpreterError> {

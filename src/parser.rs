@@ -23,7 +23,7 @@ pub struct Location {
 pub enum FunctionRule {
     ConditionalRule(Location, Expression, Expression),
     ExpressionRule(Location, Expression),
-    LetRule(Location, String, Expression)
+    LetRule(Location, MatchExpression, Expression)
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +40,7 @@ pub enum Type {
     Char,
     String,
     Int,
+    Tuple(Vec<Type>)
 }
 
 #[derive(Debug, Clone)]
@@ -63,8 +64,12 @@ pub enum Expression {
     StringLiteral(Location, String),
     CharacterLiteral(Location, char),
     Number(Location, isize),
+
+    TupleLiteral(Location, Vec<Expression>),
+
     Call(Location, String, Vec<Expression>),
     Variable(Location, String),
+
     Negation(Location, Box<Expression>),
     Minus(Location, Box<Expression>),
 
@@ -88,6 +93,12 @@ pub enum Expression {
 
     And(Location, Box<Expression>, Box<Expression>),
     Or(Location, Box<Expression>, Box<Expression>),
+}
+
+#[derive(Debug, Clone)]
+pub enum MatchExpression {
+    Identifier(String),
+    Tuple(Vec<MatchExpression>)
 }
 
 #[derive(Debug, Clone)]
@@ -161,14 +172,15 @@ fn to_ast(pair: Pair<Rule>, file_name: &String, line_starts: &Vec<usize>) -> AST
             let mut rules = pair.into_inner().peekable();
             let mut decls = HashMap::new();
 
-            while let Some(rule) = rules.next() {
-                if rules.peek().is_some() {
-                    // Not the last one, function declaration.
-                    let fd = to_function_declaration(file_name, rule, line_starts);
-                    decls.insert(fd.clone().name, fd.clone());
-                } else {
-                    // Not the last one, function declaration.
-                    return AST { function_declarations: decls, main: to_expression(rule.into_inner().next().unwrap(), file_name, &"StartRule".to_string(), line_starts) };
+            while let Some(pair) = rules.next() {
+                match pair.as_rule() {
+                    Rule::function_definition => {
+                        let fd = to_function_declaration(file_name, pair, line_starts);
+                        decls.insert(fd.clone().name, fd.clone());
+                    },
+                    Rule::main => return AST { function_declarations: decls, main: to_expression(pair.into_inner().next().unwrap(), file_name, &"StartRule".to_string(), line_starts) },
+                    Rule::EOI => continue,
+                    _ => unreachable!(),
                 }
             }
             unreachable!()
@@ -178,6 +190,7 @@ fn to_ast(pair: Pair<Rule>, file_name: &String, line_starts: &Vec<usize>) -> AST
 }
 
 fn to_function_declaration(file_name: &String, pair: Pair<Rule>, line_starts: &Vec<usize>) -> FunctionDeclaration {
+    println!("to_function_declaration: {:#?}", pair);
     let (line, col) = line_col_number(line_starts, pair.as_span().start());
     let mut inner_rules = pair.into_inner();
     let name = inner_rules.next().unwrap().as_str();
@@ -248,6 +261,7 @@ fn to_term(pair: Pair<Rule>, file_name: &String, function_name: &String, line_st
         Rule::subexpr => to_expression(sub.into_inner().next().unwrap(), file_name, function_name, line_starts),
         Rule::negation => Negation(loc_info, Box::new(to_expression(sub.into_inner().next().unwrap(), file_name, function_name, line_starts))),
         Rule::minus => Minus(loc_info, Box::new(to_expression(sub.into_inner().next().unwrap(), file_name, function_name, line_starts))),
+        Rule::tuple_literal => TupleLiteral(loc_info, sub.into_inner().map(|te| to_expression(te, file_name, function_name, line_starts)).collect()),
         r => panic!("Reached term {:#?}", r),
     }
 }
@@ -294,10 +308,19 @@ fn to_function_rule(pair: Pair<Rule>, file_name: &String, function_name: &String
         }
         Rule::function_let_rule => {
             let (line, col) = line_col_number(line_starts, pair.as_span().start());
-            let identifier = pair.clone().into_inner().nth(0).unwrap().as_str().to_string();
-            let expression = to_expression(pair.clone().into_inner().nth(1).unwrap(), file_name, function_name, line_starts);
+            let mut inner_rules = pair.into_inner();
+            let identifier = to_match_expression(inner_rules.next().unwrap().into_inner().next().unwrap(), file_name, function_name, line_starts);
+            let expression = to_expression(inner_rules.next().unwrap(), file_name, function_name, line_starts);
             FunctionRule::LetRule(Location { file: file_name.clone(), function: function_name.clone(), line, col }, identifier, expression)
         }
+        _ => unreachable!()
+    }
+}
+
+fn to_match_expression(match_expression: Pair<Rule>, file_name: &String, function_name: &String, line_starts: &Vec<usize>) -> MatchExpression {
+    match match_expression.as_rule() {
+        Rule::identifier => MatchExpression::Identifier(match_expression.as_str().to_string()),
+        Rule::tuple_match => MatchExpression::Tuple(match_expression.into_inner().map(|e| to_match_expression(e, file_name, function_name, line_starts)).collect()),
         _ => unreachable!()
     }
 }
@@ -308,14 +331,12 @@ fn to_parameter_names(pair: Pair<Rule>) -> Vec<String> {
 
 fn to_type(pair: Pair<Rule>) -> Type {
     match pair.as_rule() {
-        Rule::loz_type => {
-            match pair.as_span().as_str() {
-                "Bool" => Type::Bool,
-                "String" => Type::String,
-                "Int" => Type::Int,
-                "Char" => Type::Char,
-                _ => Type::NoType
-            }
+        Rule::bool_type => Type::Bool,
+        Rule::string_type => Type::String,
+        Rule::int_type => Type::Int,
+        Rule::char_type => Type::Char,
+        Rule::tuple_type => {
+            Type::Tuple(pair.into_inner().map(|r| to_type(r)).collect())
         }
         _ => unreachable!()
     }

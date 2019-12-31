@@ -31,15 +31,23 @@ function_definition = {
     PUSH(identifier) ~ NEWLINE* ~ "::" ~ NEWLINE* ~ function_type ~ NEWLINE+ ~ function_body+
 }
 
-loz_type = {
-    "Bool"
-    | "String"
-    | "Int"
-    | "Char"
+loz_type = _{
+    bool_type
+    | string_type
+    | int_type
+    | char_type
+    | tuple_type
 }
 
+bool_type = { "Bool"}
+string_type = {"String"}
+int_type = {"Int"}
+char_type = {"Char"}
+
+tuple_type = { "(" ~ loz_type ~ ("," ~ loz_type)+ ~ ")" }
+
 function_header = ${ PEEK ~ (WHITESPACE+ ~ identifier)*}
-function_let_rule = {NEWLINE ~ ( "let" | "#") ~ identifier ~ "=" ~ expression}
+function_let_rule = {NEWLINE ~ ( "let" | "#") ~ match_expression ~ "=" ~ expression}
 
 function_conditional_rule = { NEWLINE ~ function_conditional}
 
@@ -70,13 +78,14 @@ function_argument = {
 }
 
 simple_term = _{
-      bool_literal
+    bool_literal
     | string_literal
     | char_literal
     | number
     | subexpr
     | negation
     | minus
+    | tuple_literal
 }
 
 minus = @{"-" ~ expression}
@@ -86,11 +95,27 @@ term = {
     | call // Function call
     | identifier // Variable reference
 }
+tuple_literal = { "(" ~ expression ~ ("," ~ expression)+ ~ ")" }
 bool_literal = {"false" | "true"}
 subexpr = {"(" ~ expression ~ ")"}
 negation = {"!" ~ expression}
 
-expression = { term ~ (operation ~ term)* }
+expression = {
+    term ~ (operation ~ term)*
+}
+
+match_expression = {
+    match_term
+}
+
+match_term = _{
+    identifier
+    | tuple_match
+}
+
+tuple_match = {
+    "(" ~ match_term ~ ("," ~ match_term) ~ ")"
+}
 
 operation = _{
         times | divide | modulo
@@ -132,6 +157,7 @@ operation = _{
 main = {"Main" ~ "=" ~ expression }
 
 ast = {
-   (function_definition ~ NEWLINE?)* ~ main
+   SOI ~ (function_definition ~ NEWLINE?)* ~ main ~ NEWLINE* ~ EOI
 }
+
 
