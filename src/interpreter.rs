@@ -25,7 +25,7 @@ impl Frame {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum Value {
     Bool(bool),
     Int(isize),
@@ -83,8 +83,8 @@ fn evaluate(e: &Expression, ast: &AST, state: &mut RunState) -> Result<Value, In
         Expression::Greq(_, e1, e2) => Ok(Value::Bool(eval_int(e1, ast, state)? >= eval_int(e2, ast, state)?)),
         Expression::Leq(_, e1, e2) => Ok(Value::Bool(eval_int(e1, ast, state)? <= eval_int(e2, ast, state)?)),
         Expression::Lesser(_, e1, e2) => Ok(Value::Bool(eval_int(e1, ast, state)? < eval_int(e2, ast, state)?)),
-        Expression::Eq(_, e1, e2) => Ok(Value::Bool(eval_int(e1, ast, state)? == eval_int(e2, ast, state)?)),
-        Expression::Neq(_, e1, e2) => Ok(Value::Bool(eval_int(e1, ast, state)? != eval_int(e2, ast, state)?)),
+        Expression::Eq(_, e1, e2) => Ok(Value::Bool(evaluate(e1, ast, state)? == evaluate(e2, ast, state)?)),
+        Expression::Neq(_, e1, e2) => Ok(Value::Bool(evaluate(e1, ast, state)? != evaluate(e2, ast, state)?)),
         Expression::And(_, e1, e2) => Ok(Value::Bool(eval_bool(e1, ast, state)? && eval_bool(e2, ast, state)?)),
         Expression::Or(_, e1, e2) => Ok(Value::Bool(eval_bool(e1, ast, state)? || eval_bool(e2, ast, state)?)),
     }

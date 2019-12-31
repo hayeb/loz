@@ -1,7 +1,7 @@
 pow :: Int Int -> Int
 pow b n
-# m = "ba"
-| m == 0 = 1
+# m = n + b
+| m == "a" = 1
 | m == 1 = b
 # newn = m - 1
 = b * pow b newn
