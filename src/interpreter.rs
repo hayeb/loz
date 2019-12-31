@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use crate::interpreter::Value::Bool;
 use crate::parser::{AST, Expression, FunctionBody, FunctionRule};
+use crate::interpreter::InterpreterError::DivisionByZero;
 
 #[derive(Debug, Clone)]
 struct RunState {
@@ -35,8 +35,8 @@ enum Value {
 
 #[derive(Debug, Clone)]
 pub enum InterpreterError {
-    NotImplemented,
-    NoApplicableFunctionRule(String)
+    NoApplicableFunctionRule(String),
+    DivisionByZero
 }
 
 pub fn interpret(ast: &AST) -> Result<(), InterpreterError> {
@@ -58,9 +58,24 @@ fn evaluate(e: &Expression, ast: &AST, state: &mut RunState) -> Result<Value, In
         Expression::Negation(_, e) => Ok(Value::Bool(!eval_bool(e, ast, state)?)),
         Expression::Minus(_, e) => Ok (Value::Int(- eval_int(e, ast, state)?)),
         Expression::Times(_, e1, e2) => Ok(Value::Int(eval_int(e1, ast, state)? * eval_int(e2, ast, state)?)),
-        Expression::Divide(_, e1, e2) => Ok(Value::Int(eval_int(e1, ast, state)? / eval_int(e2, ast, state)?)),
+        Expression::Divide(_, e1, e2) => {
+            let divider = eval_int(e2, ast, state)?;
+            if divider == 0 {
+                return Err(DivisionByZero);
+            }
+            Ok(Value::Int(eval_int(e1, ast, state)? / divider))
+        },
         Expression::Modulo(_, e1, e2) => Ok(Value::Int(eval_int(e1, ast, state)? % eval_int(e2, ast, state)?)),
-        Expression::Add(_, e1, e2) => Ok(Value::Int(eval_int(e1, ast, state)? + eval_int(e2, ast, state)?)),
+        Expression::Add(_, e1, e2) => {
+            match (evaluate(e1, ast, state)?, evaluate(e2, ast, state)?) {
+                (Value::Int(l), Value::Int(r)) => Ok(Value::Int(l + r)),
+                (Value::String(mut l), Value::String(r)) => {
+                    l.push_str(r.as_str());
+                    Ok(Value::String(l))
+                }
+                (l, r) => unreachable!("Addition between results {:?} and {:?}", l , r)
+            }
+        },
         Expression::Subtract(_, e1, e2) => Ok(Value::Int(eval_int(e1, ast, state)? - eval_int(e2, ast, state)?)),
         Expression::ShiftLeft(_, e1, e2) => Ok(Value::Int(eval_int(e1, ast, state)? << eval_int(e2, ast, state)?)),
         Expression::ShiftRight(_, e1, e2) => Ok(Value::Int(eval_int(e1, ast, state)? >> eval_int(e2, ast, state)?)),
@@ -89,7 +104,7 @@ fn eval_function_call(f: &String, args: &Vec<Expression>, state: &mut RunState, 
 }
 
 fn eval_function_body(name: &String, body: &FunctionBody, state: &mut RunState, ast: &AST) -> Result<Value, InterpreterError> {
-    println!("Evaluating function {:?} in {:?}", name, state.frames.last().unwrap());
+    //println!("Evaluating function {:?} in {:?}", name, state.frames.last().unwrap());
 
     for rule in &body.rules {
         match rule {
@@ -116,19 +131,5 @@ fn eval_int(e: &Expression, ast: &AST, state: &mut RunState) -> Result<isize, In
     match evaluate(e, ast, state) {
         Ok(Value::Int(n)) => Ok(n),
         _ => unreachable!("evaluate wrong type (expected int)")
-    }
-}
-
-fn eval_char(e: &Expression, ast: &AST, state: &mut RunState) -> Result<char, InterpreterError> {
-    match evaluate(e, ast, state) {
-        Ok(Value::Char(c)) => Ok(c),
-        _ => unreachable!("evaluate wrong type (expected char)")
-    }
-}
-
-fn eval_string(e: &Expression, ast: &AST, state: &mut RunState) -> Result<String, InterpreterError> {
-    match evaluate(e, ast, state) {
-        Ok(Value::String(s)) => Ok(s),
-        _ => unreachable!("evaluate wrong type (expected String)")
     }
 }

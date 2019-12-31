@@ -10,7 +10,10 @@ fac n
 
 pow :: Int Int -> Int
 pow b n
-| n == 0 = b
+| n == 1 = b
 = b * pow b (n - 1)
 
-Main = pow 5 5
+divide :: Int Int -> Int
+divide b n = b / n
+
+Main = choose false + choose true
