@@ -180,6 +180,10 @@ impl TyperState {
         let type_equal = |operator, loc| |l, r| {
             return if l == r { Ok(l) } else { Err(TypeError::from_loc(loc, OperatorArgumentsNotEqual(operator, l, r))) };
         };
+
+        let type_eq_fixed = |operator, loc, result_type| |l, r| {
+            return if l == r { Ok(result_type) } else { Err(TypeError::from_loc(loc, OperatorArgumentsNotEqual(operator, l, r))) };
+        };
         let type_fixed = |t| (|_l, _r| Ok(t));
 
         let (determined_type, loc_info): (Result<Type, Vec<TypeError>>, &Location) = match expression {
@@ -220,14 +224,16 @@ impl TyperState {
                 (combine(type_fixed(Type::Bool), self.check_expression(e1, &vec![Type::Int], parameter_to_type), self.check_expression(e2, &vec![Type::Int], parameter_to_type)), loc_info),
             Expression::Lesser(loc_info, e1, e2) =>
                 (combine(type_fixed(Type::Bool), self.check_expression(e1, &vec![Type::Int], parameter_to_type), self.check_expression(e2, &vec![Type::Int], parameter_to_type)), loc_info),
-            Expression::Eq(loc_info, e1, e2) =>
-                (combine(type_fixed(Type::Bool), self.check_expression(e1, &vec![], parameter_to_type), self.check_expression(e2, &vec![], parameter_to_type)), loc_info),
-            Expression::Neq(loc_info, e1, e2) =>
-                (combine(type_fixed(Type::Bool), self.check_expression(e1, &vec![], parameter_to_type), self.check_expression(e2, &vec![], parameter_to_type)), loc_info),
-            Expression::And(loc_info, e1, e2) =>
+                        Expression::And(loc_info, e1, e2) =>
                 (combine(type_fixed(Type::Bool), self.check_expression(e1, &vec![Type::Bool], parameter_to_type), self.check_expression(e2, &vec![Type::Bool], parameter_to_type)), loc_info),
             Expression::Or(loc_info, e1, e2) =>
                 (combine(type_fixed(Type::Bool), self.check_expression(e1, &vec![Type::Bool], parameter_to_type), self.check_expression(e2, &vec![Type::Bool], parameter_to_type)), loc_info),
+
+            Expression::Eq(loc_info, e1, e2) =>
+                (combine(type_eq_fixed("==".to_string(), loc_info.clone(), Type::Bool), self.check_expression(e1, &vec![], parameter_to_type), self.check_expression(e2, &vec![], parameter_to_type)), loc_info),
+            Expression::Neq(loc_info, e1, e2) =>
+                (combine(type_eq_fixed("==".to_string(), loc_info.clone(), Type::Bool), self.check_expression(e1, &vec![], parameter_to_type), self.check_expression(e2, &vec![], parameter_to_type)), loc_info),
+
         };
 
         if let Err(r) = determined_type {
