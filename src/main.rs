@@ -24,7 +24,7 @@ fn main() {
 
     let ast = parser::parse(filename, &contents[..]);
 
-    println!("AST: {:?}", ast);
+    //println!("AST: {:?}", ast);
 
     if let Err(err) = ast {
         eprintln!("{} {}", filename, err);

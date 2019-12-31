@@ -1,19 +1,15 @@
-choose :: Bool -> String
-choose bool
-| bool = "r"
-| ! bool = "bloe"
-
-fac :: Int -> Int
-fac n
-| n == 1 = 1
-= n * fac (n - 1)
-
 pow :: Int Int -> Int
 pow b n
+# m = n
+| m == 0 = 1
+| m == 1 = b
+# newn = m - 1
+= b * pow b newn
+
+pow2 :: Int Int -> Int
+pow2 b n
+| n == 0 = 1
 | n == 1 = b
 = b * pow b (n - 1)
 
-divide :: Int Int -> Int
-divide b n = b / n
-
-Main = choose false + choose true
+Main = pow 2 18 * pow2 2 18

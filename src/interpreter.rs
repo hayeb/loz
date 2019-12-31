@@ -114,6 +114,11 @@ fn eval_function_body(name: &String, body: &FunctionBody, state: &mut RunState, 
                 }
             },
             FunctionRule::ExpressionRule(_, result_expression) => return evaluate(&result_expression, ast, state),
+            FunctionRule::LetRule(_, identifier, e) => {
+                let result = evaluate(e, ast, state)?;
+
+                state.frames.last_mut().unwrap().variables.insert(identifier.clone(), result);
+            }
         }
     }
 

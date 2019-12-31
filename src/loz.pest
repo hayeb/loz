@@ -39,6 +39,7 @@ loz_type = {
 }
 
 function_header = ${ PEEK ~ (WHITESPACE+ ~ identifier)*}
+function_let_rule = {NEWLINE ~ ( "let" | "#") ~ identifier ~ "=" ~ expression}
 
 function_conditional_rule = { NEWLINE ~ function_conditional}
 
@@ -47,7 +48,7 @@ function_expression_rule = {NEWLINE* ~ "=" ~ expression}
 function_body = {
     function_header ~
     (
-        function_conditional_rule* ~ function_expression_rule?
+        function_let_rule* ~ function_conditional_rule* ~ function_let_rule* ~ function_expression_rule?
     ) ~ NEWLINE+
 }
 

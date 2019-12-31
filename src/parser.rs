@@ -23,6 +23,7 @@ pub struct Location {
 pub enum FunctionRule {
     ConditionalRule(Location, Expression, Expression),
     ExpressionRule(Location, Expression),
+    LetRule(Location, String, Expression)
 }
 
 #[derive(Debug, Clone)]
@@ -117,7 +118,7 @@ lazy_static! {
 
 pub fn parse(file_name: &String, input: &str) -> Result<AST, Error<Rule>> {
     let ast = LOZParser::parse(Rule::ast, input)?.next().unwrap();
-    //println!("raw ast: {:#?}", ast);
+    println!("raw ast: {:#?}", ast);
     let line_starts = build_line_start_cache(input);
     //println!("line starts {:?}", line_starts);
     Ok(to_ast(ast, file_name, &line_starts))
@@ -290,6 +291,12 @@ fn to_function_rule(pair: Pair<Rule>, file_name: &String, function_name: &String
         Rule::function_expression_rule => {
             let (line, col) = line_col_number(line_starts, pair.as_span().start());
             FunctionRule::ExpressionRule(Location { file: file_name.clone(), function: function_name.clone(), line, col }, to_expression(pair.into_inner().next().unwrap(), file_name, function_name, line_starts))
+        }
+        Rule::function_let_rule => {
+            let (line, col) = line_col_number(line_starts, pair.as_span().start());
+            let identifier = pair.clone().into_inner().nth(0).unwrap().as_str().to_string();
+            let expression = to_expression(pair.clone().into_inner().nth(1).unwrap(), file_name, function_name, line_starts);
+            FunctionRule::LetRule(Location { file: file_name.clone(), function: function_name.clone(), line, col }, identifier, expression)
         }
         _ => unreachable!()
     }

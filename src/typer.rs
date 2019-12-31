@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt::{Display, Error, Formatter};
 
 use crate::parser::{AST, Expression, FunctionBody, FunctionDeclaration, FunctionRule, FunctionType, Location, Type};
-use crate::parser::FunctionRule::{ConditionalRule, ExpressionRule};
+use crate::parser::FunctionRule::{ConditionalRule, ExpressionRule, LetRule};
 use crate::typer::TypeErrorType::{ArgumentCountMismatch, OperatorArgumentsNotEqual, ParameterCountMismatch, TypeMismatch, UndefinedFunction, UndefinedVariable};
 
 #[derive(Debug)]
@@ -62,7 +62,7 @@ impl Display for TypeError {
 }
 
 fn write_error_context(f: &mut Formatter<'_>, context: &ErrorContext) -> Result<(), Error> {
-    write!(f, "{}/{} [{}:{}]: ", context.file, context.function, context.line, context.col)
+    write!(f, "{}[{}:{}]::{}: ", context.file, context.line, context.col, context.function)
 }
 
 #[derive(Debug)]
@@ -132,14 +132,14 @@ impl TyperState {
         let function_type = &self.function_name_to_type[name];
 
         if function_type.from.len() != body.parameters.len() {
-            return Err(vec![TypeError::from(ErrorContext { file: "NotImplemented".to_string(), function: name.to_string(), line: 0, col: 0 }, ParameterCountMismatch(function_type.from.len(), body.parameters.len()))]);
+            return Err(vec![TypeError::from(ErrorContext { file: body.location.file.clone(), function: name.to_string(), line: body.location.line, col: body.location.col }, ParameterCountMismatch(function_type.from.len(), body.parameters.len()))]);
         }
-        let parameter_to_type: HashMap<&String, Type> = (&body.parameters).into_iter().enumerate()
-            .map(|(i, name)| (name, function_type.from[i].clone()))
+        let parameter_to_type: &mut HashMap<String, Type> = &mut (&body.parameters).into_iter().enumerate()
+            .map(|(i, name)| (name.clone(), function_type.from[i].clone()))
             .collect();
 
         let errors: Vec<TypeError> = (&body.rules).into_iter()
-            .map(|r| self.check_function_rule(&function_type.clone().to, &parameter_to_type, r))
+            .map(|r| self.check_function_rule(&function_type.clone().to, parameter_to_type, r))
             .filter(|r| r.is_err())
             .flat_map(|err| err.err().unwrap().into_iter())
             .collect();
@@ -151,7 +151,7 @@ impl TyperState {
         }
     }
 
-    fn check_function_rule(&self, result_type: &Type, parameter_to_type: &HashMap<&String, Type>, rule: &FunctionRule) -> Result<TypeResult, Vec<TypeError>> {
+    fn check_function_rule(&self, result_type: &Type, parameter_to_type: &mut HashMap<String, Type>, rule: &FunctionRule) -> Result<TypeResult, Vec<TypeError>> {
         // print!("check function rule {} ", function_name);
         match rule {
             ConditionalRule(_, condition, expression) => {
@@ -165,10 +165,16 @@ impl TyperState {
                 }
             }
             ExpressionRule(_, e) => self.check_expression(e, &vec![result_type.clone()], parameter_to_type).map(|_| TypeResult {}),
+            LetRule(_, identifier, e) => {
+                println!("Checking function rule {}: {:#?} ", identifier, e);
+                let expression_type = self.check_expression(e, &vec![], parameter_to_type)?;
+                parameter_to_type.insert(identifier.clone(), expression_type);
+                Ok(TypeResult{})
+            }
         }
     }
 
-    fn check_expression(&self, expression: &Expression, required_type: &Vec<Type>, parameter_to_type: &HashMap<&String, Type>) -> Result<Type, Vec<TypeError>> {
+    fn check_expression(&self, expression: &Expression, required_type: &Vec<Type>, parameter_to_type: &HashMap<String, Type>) -> Result<Type, Vec<TypeError>> {
         // println!("checking expression {:?}", expression);
 
         let type_equal = |operator, loc| |l, r| {
@@ -241,7 +247,7 @@ impl TyperState {
         Ok(determined_type)
     }
 
-    fn check_function_call(&self, name: &String, args: &Vec<Expression>, required_type: &Vec<Type>, parameter_to_type: &HashMap<&String, Type>, loc_info: &Location) -> Result<Type, Vec<TypeError>> {
+    fn check_function_call(&self, name: &String, args: &Vec<Expression>, required_type: &Vec<Type>, parameter_to_type: &HashMap<String, Type>, loc_info: &Location) -> Result<Type, Vec<TypeError>> {
         //println!("checking call {}", name);
         let ftype = self.function_name_to_type.get(name);
         if let None = ftype {
