@@ -20,7 +20,7 @@ fn main() {
     let filename = &args[1];
 
     let contents = fs::read_to_string(filename)
-        .expect("Error reading from file: test/test.loz");
+        .expect(&format!("Error reading from file: {}", filename));
 
     let ast = parser::parse(filename, &contents[..]);
 

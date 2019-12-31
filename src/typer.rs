@@ -192,7 +192,7 @@ impl TyperState {
                 }
                 Ok(variables_to_type)
             }
-            (match_expression, expression_type) => {
+            (_, expression_type) => {
                 Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::MatchWrongType(expression_type.clone()))])
             }
         }

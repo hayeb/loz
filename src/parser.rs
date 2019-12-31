@@ -35,7 +35,6 @@ pub struct FunctionBody {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
-    NoType,
     Bool,
     Char,
     String,
@@ -129,7 +128,6 @@ lazy_static! {
 
 pub fn parse(file_name: &String, input: &str) -> Result<AST, Error<Rule>> {
     let ast = LOZParser::parse(Rule::ast, input)?.next().unwrap();
-    println!("raw ast: {:#?}", ast);
     let line_starts = build_line_start_cache(input);
     //println!("line starts {:?}", line_starts);
     Ok(to_ast(ast, file_name, &line_starts))
@@ -190,7 +188,6 @@ fn to_ast(pair: Pair<Rule>, file_name: &String, line_starts: &Vec<usize>) -> AST
 }
 
 fn to_function_declaration(file_name: &String, pair: Pair<Rule>, line_starts: &Vec<usize>) -> FunctionDeclaration {
-    println!("to_function_declaration: {:#?}", pair);
     let (line, col) = line_col_number(line_starts, pair.as_span().start());
     let mut inner_rules = pair.into_inner();
     let name = inner_rules.next().unwrap().as_str();
