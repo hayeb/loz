@@ -39,7 +39,8 @@ pub enum Type {
     Char,
     String,
     Int,
-    Tuple(Vec<Type>)
+    Tuple(Vec<Type>),
+    List(Box<Option<Type>>)
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +66,12 @@ pub enum Expression {
     Number(Location, isize),
 
     TupleLiteral(Location, Vec<Expression>),
+
+    EmptyListLiteral(Location),
+    ShorthandListLiteral(Location, Vec<Expression>),
+    LonghandListLiteral(Location, Box<Expression>, Box<Expression>),
+
+    InlineMatch(Location, String, Box<MatchExpression>),
 
     Call(Location, String, Vec<Expression>),
     Variable(Location, String),
@@ -97,7 +104,9 @@ pub enum Expression {
 #[derive(Debug, Clone)]
 pub enum MatchExpression {
     Identifier(String),
-    Tuple(Vec<MatchExpression>)
+    Tuple(Vec<MatchExpression>),
+    ShorthandList(Vec<MatchExpression>),
+    LonghandList(Box<MatchExpression>, Box<MatchExpression>)
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +137,7 @@ lazy_static! {
 
 pub fn parse(file_name: &String, input: &str) -> Result<AST, Error<Rule>> {
     let ast = LOZParser::parse(Rule::ast, input)?.next().unwrap();
+    //println!("Raw AST: {:#?}", ast);
     let line_starts = build_line_start_cache(input);
     //println!("line starts {:?}", line_starts);
     Ok(to_ast(ast, file_name, &line_starts))
@@ -206,7 +216,7 @@ fn to_expression(expression: Pair<Rule>, file_name: &String, function_name: &Str
         |pair: Pair<Rule>| {
             match pair.as_rule() {
                 Rule::term => to_term(pair, file_name, function_name, line_starts),
-                _ => unreachable!(),
+                _ => unreachable!("prec_climber reached: {:?}", pair),
             }
         },
         |lhs: Expression, op: Pair<Rule>, rhs: Expression| {
@@ -259,6 +269,24 @@ fn to_term(pair: Pair<Rule>, file_name: &String, function_name: &String, line_st
         Rule::negation => Negation(loc_info, Box::new(to_expression(sub.into_inner().next().unwrap(), file_name, function_name, line_starts))),
         Rule::minus => Minus(loc_info, Box::new(to_expression(sub.into_inner().next().unwrap(), file_name, function_name, line_starts))),
         Rule::tuple_literal => TupleLiteral(loc_info, sub.into_inner().map(|te| to_expression(te, file_name, function_name, line_starts)).collect()),
+
+        Rule::list_empty => EmptyListLiteral(loc_info),
+        Rule::list_singleton => ShorthandListLiteral(loc_info, vec![to_expression(sub.into_inner().nth(0).unwrap(), file_name, function_name, line_starts)]),
+        Rule::list_shorthand => ShorthandListLiteral(loc_info, sub.into_inner().map(|te| to_expression(te, file_name, function_name, line_starts)).collect()),
+        Rule::list_longhand => {
+            let mut children = sub.into_inner();
+            let head = children.next().unwrap();
+            let tail = children.next().unwrap();
+            LonghandListLiteral(loc_info, Box::new(to_expression(head, file_name, function_name, line_starts)), Box::new(to_expression(tail, file_name, function_name, line_starts)))
+        },
+        Rule::inline_match => {
+            //println!("Inline match: {:?}", sub);
+            let mut children = sub.into_inner();
+            let identifier = children.next().unwrap().as_str().to_string();
+            let match_expression = to_match_expression(children.next().unwrap().into_inner().next().unwrap(),file_name, function_name, line_starts);
+            InlineMatch(loc_info, identifier, Box::new(match_expression))
+        }
+
         r => panic!("Reached term {:#?}", r),
     }
 }
@@ -318,7 +346,17 @@ fn to_match_expression(match_expression: Pair<Rule>, file_name: &String, functio
     match match_expression.as_rule() {
         Rule::identifier => MatchExpression::Identifier(match_expression.as_str().to_string()),
         Rule::tuple_match => MatchExpression::Tuple(match_expression.into_inner().map(|e| to_match_expression(e, file_name, function_name, line_starts)).collect()),
-        _ => unreachable!()
+        Rule::list_match_empty => MatchExpression::ShorthandList(vec![]),
+        Rule::list_match_singleton => MatchExpression::ShorthandList(vec![to_match_expression(match_expression.into_inner().next().unwrap(), file_name, function_name, line_starts)]),
+        Rule::list_match_shorthand => MatchExpression::ShorthandList(match_expression.into_inner().map(|e| to_match_expression(e, file_name, function_name, line_starts)).collect()),
+        Rule::list_match_longhand => {
+            let mut inner = match_expression.into_inner();
+            let head = to_match_expression(inner.next().unwrap(), file_name, function_name, line_starts);
+            let tail = to_match_expression(inner.next().unwrap(), file_name, function_name, line_starts);
+            MatchExpression::LonghandList(Box::new(head),Box::new(tail))
+        },
+
+        r => unreachable!("Reached to_match_expression with: {:?}", r)
     }
 }
 
@@ -334,6 +372,9 @@ fn to_type(pair: Pair<Rule>) -> Type {
         Rule::char_type => Type::Char,
         Rule::tuple_type => {
             Type::Tuple(pair.into_inner().map(|r| to_type(r)).collect())
+        },
+        Rule::list_type => {
+            Type::List(Box::new(Option::Some(to_type(pair.into_inner().nth(0).unwrap()))))
         }
         _ => unreachable!()
     }

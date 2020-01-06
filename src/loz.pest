@@ -37,12 +37,14 @@ loz_type = _{
     | int_type
     | char_type
     | tuple_type
+    | list_type
 }
 
 bool_type = { "Bool"}
 string_type = {"String"}
 int_type = {"Int"}
 char_type = {"Char"}
+list_type = { "[" ~ loz_type ~ "]"}
 
 tuple_type = { "(" ~ loz_type ~ ("," ~ loz_type)+ ~ ")" }
 
@@ -86,6 +88,7 @@ simple_term = _{
     | negation
     | minus
     | tuple_literal
+    | list_literal
 }
 
 minus = @{"-" ~ expression}
@@ -93,12 +96,26 @@ minus = @{"-" ~ expression}
 term = {
       simple_term
     | call // Function call
+    | inline_match
     | identifier // Variable reference
 }
+
+inline_match = { identifier ~ ":=" ~ match_expression }
 tuple_literal = { "(" ~ expression ~ ("," ~ expression)+ ~ ")" }
-bool_literal = {"false" | "true"}
-subexpr = {"(" ~ expression ~ ")"}
-negation = {"!" ~ expression}
+list_literal = _{ list_empty
+    | list_singleton
+    | list_shorthand
+    | list_longhand
+}
+
+list_empty = {"[]"}
+list_singleton = {"[" ~ expression ~ "]"}
+list_shorthand = {"[" ~ expression ~ ("," ~ expression)* ~ "]"}
+list_longhand = {"[" ~ expression ~ ":" ~ expression ~ "]"}
+
+bool_literal = { "false" | "true" }
+subexpr = { "(" ~ expression ~ ")" }
+negation = { "!" ~ expression }
 
 expression = {
     term ~ (operation ~ term)*
@@ -111,14 +128,27 @@ match_expression = {
 match_term = _{
     identifier
     | tuple_match
+    | list_match
 }
 
 tuple_match = {
-    "(" ~ match_term ~ ("," ~ match_term) ~ ")"
+    "(" ~ match_term ~ ("," ~ match_term)+ ~ ")"
 }
 
+list_match = _{
+    list_match_empty
+    | list_match_singleton
+    | list_match_shorthand
+    | list_match_longhand
+}
+
+list_match_empty = { "[]" }
+list_match_singleton = { "[" ~ match_term ~ "]" }
+list_match_shorthand = { "[" ~ match_term ~ ("," ~ match_term)* ~ "]" }
+list_match_longhand = { "[" ~ match_term ~ ":" ~ match_term ~ "]" }
+
 operation = _{
-        times | divide | modulo
+    times | divide | modulo
 
     | add | substract
     | shift_left | shift_right

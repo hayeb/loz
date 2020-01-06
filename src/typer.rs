@@ -3,7 +3,7 @@ use std::fmt::{Display, Error, Formatter};
 
 use crate::parser::{AST, Expression, FunctionBody, FunctionDeclaration, FunctionRule, FunctionType, Location, MatchExpression, Type};
 use crate::parser::FunctionRule::{ConditionalRule, ExpressionRule, LetRule};
-use crate::typer::TypeErrorType::{ArgumentCountMismatch, OperatorArgumentsNotEqual, ParameterCountMismatch, TypeMismatch, UndefinedFunction, UndefinedVariable, MatchWrongType};
+use crate::typer::TypeErrorType::{ArgumentCountMismatch, OperatorArgumentsNotEqual, ParameterCountMismatch, TypeMismatch, UndefinedFunction, UndefinedVariable, MatchWrongType, DuplicateVariableNameSingleMatchExpression};
 
 #[derive(Debug)]
 pub struct TypeError {
@@ -38,6 +38,7 @@ pub enum TypeErrorType {
     TypeMismatch(Vec<Type>, Type),
     OperatorArgumentsNotEqual(String, Type, Type),
     MatchWrongType(Type),
+    DuplicateVariableNameSingleMatchExpression(String)
 }
 
 #[derive(Debug)]
@@ -58,7 +59,8 @@ impl Display for TypeError {
             UndefinedVariable(name) => write!(f, "Undefined variable {}", name),
             UndefinedFunction(name) => write!(f, "Undefined function {}", name),
             OperatorArgumentsNotEqual(o, l, r) => write!(f, "Arguments to {} operator do not have equal type: {:?} and {:?}", o, l, r),
-            MatchWrongType(expected_type) => write!(f, "Match expression has wrong type, expected type {:#?}", expected_type)
+            MatchWrongType(expected_type) => write!(f, "Match expression has wrong type, expected type {:#?}", expected_type),
+            DuplicateVariableNameSingleMatchExpression(v) => write!(f, "Duplicate variable introduced in single match: {}", v)
         }
     }
 }
@@ -191,6 +193,31 @@ impl TyperState {
                     variables_to_type.extend(variables);
                 }
                 Ok(variables_to_type)
+            },
+            (MatchExpression::ShorthandList(match_elements), Type::List(option_element_type))
+                if match_elements.len() == 0 && option_element_type.is_none() => Ok(HashMap::new()),
+
+            (MatchExpression::ShorthandList(match_elements), Type::List(option_element_type)) => {
+                if option_element_type.as_ref().is_none() {
+                    return Ok(HashMap::new())
+                }
+                let mut variables_to_type : HashMap<String, Type> = HashMap::new();
+                for match_element in match_elements {
+                    let variables = self.check_match_expression(loc_info, match_element, &option_element_type.as_ref().as_ref().unwrap())?;
+                    for (name, vtype) in &variables {
+                        if variables_to_type.contains_key(name) {
+                            return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::DuplicateVariableNameSingleMatchExpression(name.clone()))])
+                        }
+                        variables_to_type.insert(name.clone(), vtype.clone());
+                    }
+                }
+                Ok(variables_to_type)
+            },
+            (MatchExpression::LonghandList(head, tail), Type::List(option_element_type)) => {
+                let mut head_checked = self.check_match_expression(loc_info, head, &option_element_type.clone().unwrap())?;
+                let tail_checked = self.check_match_expression(loc_info, tail, &Type::List(option_element_type.clone()))?;
+                head_checked.extend(tail_checked);
+                Ok(head_checked)
             }
             (_, expression_type) => {
                 Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::MatchWrongType(expression_type.clone()))])
@@ -221,16 +248,44 @@ impl TyperState {
                     Some(_type) => Ok(_type.clone()),
                     None => Err(vec![TypeError::from(ErrorContext { file: loc_info.file.clone(), function: loc_info.function.clone(), line: loc_info.line, col: loc_info.col }, TypeErrorType::UndefinedVariable(v.clone()))]),
                 }, loc_info)
-            }
+            },
 
             Expression::TupleLiteral(loc_info, elements) => {
-                let mut bla = Vec::new();
+                let mut types = Vec::new();
                 for e in elements {
-                    bla.push(self.check_expression(e, &vec![], parameter_to_type)?)
+                    types.push(self.check_expression(e, &vec![], parameter_to_type)?)
                 }
 
-                (Ok(Type::Tuple(bla)), loc_info)
-            }
+                (Ok(Type::Tuple(types)), loc_info)
+            },
+
+            Expression::EmptyListLiteral(loc_info) => (Ok(Type::List(Box::new(Option::None))), loc_info),
+            Expression::ShorthandListLiteral(loc_info, elements) => {
+                let mut det_type = Option::None;
+                for e in elements {
+                    let c_type = self.check_expression(e, &vec![], parameter_to_type)?;
+
+                    if det_type.as_ref().filter(|t| **t != c_type).is_some() {
+                        return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::TypeMismatch(vec![det_type.unwrap()], c_type))])
+                    }
+
+                    det_type = Some(c_type);
+                }
+
+                (Ok(Type::List(Box::new(det_type))), loc_info)
+            },
+
+            Expression::LonghandListLiteral(loc_info, head, tail) => {
+                let list_type = Type::List(Box::new(Some(self.check_expression(head, &vec![], parameter_to_type)?)));
+                let tail_type = self.check_expression(tail, &vec![list_type], parameter_to_type)?;
+                (Ok(tail_type), loc_info)
+            },
+
+            Expression::InlineMatch(loc_info, identifier, match_expression) => {
+                let identifier_type = parameter_to_type.get(identifier).unwrap();
+                let _match_type = self.check_match_expression(loc_info, match_expression, &identifier_type)?;
+                (Ok(Type::Bool), loc_info)
+            },
 
             Expression::Negation(loc_info, e) => (self.check_expression(e, &vec![Type::Bool], parameter_to_type), loc_info),
             Expression::Minus(loc_info, n) => (self.check_expression(n, &vec![Type::Int], parameter_to_type), loc_info),
@@ -279,6 +334,14 @@ impl TyperState {
         if required_type.is_empty() {
             return Ok(determined_type);
         }
+
+        if determined_type == Type::List(Box::new(None)) && required_type.len() == 1 {
+            // FIXME: Hack to allow polymorph []
+            if let Some(Type::List(t)) = required_type.get(0) {
+                return Ok(Type::List(t.clone()))
+            }
+        }
+
         if !required_type.contains(&determined_type) {
             //println!("determined type error: {:?}, required: {:?}", determined_type, required_type);
             return Err(vec![TypeError::from(ErrorContext { file: loc_info.file.clone(), function: loc_info.function.clone(), line: loc_info.line, col: loc_info.col }, TypeMismatch(required_type.clone(), determined_type))]);

@@ -1,0 +1,41 @@
+head :: [Int] -> Int
+head list
+| list := [] = 0
+| list := [a] = 1
+| list := [a, b] = 2
+# [i, ii, iii] = list
+= i
+
+head2 :: [Int] -> Int
+head2 list
+# [h : [t:tt]] = list
+= h
+
+tail :: [Int] -> [Int]
+tail list
+| list := [] = []
+# [h : t] = list
+= t
+
+left :: (Int, Int) -> Int
+left tuple
+# (l, r) = tuple
+= l
+
+right :: (Int, Int) -> Int
+right tuple
+# (l, r) = tuple
+= r
+
+mapTimes :: [(Int, Int)] -> Int
+mapTimes list
+| list := [] = 1
+# [(h, t) : xs] = list
+= (h * t) + mapTimes xs
+
+repeat :: Int Int -> [Int]
+repeat n i
+| n == 0 = []
+= [i : repeat (n - 1) i]
+
+Main = (mapTimes [(1, 2), (3, 4), (5, 6)], repeat 5 (71 * 9 + left (1, 3)))
