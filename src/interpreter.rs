@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::interpreter::InterpreterError::DivisionByZero;
+use crate::interpreter::InterpreterError::{DivisionByZero, NoApplicableFunctionBody};
 use crate::parser::{AST, Expression, FunctionBody, FunctionRule, MatchExpression};
 
 #[derive(Debug, Clone)]
@@ -38,6 +38,7 @@ pub enum Value {
 #[derive(Debug, Clone)]
 pub enum InterpreterError {
     NoApplicableFunctionRule(String),
+    NoApplicableFunctionBody(String),
     DivisionByZero,
     ExpressionDoesNotMatch(MatchExpression, Value),
 }
@@ -96,11 +97,11 @@ fn evaluate(e: &Expression, ast: &AST, state: &mut RunState) -> Result<Value, In
                     state.frames.last_mut().unwrap().variables.extend(variables);
                     //println!("{:?} matches", match_expression);
                     Ok(Value::Bool(true))
-                },
+                }
                 Err(InterpreterError::ExpressionDoesNotMatch(_, _)) => {
                     //println!("{:?} does not match", match_expression);
                     Ok(Value::Bool(false))
-                },
+                }
                 Err(e) => Err(e)
             }
         }
@@ -144,17 +145,31 @@ fn evaluate(e: &Expression, ast: &AST, state: &mut RunState) -> Result<Value, In
 fn eval_function_call(f: &String, args: &Vec<Expression>, state: &mut RunState, ast: &AST) -> Result<Value, InterpreterError> {
     let declaration = ast.function_declarations.get(f).unwrap();
 
-    // TODO: We only support single-body functions for now.
-    let mut frame = Frame::new();
-    for (arg_name, value_expression) in declaration.function_bodies.get(0).unwrap().parameters.iter().zip(args.iter()) {
-        frame.variables.insert(arg_name.clone(), evaluate(value_expression, ast, state)?);
+    for body in &declaration.function_bodies {
+        let mut body_frame = Frame::new();
+
+        let mut matches = true;
+
+        for (match_expression, value) in body.match_expressions.iter().zip(args.iter()) {
+            match collect_match_variables(match_expression, &evaluate(value, ast, state)?) {
+                Ok(variables) => body_frame.variables.extend(variables),
+                Err(InterpreterError::ExpressionDoesNotMatch(_, _)) => {
+                    matches = false;
+                    break;
+                },
+                Err(e) => return Err(e),
+            }
+        }
+        if matches {
+            state.frames.push(body_frame);
+
+            let result = eval_function_body(f, &body, state, ast);
+
+            state.frames.remove(state.frames.len() - 1);
+            return result;
+        }
     }
-    state.frames.push(frame);
-
-    let result = eval_function_body(f, declaration.function_bodies.get(0).unwrap(), state, ast);
-
-    state.frames.remove(state.frames.len()-1);
-    result
+    Err(NoApplicableFunctionBody(declaration.name.clone()))
 }
 
 fn eval_function_body(name: &String, body: &FunctionBody, state: &mut RunState, ast: &AST) -> Result<Value, InterpreterError> {
@@ -167,7 +182,7 @@ fn eval_function_body(name: &String, body: &FunctionBody, state: &mut RunState, 
                 if eval_bool(&condition_expression, ast, state)? {
                     return evaluate(&result_expression, ast, state);
                 }
-            },
+            }
             FunctionRule::ExpressionRule(_, result_expression) => return evaluate(&result_expression, ast, state),
             FunctionRule::LetRule(_, match_expression, e) => {
                 let variables = collect_match_variables(match_expression, &evaluate(e, ast, state)?)?;
@@ -188,6 +203,31 @@ fn collect_match_variables(match_expression: &MatchExpression, evaluated_express
             map.insert(identifier.clone(), value.clone());
             Ok(map)
         }
+        (MatchExpression::Number(_n), Value::Int(n)) => {
+            if _n == n {
+                return Ok(HashMap::new());
+            }
+            Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::Number(_n.clone()), Value::Int(n.clone())))
+        }
+        (MatchExpression::CharLiteral(_c), Value::Char(c)) => {
+            if _c == c {
+                return Ok(HashMap::new());
+            }
+            Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::CharLiteral(_c.clone()), Value::Char(c.clone())))
+        }
+        (MatchExpression::StringLiteral(_s), Value::String(s)) => {
+            if _s == s {
+                return Ok(HashMap::new());
+            }
+            Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::StringLiteral(_s.clone()), Value::String(s.clone())))
+        }
+        (MatchExpression::BoolLiteral(_b), Value::Bool(b)) => {
+            if _b == b {
+                return Ok(HashMap::new());
+            }
+            Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::BoolLiteral(_b.clone()), Value::Bool(b.clone())))
+        }
+
         (MatchExpression::Tuple(elements), Value::Tuple(values)) => {
             let mut map = HashMap::new();
             for (e, v) in elements.iter().zip(values.iter()) {

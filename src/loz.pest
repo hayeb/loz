@@ -48,7 +48,7 @@ list_type = { "[" ~ loz_type ~ "]"}
 
 tuple_type = { "(" ~ loz_type ~ ("," ~ loz_type)+ ~ ")" }
 
-function_header = ${ PEEK ~ (WHITESPACE+ ~ identifier)*}
+function_header = ${ PEEK ~ (WHITESPACE+ ~ match_expression)*}
 function_let_rule = {NEWLINE ~ ( "let" | "#") ~ match_expression ~ "=" ~ expression}
 
 function_conditional_rule = { NEWLINE ~ function_conditional}
@@ -101,7 +101,7 @@ term = {
 }
 
 inline_match = { identifier ~ ":=" ~ match_expression }
-tuple_literal = { "(" ~ expression ~ ("," ~ expression)+ ~ ")" }
+tuple_literal = !{ "(" ~ NEWLINE* ~ expression ~ NEWLINE* ~ ("," ~ NEWLINE* ~ expression)+ ~ NEWLINE* ~ ")" }
 list_literal = _{ list_empty
     | list_singleton
     | list_shorthand
@@ -109,9 +109,9 @@ list_literal = _{ list_empty
 }
 
 list_empty = {"[]"}
-list_singleton = {"[" ~ expression ~ "]"}
-list_shorthand = {"[" ~ expression ~ ("," ~ expression)* ~ "]"}
-list_longhand = {"[" ~ expression ~ ":" ~ expression ~ "]"}
+list_singleton = {"[" ~ NEWLINE* ~ expression ~ NEWLINE* ~ "]"}
+list_shorthand = {"[" ~ NEWLINE* ~ expression ~ NEWLINE* ~ ("," ~ NEWLINE* ~ expression)* ~ NEWLINE* ~ "]"}
+list_longhand = {"[" ~ NEWLINE* ~ expression ~ NEWLINE* ~ ":" ~ NEWLINE* ~ expression ~ NEWLINE* ~ "]"}
 
 bool_literal = { "false" | "true" }
 subexpr = { "(" ~ expression ~ ")" }
@@ -126,9 +126,13 @@ match_expression = {
 }
 
 match_term = _{
-    identifier
+    list_match
     | tuple_match
-    | list_match
+    | identifier
+    | number
+    | char_literal
+    | string_literal
+    | bool_literal
 }
 
 tuple_match = {
@@ -144,7 +148,7 @@ list_match = _{
 
 list_match_empty = { "[]" }
 list_match_singleton = { "[" ~ match_term ~ "]" }
-list_match_shorthand = { "[" ~ match_term ~ ("," ~ match_term)* ~ "]" }
+list_match_shorthand = { "[" ~ match_term ~ ("," ~ match_term)+ ~ "]" }
 list_match_longhand = { "[" ~ match_term ~ ":" ~ match_term ~ "]" }
 
 operation = _{

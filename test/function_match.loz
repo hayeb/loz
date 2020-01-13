@@ -1,0 +1,57 @@
+head :: [Int] -> Int
+head [] = 0
+head [a] = 1
+head [a,b] = 2
+head [i,ii,iii] = i
+
+head2 :: [Int] -> Int
+head2 [h:[t:tt]] = h
+
+tail :: [String] -> [String]
+tail [] = []
+tail [h:t] = t
+
+left :: (Int, Int) -> Int
+left (l,r) = l
+
+right :: (Int, Int) -> Int
+right (l,r) = r
+
+mapTimes :: [(Int, Int)] -> Int
+mapTimes [] = 0
+mapTimes [(h,t):xs] = (h * t) + mapTimes xs
+
+repeat :: Int Int -> [Int]
+repeat 0 i = []
+repeat n i = [i : repeat (n - 1) i]
+
+concat :: [String] -> String
+concat [] = ""
+concat [s:ss] = s + concat ss
+
+fib :: Int -> Int
+fib 1 = 1
+fib 2 = 1
+fib n = fib (n - 1) + fib (n - 2)
+
+hoppa :: String -> String
+hoppa "bla" = "blie"
+hoppa "blie" = "bla"
+hoppa s = s
+
+letsGo :: Char -> Char
+letsGo 'g' = 'c'
+letsGo 'c' = 'g'
+
+Main = (mapTimes [(1, 2), (3, 4), (5, 6)],
+    repeat 5 (71 * 9 + left (1, 3)),
+    concat (tail ["bla", "blie", "bloe"]),
+    head [1, 2], head2 [1, 2, 3],
+    tail [],
+    tail ["h"],
+    concat ["Bla", "bla"],
+    fib 8,
+    hoppa "hoppa",
+    hoppa "bla",
+    hoppa "blie",
+    letsGo 'r')

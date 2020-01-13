@@ -3,7 +3,7 @@ use std::fmt::{Display, Error, Formatter};
 
 use crate::parser::{AST, Expression, FunctionBody, FunctionDeclaration, FunctionRule, FunctionType, Location, MatchExpression, Type};
 use crate::parser::FunctionRule::{ConditionalRule, ExpressionRule, LetRule};
-use crate::typer::TypeErrorType::{ArgumentCountMismatch, OperatorArgumentsNotEqual, ParameterCountMismatch, TypeMismatch, UndefinedFunction, UndefinedVariable, MatchWrongType, DuplicateVariableNameSingleMatchExpression};
+use crate::typer::TypeErrorType::{ArgumentCountMismatch, DuplicateVariableNameSingleMatchExpression, MatchWrongType, OperatorArgumentsNotEqual, ParameterCountMismatch, TypeMismatch, UndefinedFunction, UndefinedVariable};
 
 #[derive(Debug)]
 pub struct TypeError {
@@ -38,7 +38,7 @@ pub enum TypeErrorType {
     TypeMismatch(Vec<Type>, Type),
     OperatorArgumentsNotEqual(String, Type, Type),
     MatchWrongType(Type),
-    DuplicateVariableNameSingleMatchExpression(String)
+    DuplicateVariableNameSingleMatchExpression(String),
 }
 
 #[derive(Debug)]
@@ -135,12 +135,13 @@ impl TyperState {
     fn check_function_body(&self, name: &String, body: &FunctionBody) -> Result<TypeResult, Vec<TypeError>> {
         let function_type = &self.function_name_to_type[name];
 
-        if function_type.from.len() != body.parameters.len() {
-            return Err(vec![TypeError::from(ErrorContext { file: body.location.file.clone(), function: name.to_string(), line: body.location.line, col: body.location.col }, ParameterCountMismatch(function_type.from.len(), body.parameters.len()))]);
+        if function_type.from.len() != body.match_expressions.len() {
+            return Err(vec![TypeError::from(ErrorContext { file: body.location.file.clone(), function: name.to_string(), line: body.location.line, col: body.location.col }, ParameterCountMismatch(function_type.from.len(), body.match_expressions.len()))]);
         }
-        let parameter_to_type: &mut HashMap<String, Type> = &mut (&body.parameters).into_iter().enumerate()
-            .map(|(i, name)| (name.clone(), function_type.from[i].clone()))
-            .collect();
+        let parameter_to_type: &mut HashMap<String, Type> = &mut HashMap::new();
+        for (me, match_type) in (&body.match_expressions).into_iter().zip(&function_type.from) {
+            parameter_to_type.extend(self.check_match_expression(&body.location, &me, &match_type)?);
+        }
 
         let errors: Vec<TypeError> = (&body.rules).into_iter()
             .map(|r| self.check_function_rule(&function_type.clone().to, parameter_to_type, r))
@@ -185,7 +186,11 @@ impl TyperState {
                 let mut map = HashMap::new();
                 map.insert(identifier.clone(), expression_type.clone());
                 Ok(map)
-            }
+            },
+            (MatchExpression::Number(_n), Type::Int) => Ok(HashMap::new()),
+            (MatchExpression::CharLiteral(_c), Type::Char) => Ok(HashMap::new()),
+            (MatchExpression::StringLiteral(_s), Type::String) => Ok(HashMap::new()),
+            (MatchExpression::BoolLiteral(_b), Type::Bool) => Ok(HashMap::new()),
             (MatchExpression::Tuple(match_elements), Type::Tuple(element_types)) => {
                 let mut variables_to_type = HashMap::new();
                 for (match_element, element_type) in match_elements.iter().zip(element_types.iter()) {
@@ -193,26 +198,26 @@ impl TyperState {
                     variables_to_type.extend(variables);
                 }
                 Ok(variables_to_type)
-            },
+            }
             (MatchExpression::ShorthandList(match_elements), Type::List(option_element_type))
-                if match_elements.len() == 0 && option_element_type.is_none() => Ok(HashMap::new()),
+            if match_elements.len() == 0 && option_element_type.is_none() => Ok(HashMap::new()),
 
             (MatchExpression::ShorthandList(match_elements), Type::List(option_element_type)) => {
                 if option_element_type.as_ref().is_none() {
-                    return Ok(HashMap::new())
+                    return Ok(HashMap::new());
                 }
-                let mut variables_to_type : HashMap<String, Type> = HashMap::new();
+                let mut variables_to_type: HashMap<String, Type> = HashMap::new();
                 for match_element in match_elements {
                     let variables = self.check_match_expression(loc_info, match_element, &option_element_type.as_ref().as_ref().unwrap())?;
                     for (name, vtype) in &variables {
                         if variables_to_type.contains_key(name) {
-                            return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::DuplicateVariableNameSingleMatchExpression(name.clone()))])
+                            return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::DuplicateVariableNameSingleMatchExpression(name.clone()))]);
                         }
                         variables_to_type.insert(name.clone(), vtype.clone());
                     }
                 }
                 Ok(variables_to_type)
-            },
+            }
             (MatchExpression::LonghandList(head, tail), Type::List(option_element_type)) => {
                 let mut head_checked = self.check_match_expression(loc_info, head, &option_element_type.clone().unwrap())?;
                 let tail_checked = self.check_match_expression(loc_info, tail, &Type::List(option_element_type.clone()))?;
@@ -248,7 +253,7 @@ impl TyperState {
                     Some(_type) => Ok(_type.clone()),
                     None => Err(vec![TypeError::from(ErrorContext { file: loc_info.file.clone(), function: loc_info.function.clone(), line: loc_info.line, col: loc_info.col }, TypeErrorType::UndefinedVariable(v.clone()))]),
                 }, loc_info)
-            },
+            }
 
             Expression::TupleLiteral(loc_info, elements) => {
                 let mut types = Vec::new();
@@ -257,7 +262,7 @@ impl TyperState {
                 }
 
                 (Ok(Type::Tuple(types)), loc_info)
-            },
+            }
 
             Expression::EmptyListLiteral(loc_info) => (Ok(Type::List(Box::new(Option::None))), loc_info),
             Expression::ShorthandListLiteral(loc_info, elements) => {
@@ -266,26 +271,26 @@ impl TyperState {
                     let c_type = self.check_expression(e, &vec![], parameter_to_type)?;
 
                     if det_type.as_ref().filter(|t| **t != c_type).is_some() {
-                        return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::TypeMismatch(vec![det_type.unwrap()], c_type))])
+                        return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::TypeMismatch(vec![det_type.unwrap()], c_type))]);
                     }
 
                     det_type = Some(c_type);
                 }
 
                 (Ok(Type::List(Box::new(det_type))), loc_info)
-            },
+            }
 
             Expression::LonghandListLiteral(loc_info, head, tail) => {
                 let list_type = Type::List(Box::new(Some(self.check_expression(head, &vec![], parameter_to_type)?)));
                 let tail_type = self.check_expression(tail, &vec![list_type], parameter_to_type)?;
                 (Ok(tail_type), loc_info)
-            },
+            }
 
             Expression::InlineMatch(loc_info, identifier, match_expression) => {
                 let identifier_type = parameter_to_type.get(identifier).unwrap();
                 let _match_type = self.check_match_expression(loc_info, match_expression, &identifier_type)?;
                 (Ok(Type::Bool), loc_info)
-            },
+            }
 
             Expression::Negation(loc_info, e) => (self.check_expression(e, &vec![Type::Bool], parameter_to_type), loc_info),
             Expression::Minus(loc_info, n) => (self.check_expression(n, &vec![Type::Int], parameter_to_type), loc_info),
@@ -338,7 +343,7 @@ impl TyperState {
         if determined_type == Type::List(Box::new(None)) && required_type.len() == 1 {
             // FIXME: Hack to allow polymorph []
             if let Some(Type::List(t)) = required_type.get(0) {
-                return Ok(Type::List(t.clone()))
+                return Ok(Type::List(t.clone()));
             }
         }
 

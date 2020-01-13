@@ -29,7 +29,7 @@ pub enum FunctionRule {
 #[derive(Debug, Clone)]
 pub struct FunctionBody {
     pub location: Location,
-    pub parameters: Vec<String>,
+    pub match_expressions: Vec<MatchExpression>,
     pub rules: Vec<FunctionRule>,
 }
 
@@ -103,6 +103,10 @@ pub enum Expression {
 
 #[derive(Debug, Clone)]
 pub enum MatchExpression {
+    Number(isize),
+    CharLiteral(char),
+    StringLiteral(String),
+    BoolLiteral(bool),
     Identifier(String),
     Tuple(Vec<MatchExpression>),
     ShorthandList(Vec<MatchExpression>),
@@ -137,7 +141,7 @@ lazy_static! {
 
 pub fn parse(file_name: &String, input: &str) -> Result<AST, Error<Rule>> {
     let ast = LOZParser::parse(Rule::ast, input)?.next().unwrap();
-    //println!("Raw AST: {:#?}", ast);
+    println!("Raw AST: {:#?}", ast);
     let line_starts = build_line_start_cache(input);
     //println!("line starts {:?}", line_starts);
     Ok(to_ast(ast, file_name, &line_starts))
@@ -312,9 +316,14 @@ fn to_function_type(file_name: &String, function_name: &String, pair: Pair<Rule>
 fn to_function_body(file_name: &String, function_name: &String, pair: Pair<Rule>, line_starts: &Vec<usize>) -> FunctionBody {
     let (line, col) = line_col_number(line_starts, pair.as_span().start());
     let mut rules = pair.into_inner();
-    let parameters = to_parameter_names(rules.next().unwrap());
+    let mut match_expressions = Vec::new();
+
+    for me in rules.next().unwrap().into_inner() {
+        match_expressions.push(to_match_expression(me.into_inner().next().unwrap(), file_name, function_name, line_starts));
+    }
+
     let function_rules = rules.map(|b| to_function_rule(b, file_name, function_name, line_starts)).collect();
-    FunctionBody { location: Location { file: file_name.clone(), function: function_name.clone(), line, col }, parameters, rules: function_rules }
+    FunctionBody { location: Location { file: file_name.clone(), function: function_name.clone(), line, col }, match_expressions: match_expressions, rules: function_rules }
 }
 
 fn to_function_rule(pair: Pair<Rule>, file_name: &String, function_name: &String, line_starts: &Vec<usize>) -> FunctionRule {
@@ -355,13 +364,13 @@ fn to_match_expression(match_expression: Pair<Rule>, file_name: &String, functio
             let tail = to_match_expression(inner.next().unwrap(), file_name, function_name, line_starts);
             MatchExpression::LonghandList(Box::new(head),Box::new(tail))
         },
+        Rule::number => MatchExpression::Number(match_expression.as_str().parse::<isize>().unwrap()),
+        Rule::char_literal => MatchExpression::CharLiteral(match_expression.as_str().to_string().chars().nth(1).unwrap()),
+        Rule::string_literal => MatchExpression::StringLiteral(match_expression.into_inner().next().unwrap().as_str().to_string()),
+        Rule::bool_literal => MatchExpression::BoolLiteral(match_expression.as_str().parse::<bool>().unwrap()),
 
         r => unreachable!("Reached to_match_expression with: {:?}", r)
     }
-}
-
-fn to_parameter_names(pair: Pair<Rule>) -> Vec<String> {
-    pair.into_inner().map(|param| param.as_str().to_string()).collect()
 }
 
 fn to_type(pair: Pair<Rule>) -> Type {
