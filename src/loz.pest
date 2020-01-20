@@ -6,7 +6,7 @@ number = @{
 }
 
 identifier = @{
-    (LETTER | "_" ) ~ (LETTER | DECIMAL_NUMBER )*
+    (LETTER | DECIMAL_NUMBER )+
 }
 
 char_literal = @{
@@ -125,6 +125,8 @@ match_expression = {
     match_term
 }
 
+match_wildcard = { "_" }
+
 match_term = _{
     list_match
     | tuple_match
@@ -133,6 +135,7 @@ match_term = _{
     | char_literal
     | string_literal
     | bool_literal
+    | match_wildcard
 }
 
 tuple_match = {

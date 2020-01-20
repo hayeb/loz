@@ -257,7 +257,8 @@ fn collect_match_variables(match_expression: &MatchExpression, evaluated_express
             head_variables.extend(tail_variables);
 
             Ok(head_variables)
-        }
+        },
+        (MatchExpression::Wildcard, _type) => Ok(HashMap::new()),
         (mexpr, mvalue) => unreachable!("Could not collect match variables for expression {:?} with value {:?}", mexpr, mvalue)
     }
 }

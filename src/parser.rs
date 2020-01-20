@@ -110,7 +110,8 @@ pub enum MatchExpression {
     Identifier(String),
     Tuple(Vec<MatchExpression>),
     ShorthandList(Vec<MatchExpression>),
-    LonghandList(Box<MatchExpression>, Box<MatchExpression>)
+    LonghandList(Box<MatchExpression>, Box<MatchExpression>),
+    Wildcard
 }
 
 #[derive(Debug, Clone)]
@@ -354,6 +355,7 @@ fn to_function_rule(pair: Pair<Rule>, file_name: &String, function_name: &String
 fn to_match_expression(match_expression: Pair<Rule>, file_name: &String, function_name: &String, line_starts: &Vec<usize>) -> MatchExpression {
     match match_expression.as_rule() {
         Rule::identifier => MatchExpression::Identifier(match_expression.as_str().to_string()),
+        Rule::match_wildcard => MatchExpression::Wildcard,
         Rule::tuple_match => MatchExpression::Tuple(match_expression.into_inner().map(|e| to_match_expression(e, file_name, function_name, line_starts)).collect()),
         Rule::list_match_empty => MatchExpression::ShorthandList(vec![]),
         Rule::list_match_singleton => MatchExpression::ShorthandList(vec![to_match_expression(match_expression.into_inner().next().unwrap(), file_name, function_name, line_starts)]),

@@ -187,6 +187,7 @@ impl TyperState {
                 map.insert(identifier.clone(), expression_type.clone());
                 Ok(map)
             },
+            (MatchExpression::Wildcard, _) => Ok(HashMap::new()),
             (MatchExpression::Number(_n), Type::Int) => Ok(HashMap::new()),
             (MatchExpression::CharLiteral(_c), Type::Char) => Ok(HashMap::new()),
             (MatchExpression::StringLiteral(_s), Type::String) => Ok(HashMap::new()),
