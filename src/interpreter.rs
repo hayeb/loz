@@ -29,6 +29,7 @@ impl Frame {
 pub enum Value {
     Bool(bool),
     Int(isize),
+    Float(f64),
     Char(char),
     String(String),
     Tuple(Vec<Value>),
@@ -55,6 +56,7 @@ fn evaluate(e: &Expression, ast: &AST, state: &mut RunState) -> Result<Value, In
         Expression::StringLiteral(_, s) => Ok(Value::String(s.clone())),
         Expression::CharacterLiteral(_, c) => Ok(Value::Char(*c)),
         Expression::Number(_, n) => Ok(Value::Int(*n)),
+        Expression::Float(_, f) => Ok(Value::Float(*f)),
 
         Expression::Call(_, f, args) => eval_function_call(f, args, state, ast),
 
@@ -109,18 +111,35 @@ fn evaluate(e: &Expression, ast: &AST, state: &mut RunState) -> Result<Value, In
         Expression::Variable(_, v) => Ok(state.frames.last().unwrap().variables.get(v).unwrap().clone()),
         Expression::Negation(_, e) => Ok(Value::Bool(!eval_bool(e, ast, state)?)),
         Expression::Minus(_, e) => Ok(Value::Int(-eval_int(e, ast, state)?)),
-        Expression::Times(_, e1, e2) => Ok(Value::Int(eval_int(e1, ast, state)? * eval_int(e2, ast, state)?)),
+        Expression::Times(_, e1, e2) => {
+            match (evaluate(e1, ast, state)?, evaluate(e2, ast, state)?) {
+                (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x * y)),
+                (Value::Int(x), Value::Float(y)) => Ok(Value::Float(x as f64 * y)),
+                (Value::Float(x), Value::Int(y)) => Ok(Value::Float(x * y as f64)),
+                (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x * y)),
+                _ => unreachable!()
+            }
+        }
         Expression::Divide(_, e1, e2) => {
-            let divider = eval_int(e2, ast, state)?;
-            if divider == 0 {
+            let divider = evaluate(e2, ast, state)?;
+            if let Value::Int(0) = divider {
                 return Err(DivisionByZero);
             }
-            Ok(Value::Int(eval_int(e1, ast, state)? / divider))
+            match (evaluate(e1, ast, state)?, divider) {
+                (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x / y)),
+                (Value::Int(x), Value::Float(y)) => Ok(Value::Float(x as f64 / y)),
+                (Value::Float(x), Value::Int(y)) => Ok(Value::Float(x / y as f64)),
+                (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x / y)),
+                _ => unreachable!()
+            }
         }
         Expression::Modulo(_, e1, e2) => Ok(Value::Int(eval_int(e1, ast, state)? % eval_int(e2, ast, state)?)),
         Expression::Add(_, e1, e2) => {
             match (evaluate(e1, ast, state)?, evaluate(e2, ast, state)?) {
-                (Value::Int(l), Value::Int(r)) => Ok(Value::Int(l + r)),
+                (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x + y)),
+                (Value::Int(x), Value::Float(y)) => Ok(Value::Float(x as f64 + y)),
+                (Value::Float(x), Value::Int(y)) => Ok(Value::Float(x + y as f64)),
+                (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x + y)),
                 (Value::String(mut l), Value::String(r)) => {
                     l.push_str(r.as_str());
                     Ok(Value::String(l))
@@ -128,7 +147,15 @@ fn evaluate(e: &Expression, ast: &AST, state: &mut RunState) -> Result<Value, In
                 (l, r) => unreachable!("Addition between results {:?} and {:?}", l, r)
             }
         }
-        Expression::Subtract(_, e1, e2) => Ok(Value::Int(eval_int(e1, ast, state)? - eval_int(e2, ast, state)?)),
+        Expression::Subtract(_, e1, e2) => {
+            match (evaluate(e1, ast, state)?, evaluate(e2, ast, state)?) {
+                (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x - y)),
+                (Value::Int(x), Value::Float(y)) => Ok(Value::Float(x as f64 - y)),
+                (Value::Float(x), Value::Int(y)) => Ok(Value::Float(x - y as f64)),
+                (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x - y)),
+                _ => unreachable!()
+            }
+        }
         Expression::ShiftLeft(_, e1, e2) => Ok(Value::Int(eval_int(e1, ast, state)? << eval_int(e2, ast, state)?)),
         Expression::ShiftRight(_, e1, e2) => Ok(Value::Int(eval_int(e1, ast, state)? >> eval_int(e2, ast, state)?)),
         Expression::Greater(_, e1, e2) => Ok(Value::Bool(eval_int(e1, ast, state)? > eval_int(e2, ast, state)?)),
@@ -156,7 +183,7 @@ fn eval_function_call(f: &String, args: &Vec<Expression>, state: &mut RunState, 
                 Err(InterpreterError::ExpressionDoesNotMatch(_, _)) => {
                     matches = false;
                     break;
-                },
+                }
                 Err(e) => return Err(e),
             }
         }
@@ -257,7 +284,7 @@ fn collect_match_variables(match_expression: &MatchExpression, evaluated_express
             head_variables.extend(tail_variables);
 
             Ok(head_variables)
-        },
+        }
         (MatchExpression::Wildcard, _type) => Ok(HashMap::new()),
         (mexpr, mvalue) => unreachable!("Could not collect match variables for expression {:?} with value {:?}", mexpr, mvalue)
     }
@@ -273,6 +300,6 @@ fn eval_bool(e: &Expression, ast: &AST, state: &mut RunState) -> Result<bool, In
 fn eval_int(e: &Expression, ast: &AST, state: &mut RunState) -> Result<isize, InterpreterError> {
     match evaluate(e, ast, state) {
         Ok(Value::Int(n)) => Ok(n),
-        _ => unreachable!("evaluate wrong type (expected int)")
+        e => unreachable!("evaluate wrong type (expected int): {:?}", e)
     }
 }

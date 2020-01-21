@@ -5,6 +5,8 @@ number = @{
       ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*)
 }
 
+float = @{ ASCII_DIGIT ~ "." ~ ASCII_DIGIT+ }
+
 identifier = @{
     (LETTER | DECIMAL_NUMBER )+
 }
@@ -43,6 +45,7 @@ loz_type = _{
 bool_type = { "Bool"}
 string_type = {"String"}
 int_type = {"Int"}
+float_type = { "Float" }
 char_type = {"Char"}
 list_type = { "[" ~ loz_type ~ "]"}
 
@@ -83,6 +86,7 @@ simple_term = _{
     bool_literal
     | string_literal
     | char_literal
+    | float
     | number
     | subexpr
     | negation

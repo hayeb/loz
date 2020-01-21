@@ -55,7 +55,13 @@ impl Display for TypeError {
         match &self.err {
             ParameterCountMismatch(expected, got) => write!(f, "Expected {} parameters from type, found {} parameters in body", expected, got),
             ArgumentCountMismatch(function, expected, got) => write!(f, "Expected {} arguments to call {}, got {}", expected, function, got),
-            TypeMismatch(expected, got) => write!(f, "Expected type {:?}, got {:?}", expected, got),
+            TypeMismatch(expected, got) => {
+                if expected.len() == 1 {
+                    write!(f, "Expected type {:?}, got {:?}", expected[0], got)
+                } else {
+                    write!(f, "Expected on of type {:?}, got {:?}", expected, got)
+                }
+            }
             UndefinedVariable(name) => write!(f, "Undefined variable {}", name),
             UndefinedFunction(name) => write!(f, "Undefined function {}", name),
             OperatorArgumentsNotEqual(o, l, r) => write!(f, "Arguments to {} operator do not have equal type: {:?} and {:?}", o, l, r),
@@ -186,7 +192,7 @@ impl TyperState {
                 let mut map = HashMap::new();
                 map.insert(identifier.clone(), expression_type.clone());
                 Ok(map)
-            },
+            }
             (MatchExpression::Wildcard, _) => Ok(HashMap::new()),
             (MatchExpression::Number(_n), Type::Int) => Ok(HashMap::new()),
             (MatchExpression::CharLiteral(_c), Type::Char) => Ok(HashMap::new()),
@@ -233,13 +239,21 @@ impl TyperState {
 
     fn check_expression(&self, expression: &Expression, required_type: &Vec<Type>, parameter_to_type: &HashMap<String, Type>) -> Result<Type, Vec<TypeError>> {
         // println!("checking expression {:?}", expression);
-
-        let type_equal = |operator, loc| |l, r| {
-            return if l == r { Ok(l) } else { Err(TypeError::from_loc(loc, OperatorArgumentsNotEqual(operator, l, r))) };
-        };
-
         let type_eq_fixed = |operator, loc, result_type| |l, r| {
             return if l == r { Ok(result_type) } else { Err(TypeError::from_loc(loc, OperatorArgumentsNotEqual(operator, l, r))) };
+        };
+        let type_float_if_float_operands = |l, r| {
+            return if l == Type::Float || r == Type::Float { Ok(Type::Float) } else { Ok(l) };
+        };
+        let type_add = |operator, loc| |l, r| {
+            match (l, r) {
+                (Type::List(t1), Type::List(t2)) if t1 == t2 => Ok(Type::List(t1)),
+                (Type::Int, Type::Int) => Ok(Type::Int),
+                (Type::Int, Type::Float) => Ok(Type::Float),
+                (Type::Float, Type::Int) => Ok(Type::Float),
+                (Type::Float, Type::Float) => Ok(Type::Float),
+                (l, r) => Err(TypeError::from_loc(loc, OperatorArgumentsNotEqual(operator, l ,r))),
+            }
         };
         let type_fixed = |t| (|_l, _r| Ok(t));
 
@@ -248,6 +262,7 @@ impl TyperState {
             Expression::StringLiteral(loc_info, _) => (Ok(Type::String), loc_info),
             Expression::CharacterLiteral(loc_info, _) => (Ok(Type::Char), loc_info),
             Expression::Number(loc_info, _) => (Ok(Type::Int), loc_info),
+            Expression::Float(loc_info, _) => (Ok(Type::Float), loc_info),
             Expression::Call(loc_info, f, args) => (self.check_function_call(&f, &args, required_type, parameter_to_type, loc_info), loc_info),
             Expression::Variable(loc_info, v) => {
                 (match parameter_to_type.get(v) {
@@ -297,17 +312,17 @@ impl TyperState {
             Expression::Minus(loc_info, n) => (self.check_expression(n, &vec![Type::Int], parameter_to_type), loc_info),
 
             Expression::Times(loc_info, e1, e2) =>
-                (combine(type_fixed(Type::Int), self.check_expression(e1, &vec![Type::Int], parameter_to_type), self.check_expression(e2, &vec![Type::Int], parameter_to_type)), loc_info),
+                (combine(type_float_if_float_operands, self.check_expression(e1, &vec![Type::Int, Type::Float], parameter_to_type), self.check_expression(e2, &vec![Type::Int, Type::Float], parameter_to_type)), loc_info),
             Expression::Divide(loc_info, e1, e2) =>
-                (combine(type_fixed(Type::Int), self.check_expression(e1, &vec![Type::Int], parameter_to_type), self.check_expression(e2, &vec![Type::Int], parameter_to_type)), loc_info),
+                (combine(type_float_if_float_operands, self.check_expression(e1, &vec![Type::Int, Type::Float], parameter_to_type), self.check_expression(e2, &vec![Type::Int, Type::Float], parameter_to_type)), loc_info),
             Expression::Modulo(loc_info, e1, e2) =>
                 (combine(type_fixed(Type::Int), self.check_expression(e1, &vec![Type::Int], parameter_to_type), self.check_expression(e2, &vec![Type::Int], parameter_to_type)), loc_info),
 
             Expression::Add(loc_info, e1, e2) =>
-                (combine(type_equal("+".to_string(), loc_info.clone()), self.check_expression(e1, &vec![Type::Int, Type::String], parameter_to_type), self.check_expression(e2, &vec![Type::Int, Type::String], parameter_to_type)), loc_info),
+                (combine(type_add("+".to_string(), loc_info.clone()), self.check_expression(e1, &vec![Type::Int, Type::Float, Type::String], parameter_to_type), self.check_expression(e2, &vec![Type::Int, Type::Float, Type::String], parameter_to_type)), loc_info),
 
             Expression::Subtract(loc_info, e1, e2) =>
-                (combine(type_fixed(Type::Int), self.check_expression(e1, &vec![Type::Int], parameter_to_type), self.check_expression(e2, &vec![Type::Int], parameter_to_type)), loc_info),
+                (combine(type_float_if_float_operands, self.check_expression(e1, &vec![Type::Int, Type::Float], parameter_to_type), self.check_expression(e2, &vec![Type::Int, Type::Float], parameter_to_type)), loc_info),
             Expression::ShiftLeft(loc_info, e1, e2) =>
                 (combine(type_fixed(Type::Int), self.check_expression(e1, &vec![Type::Int], parameter_to_type), self.check_expression(e2, &vec![Type::Int], parameter_to_type)), loc_info),
             Expression::ShiftRight(loc_info, e1, e2) =>

@@ -39,6 +39,7 @@ pub enum Type {
     Char,
     String,
     Int,
+    Float,
     Tuple(Vec<Type>),
     List(Box<Option<Type>>)
 }
@@ -64,6 +65,7 @@ pub enum Expression {
     StringLiteral(Location, String),
     CharacterLiteral(Location, char),
     Number(Location, isize),
+    Float(Location, f64),
 
     TupleLiteral(Location, Vec<Expression>),
 
@@ -263,6 +265,7 @@ fn to_term(pair: Pair<Rule>, file_name: &String, function_name: &String, line_st
         Rule::string_literal => StringLiteral(loc_info, sub.into_inner().next().unwrap().as_str().to_string()),
         Rule::char_literal => CharacterLiteral(loc_info, sub.as_str().to_string().chars().nth(1).unwrap()),
         Rule::number => Number(loc_info, sub.as_str().parse::<isize>().unwrap()),
+        Rule::float => Float(loc_info, sub.as_str().parse::<f64>().unwrap()),
         Rule::call => {
             let mut subs = sub.into_inner();
             let function = subs.next().unwrap().as_str();
