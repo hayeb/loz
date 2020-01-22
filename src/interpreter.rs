@@ -34,6 +34,7 @@ pub enum Value {
     String(String),
     Tuple(Vec<Value>),
     List(Vec<Value>),
+    CustomValue(String, Vec<Value>),
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +60,14 @@ fn evaluate(e: &Expression, ast: &AST, state: &mut RunState) -> Result<Value, In
         Expression::Float(_, f) => Ok(Value::Float(*f)),
 
         Expression::Call(_, f, args) => eval_function_call(f, args, state, ast),
+
+        Expression::ADTTypeConstructor(_, name, arguments) => {
+            let mut evaluated_arguments = Vec::new();
+            for e in arguments {
+                evaluated_arguments.push(evaluate(e, ast, state)?);
+            }
+            Ok(Value::CustomValue(name.clone(), evaluated_arguments))
+        }
 
         Expression::TupleLiteral(_, elements) => {
             let mut evaluated_elements = Vec::new();
@@ -284,6 +293,17 @@ fn collect_match_variables(match_expression: &MatchExpression, evaluated_express
             head_variables.extend(tail_variables);
 
             Ok(head_variables)
+        }
+        (MatchExpression::ADT(match_name, match_arguments), Value::CustomValue(name, arguments)) => {
+            if match_name != name {
+                return Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::ADT(match_name.clone(), match_arguments.clone()), Value::CustomValue(name.clone(), arguments.clone())));
+            }
+
+            let mut variables = HashMap::new();
+            for (e, v) in match_arguments.iter().zip(arguments.iter()) {
+                variables.extend(collect_match_variables(e, v)?);
+            }
+            Ok(variables)
         }
         (MatchExpression::Wildcard, _type) => Ok(HashMap::new()),
         (mexpr, mvalue) => unreachable!("Could not collect match variables for expression {:?} with value {:?}", mexpr, mvalue)

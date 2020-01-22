@@ -17,10 +17,6 @@ Does NOT support laziness and does NOT use graph/term rewriting as basis for eva
         | Nothing
     ```
 * Implement tail call elimination (in interpreter?)
-* Implement floating point numbers:
-    * Add Float type
-    * Modify parser
-    * Determine semantics (probably just use Rust semantics)
 * Implement interactive interpreter
     * Implement evaluating expression
     * Implement help

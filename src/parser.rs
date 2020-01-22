@@ -23,7 +23,7 @@ pub struct Location {
 pub enum FunctionRule {
     ConditionalRule(Location, Expression, Expression),
     ExpressionRule(Location, Expression),
-    LetRule(Location, MatchExpression, Expression)
+    LetRule(Location, MatchExpression, Expression),
 }
 
 #[derive(Debug, Clone)]
@@ -40,8 +40,21 @@ pub enum Type {
     String,
     Int,
     Float,
+    CustomType(String),
     Tuple(Vec<Type>),
-    List(Box<Option<Type>>)
+    List(Box<Option<Type>>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ADT {
+    pub name: String,
+    pub(crate) constructors: HashMap<String, ADTAlternative>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ADTAlternative {
+    pub name: String,
+    pub elements: Vec<Type>,
 }
 
 #[derive(Debug, Clone)]
@@ -74,6 +87,8 @@ pub enum Expression {
     LonghandListLiteral(Location, Box<Expression>, Box<Expression>),
 
     InlineMatch(Location, String, Box<MatchExpression>),
+
+    ADTTypeConstructor(Location, String, Vec<Expression>),
 
     Call(Location, String, Vec<Expression>),
     Variable(Location, String),
@@ -113,12 +128,14 @@ pub enum MatchExpression {
     Tuple(Vec<MatchExpression>),
     ShorthandList(Vec<MatchExpression>),
     LonghandList(Box<MatchExpression>, Box<MatchExpression>),
-    Wildcard
+    Wildcard,
+    ADT(String, Vec<MatchExpression>),
 }
 
 #[derive(Debug, Clone)]
 pub struct AST {
     pub function_declarations: HashMap<String, FunctionDeclaration>,
+    pub type_declarations: Vec<ADT>,
     pub main: Expression,
 }
 
@@ -144,7 +161,7 @@ lazy_static! {
 
 pub fn parse(file_name: &String, input: &str) -> Result<AST, Error<Rule>> {
     let ast = LOZParser::parse(Rule::ast, input)?.next().unwrap();
-    println!("Raw AST: {:#?}", ast);
+    //println!("Raw AST: {:#?}", ast);
     let line_starts = build_line_start_cache(input);
     //println!("line starts {:?}", line_starts);
     Ok(to_ast(ast, file_name, &line_starts))
@@ -186,22 +203,48 @@ fn to_ast(pair: Pair<Rule>, file_name: &String, line_starts: &Vec<usize>) -> AST
         Rule::ast => {
             let mut rules = pair.into_inner().peekable();
             let mut decls = HashMap::new();
+            let mut type_declarations = Vec::new();
 
             while let Some(pair) = rules.next() {
                 match pair.as_rule() {
+                    Rule::type_definition => {
+                        let def = to_type_definition(pair, file_name, line_starts);
+                        type_declarations.push(def);
+                    }
                     Rule::function_definition => {
                         let fd = to_function_declaration(file_name, pair, line_starts);
                         decls.insert(fd.clone().name, fd.clone());
-                    },
-                    Rule::main => return AST { function_declarations: decls, main: to_expression(pair.into_inner().next().unwrap(), file_name, &"StartRule".to_string(), line_starts) },
+                    }
+                    Rule::main => return AST { function_declarations: decls, type_declarations, main: to_expression(pair.into_inner().next().unwrap(), file_name, &"StartRule".to_string(), line_starts) },
                     Rule::EOI => continue,
-                    _ => unreachable!(),
+                    r => unreachable!("Unhandled top-level rule: {:?}", r),
                 }
             }
             unreachable!()
         }
         _ => unreachable!()
     }
+}
+
+fn to_type_definition(pair: Pair<Rule>, file_name: &String, line_starts: &Vec<usize>) -> ADT {
+    let type_definition = pair.into_inner().next().unwrap();
+    match type_definition.as_rule() {
+        Rule::adt_definition => {
+            let mut elements = type_definition.into_inner();
+            let type_name = elements.next().unwrap().as_str().to_string();
+            let constructors = elements.map(|alternative_rule| {
+                let mut alternative_elements = alternative_rule.into_inner();
+                let alternative_name = alternative_elements.next().unwrap().as_str().to_string();
+                let alternative_elements = alternative_elements.map(to_type).collect();
+                (alternative_name.clone(), ADTAlternative { name: alternative_name.clone(), elements: alternative_elements })
+            }).collect();
+            return ADT { name: type_name.clone(), constructors };
+        },
+        r => unreachable!("Unhandled type rule: {:?}", r)
+    }
+
+
+
 }
 
 fn to_function_declaration(file_name: &String, pair: Pair<Rule>, line_starts: &Vec<usize>) -> FunctionDeclaration {
@@ -286,13 +329,20 @@ fn to_term(pair: Pair<Rule>, file_name: &String, function_name: &String, line_st
             let head = children.next().unwrap();
             let tail = children.next().unwrap();
             LonghandListLiteral(loc_info, Box::new(to_expression(head, file_name, function_name, line_starts)), Box::new(to_expression(tail, file_name, function_name, line_starts)))
-        },
+        }
         Rule::inline_match => {
             //println!("Inline match: {:?}", sub);
             let mut children = sub.into_inner();
             let identifier = children.next().unwrap().as_str().to_string();
-            let match_expression = to_match_expression(children.next().unwrap().into_inner().next().unwrap(),file_name, function_name, line_starts);
+            let match_expression = to_match_expression(children.next().unwrap().into_inner().next().unwrap(), file_name, function_name, line_starts);
             InlineMatch(loc_info, identifier, Box::new(match_expression))
+        }
+
+        Rule::adt_term => {
+            let mut elements = sub.into_inner();
+            let alternative = elements.next().unwrap().as_str().to_string();
+            let arguments = elements.map(|e| to_expression(e, file_name, function_name, line_starts)).collect();
+            ADTTypeConstructor(loc_info, alternative, arguments)
         }
 
         r => panic!("Reached term {:#?}", r),
@@ -319,8 +369,10 @@ fn to_function_type(file_name: &String, function_name: &String, pair: Pair<Rule>
 
 fn to_function_body(file_name: &String, function_name: &String, pair: Pair<Rule>, line_starts: &Vec<usize>) -> FunctionBody {
     let (line, col) = line_col_number(line_starts, pair.as_span().start());
+    println!("to_function_body: {:#?}", pair);
     let mut rules = pair.into_inner();
     let mut match_expressions = Vec::new();
+
 
     for me in rules.next().unwrap().into_inner() {
         match_expressions.push(to_match_expression(me.into_inner().next().unwrap(), file_name, function_name, line_starts));
@@ -357,9 +409,13 @@ fn to_function_rule(pair: Pair<Rule>, file_name: &String, function_name: &String
 
 fn to_match_expression(match_expression: Pair<Rule>, file_name: &String, function_name: &String, line_starts: &Vec<usize>) -> MatchExpression {
     match match_expression.as_rule() {
-        Rule::identifier => MatchExpression::Identifier(match_expression.as_str().to_string()),
+        Rule::identifier => {
+            println!("Match identifier: {}", match_expression.as_str().to_string());
+            MatchExpression::Identifier(match_expression.as_str().to_string())
+        },
         Rule::match_wildcard => MatchExpression::Wildcard,
         Rule::tuple_match => MatchExpression::Tuple(match_expression.into_inner().map(|e| to_match_expression(e, file_name, function_name, line_starts)).collect()),
+        Rule::sub_match => to_match_expression(match_expression.into_inner().next().unwrap(), file_name, function_name, line_starts),
         Rule::list_match_empty => MatchExpression::ShorthandList(vec![]),
         Rule::list_match_singleton => MatchExpression::ShorthandList(vec![to_match_expression(match_expression.into_inner().next().unwrap(), file_name, function_name, line_starts)]),
         Rule::list_match_shorthand => MatchExpression::ShorthandList(match_expression.into_inner().map(|e| to_match_expression(e, file_name, function_name, line_starts)).collect()),
@@ -367,12 +423,19 @@ fn to_match_expression(match_expression: Pair<Rule>, file_name: &String, functio
             let mut inner = match_expression.into_inner();
             let head = to_match_expression(inner.next().unwrap(), file_name, function_name, line_starts);
             let tail = to_match_expression(inner.next().unwrap(), file_name, function_name, line_starts);
-            MatchExpression::LonghandList(Box::new(head),Box::new(tail))
-        },
+            MatchExpression::LonghandList(Box::new(head), Box::new(tail))
+        }
         Rule::number => MatchExpression::Number(match_expression.as_str().parse::<isize>().unwrap()),
         Rule::char_literal => MatchExpression::CharLiteral(match_expression.as_str().to_string().chars().nth(1).unwrap()),
         Rule::string_literal => MatchExpression::StringLiteral(match_expression.into_inner().next().unwrap().as_str().to_string()),
         Rule::bool_literal => MatchExpression::BoolLiteral(match_expression.as_str().parse::<bool>().unwrap()),
+
+        Rule::custom_type_match => {
+            let mut elements = match_expression.into_inner();
+            let alternative_name = elements.next().unwrap().as_str().to_string();
+
+            MatchExpression::ADT(alternative_name, elements.map(|m| to_match_expression(m, file_name, function_name, line_starts)).collect())
+        }
 
         r => unreachable!("Reached to_match_expression with: {:?}", r)
     }
@@ -386,10 +449,13 @@ fn to_type(pair: Pair<Rule>) -> Type {
         Rule::char_type => Type::Char,
         Rule::tuple_type => {
             Type::Tuple(pair.into_inner().map(|r| to_type(r)).collect())
-        },
+        }
         Rule::list_type => {
             Type::List(Box::new(Option::Some(to_type(pair.into_inner().nth(0).unwrap()))))
         }
-        _ => unreachable!()
+        Rule::custom_type => {
+            Type::CustomType(pair.as_str().to_string())
+        }
+        t => unreachable!("Unhandled type: {:?}", t)
     }
 }

@@ -1,0 +1,14 @@
+:: Value =
+    A Int ValueType ValueNumber
+    | B Int ValueType ValueNumber
+    | C Int ValueType ValueNumber
+:: ValueType = TypeA | TypeB
+:: ValueNumber = N Int Int Int
+
+test :: Value -> Int
+test v
+| v := (A i t n) = i
+| v := (B i t n) = i
+| v := (C i t n) = i
+
+Main = test (B 18 (TypeA) (N 1 2 3))
