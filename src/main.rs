@@ -32,7 +32,7 @@ fn main() {
     }
 
     let ast = ast.unwrap();
-    let typer_result = typer::_type(Box::new(ast.clone()));
+    let typer_result = typer::_type(&ast);
     if let Err(err) = typer_result {
         err.into_iter().for_each(|e| eprintln!("{}", e));
         process::exit(1);

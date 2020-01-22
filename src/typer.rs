@@ -85,17 +85,17 @@ fn write_error_context(f: &mut Formatter<'_>, context: &ErrorContext) -> Result<
 pub struct TypeResult {
 }
 
-struct TyperState {
-    ast: Box<AST>,
+struct TyperState<'a> {
+    ast: &'a AST,
     function_name_to_type: HashMap<String, FunctionType>,
     type_constructor_to_type: HashMap<String, ADT>,
 }
 
-pub fn _type(ast: Box<AST>) -> Result<TypeResult, Vec<TypeError>> {
+pub fn _type(ast: &AST) -> Result<TypeResult, Vec<TypeError>> {
     TyperState::new(ast).check_types()
 }
 
-pub fn build_function_type_cache(ast: Box<AST>) -> HashMap<String, FunctionType> {
+pub fn build_function_type_cache(ast: &AST) -> HashMap<String, FunctionType> {
     ast.function_declarations.iter()
         .map(|(n, d)| (n.clone(), d.function_type.clone()))
         .collect()
@@ -110,10 +110,10 @@ fn combine(type_transformer: impl FnOnce(Type, Type) -> Result<Type, TypeError>,
     }
 }
 
-impl TyperState {
-    fn new(ast: Box<AST>) -> TyperState {
-        return TyperState { ast: ast.clone(),
-            function_name_to_type: build_function_type_cache(ast.clone()),
+impl TyperState<'_> {
+    fn new(ast: &AST) -> TyperState {
+        return TyperState { ast: ast,
+            function_name_to_type: build_function_type_cache(ast),
             type_constructor_to_type:  (&ast).type_declarations.iter()
                 .flat_map(|td| td.constructors.iter().zip(iter::repeat(td)))
                 .map(|((alternative, _), alternative_type)| {
