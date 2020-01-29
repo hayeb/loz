@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Error, Formatter};
-
-use crate::parser::{AST, Expression, FunctionBody, FunctionDeclaration, FunctionRule, FunctionType, Location, MatchExpression, Type, ADT};
-use crate::parser::FunctionRule::{ConditionalRule, ExpressionRule, LetRule};
-use crate::typer::TypeErrorType::{FunctionCallArgumentCountMismatch, DuplicateVariableNameSingleMatchExpression, MatchWrongType, OperatorArgumentsNotEqual, ParameterCountMismatch, TypeMismatch, UndefinedFunction, UndefinedVariable, UndefinedTypeConstructor, TypeConstructorArgumentCountMismatch};
 use std::iter;
+
+use crate::parser::{ADT, AST, Expression, FunctionBody, FunctionDeclaration, FunctionRule, FunctionType, Location, MatchExpression, Type};
+use crate::parser::FunctionRule::{ConditionalRule, ExpressionRule, LetRule};
 use crate::parser::Type::CustomType;
+use crate::typer::TypeErrorType::{DuplicateVariableNameSingleMatchExpression, FunctionCallArgumentCountMismatch, MatchWrongType, OperatorArgumentsNotEqual, ParameterCountMismatch, TypeConstructorArgumentCountMismatch, TypeMismatch, UndefinedFunction, UndefinedTypeConstructor, UndefinedVariable};
 
 #[derive(Debug)]
 pub struct TypeError {
@@ -59,7 +59,7 @@ impl Display for TypeError {
         match &self.err {
             ParameterCountMismatch(expected, got) => write!(f, "Expected {} parameters from type, found {} parameters in body", expected, got),
             FunctionCallArgumentCountMismatch(function, expected, got) => write!(f, "Expected {} arguments to call {}, got {}", expected, function, got),
-            TypeConstructorArgumentCountMismatch(constructor, expected, got) => write!(f, "Expected {} arguments to constructor {}, got {}", expected, constructor, got) ,
+            TypeConstructorArgumentCountMismatch(constructor, expected, got) => write!(f, "Expected {} arguments to constructor {}, got {}", expected, constructor, got),
             TypeMismatch(expected, got) => {
                 if expected.len() == 1 {
                     write!(f, "Expected type {:?}, got {:?}", expected[0], got)
@@ -82,8 +82,7 @@ fn write_error_context(f: &mut Formatter<'_>, context: &ErrorContext) -> Result<
 }
 
 #[derive(Debug)]
-pub struct TypeResult {
-}
+pub struct TypeResult {}
 
 struct TyperState<'a> {
     ast: &'a AST,
@@ -112,14 +111,16 @@ fn combine(type_transformer: impl FnOnce(Type, Type) -> Result<Type, TypeError>,
 
 impl TyperState<'_> {
     fn new(ast: &AST) -> TyperState {
-        return TyperState { ast: ast,
+        return TyperState {
+            ast: ast,
             function_name_to_type: build_function_type_cache(ast),
-            type_constructor_to_type:  (&ast).type_declarations.iter()
+            type_constructor_to_type: (&ast).type_declarations.iter()
                 .flat_map(|td| td.constructors.iter().zip(iter::repeat(td)))
                 .map(|((alternative, _), alternative_type)| {
                     (alternative.clone(), alternative_type.clone())
                 })
-                .collect()};
+                .collect(),
+        };
     }
 
     fn check_types(&self) -> Result<TypeResult, Vec<TypeError>> {
@@ -251,17 +252,17 @@ impl TyperState<'_> {
             (MatchExpression::ADT(constructor_name, constructor_arguments), Type::CustomType(type_name)) => {
                 let maybe_adt = self.type_constructor_to_type.get(constructor_name);
                 if let None = maybe_adt {
-                    return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::UndefinedTypeConstructor(constructor_name.clone()))])
+                    return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::UndefinedTypeConstructor(constructor_name.clone()))]);
                 }
 
                 let adt = maybe_adt.unwrap();
                 if adt.name != *type_name {
-                    return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::TypeMismatch(vec![Type::CustomType(type_name.clone())], Type::CustomType(adt.name.clone())))])
+                    return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::TypeMismatch(vec![Type::CustomType(type_name.clone())], Type::CustomType(adt.name.clone())))]);
                 }
 
                 let adt_alternative = adt.constructors.get(constructor_name).unwrap();
                 if adt_alternative.elements.len() != constructor_arguments.len() {
-                    return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::TypeConstructorArgumentCountMismatch(constructor_name.clone(), adt_alternative.elements.len(), constructor_arguments.len()))])
+                    return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::TypeConstructorArgumentCountMismatch(constructor_name.clone(), adt_alternative.elements.len(), constructor_arguments.len()))]);
                 }
 
                 let mut variables = HashMap::new();
@@ -277,7 +278,6 @@ impl TyperState<'_> {
     }
 
     fn check_expression(&self, expression: &Expression, required_type: &Vec<Type>, parameter_to_type: &HashMap<String, Type>) -> Result<Type, Vec<TypeError>> {
-        // println!("checking expression {:?}", expression);
         let type_eq_fixed = |operator, loc, result_type| |l, r| {
             return if l == r { Ok(result_type) } else { Err(TypeError::from_loc(loc, OperatorArgumentsNotEqual(operator, l, r))) };
         };
@@ -291,7 +291,7 @@ impl TyperState<'_> {
                 (Type::Int, Type::Float) => Ok(Type::Float),
                 (Type::Float, Type::Int) => Ok(Type::Float),
                 (Type::Float, Type::Float) => Ok(Type::Float),
-                (l, r) => Err(TypeError::from_loc(loc, OperatorArgumentsNotEqual(operator, l ,r))),
+                (l, r) => Err(TypeError::from_loc(loc, OperatorArgumentsNotEqual(operator, l, r))),
             }
         };
         let type_fixed = |t| (|_l, _r| Ok(t));
@@ -313,24 +313,24 @@ impl TyperState<'_> {
             Expression::ADTTypeConstructor(loc_info, alternative_name, arguments) => {
                 let maybe_adtdefinition = self.type_constructor_to_type.get(alternative_name);
                 if let None = maybe_adtdefinition {
-                    return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::UndefinedTypeConstructor(alternative_name.clone()))])
+                    return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::UndefinedTypeConstructor(alternative_name.clone()))]);
                 }
 
                 let adt = maybe_adtdefinition.unwrap();
 
                 let adt_alternative = adt.constructors.get(alternative_name).unwrap();
                 if adt_alternative.elements.len() != arguments.len() {
-                    return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::TypeConstructorArgumentCountMismatch(alternative_name.clone(), adt_alternative.elements.len(), arguments.len()))])
+                    return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::TypeConstructorArgumentCountMismatch(alternative_name.clone(), adt_alternative.elements.len(), arguments.len()))]);
                 }
 
-                let errors : Vec<TypeError> = adt_alternative.elements.iter().zip(arguments.iter())
-                    .map(|(alternative, expression)|  self.check_expression(expression, &vec![alternative.clone()], parameter_to_type))
+                let errors: Vec<TypeError> = adt_alternative.elements.iter().zip(arguments.iter())
+                    .map(|(alternative, expression)| self.check_expression(expression, &vec![alternative.clone()], parameter_to_type))
                     .filter(|result| result.is_err())
                     .flat_map(|r| r.err().unwrap().into_iter())
                     .collect();
 
                 if errors.len() > 0 {
-                    return Err(errors)
+                    return Err(errors);
                 }
                 (Ok(CustomType(adt.name.clone())), loc_info)
             }
@@ -366,11 +366,20 @@ impl TyperState<'_> {
                 (Ok(tail_type), loc_info)
             }
 
-            Expression::InlineMatch(loc_info, identifier, match_expression) => {
-                println!("Checking InlineMatch: {} {:#?}", identifier, match_expression);
-                let identifier_type = parameter_to_type.get(identifier).unwrap();
-                let _match_type = self.check_match_expression(loc_info, match_expression, &identifier_type)?;
-                (Ok(Type::Bool), loc_info)
+            Expression::Case(loc_info, case_expression, case_rules) => {
+                let case_expression_type = self.check_expression(case_expression, &vec![], parameter_to_type)?;
+                let mut last_type: Option<Type> = None;
+                for case_rule in case_rules {
+                    let mut lhs_variables: HashMap<String, Type> = self.check_match_expression(loc_info, &case_rule.case_rule, &case_expression_type)?;
+                    lhs_variables.extend(parameter_to_type.into_iter().map(|(k,v)| (k.clone(), v.clone())));
+                    let rhs_type = self.check_expression(&case_rule.result_rule, &vec![], &lhs_variables)?;
+                    if last_type.is_some() && last_type.clone().filter(|lt| lt.clone() != rhs_type).is_some() {
+                        return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::TypeMismatch(vec![last_type.clone().unwrap()], rhs_type))]);
+                    } else {
+                        last_type = Some(rhs_type);
+                    }
+                }
+                (Ok(last_type.unwrap()), loc_info)
             }
 
             Expression::Negation(loc_info, e) => (self.check_expression(e, &vec![Type::Bool], parameter_to_type), loc_info),
@@ -412,7 +421,6 @@ impl TyperState<'_> {
         };
 
         if let Err(r) = determined_type {
-            // println!("error in subexpr: {:?}", r);
             return Err(r);
         }
 
@@ -429,7 +437,6 @@ impl TyperState<'_> {
         }
 
         if !required_type.contains(&determined_type) {
-            //println!("determined type error: {:?}, required: {:?}", determined_type, required_type);
             return Err(vec![TypeError::from(ErrorContext { file: loc_info.file.clone(), function: loc_info.function.clone(), line: loc_info.line, col: loc_info.col }, TypeMismatch(required_type.clone(), determined_type))]);
         }
 
@@ -437,7 +444,6 @@ impl TyperState<'_> {
     }
 
     fn check_function_call(&self, name: &String, args: &Vec<Expression>, required_type: &Vec<Type>, parameter_to_type: &HashMap<String, Type>, loc_info: &Location) -> Result<Type, Vec<TypeError>> {
-        //println!("checking call {}", name);
         let ftype = self.function_name_to_type.get(name);
         if let None = ftype {
             return Err(vec![TypeError::from(ErrorContext { file: loc_info.file.clone(), function: loc_info.function.clone(), line: loc_info.line, col: loc_info.col }, UndefinedFunction(name.clone()))]);

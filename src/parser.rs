@@ -86,9 +86,9 @@ pub enum Expression {
     ShorthandListLiteral(Location, Vec<Expression>),
     LonghandListLiteral(Location, Box<Expression>, Box<Expression>),
 
-    InlineMatch(Location, String, Box<MatchExpression>),
-
     ADTTypeConstructor(Location, String, Vec<Expression>),
+
+    Case(Location, Box<Expression>, Vec<CaseRule>),
 
     Call(Location, String, Vec<Expression>),
     Variable(Location, String),
@@ -116,6 +116,13 @@ pub enum Expression {
 
     And(Location, Box<Expression>, Box<Expression>),
     Or(Location, Box<Expression>, Box<Expression>),
+}
+
+#[derive(Debug, Clone)]
+pub struct CaseRule {
+    pub loc_info: Location,
+    pub case_rule: MatchExpression,
+    pub result_rule: Expression
 }
 
 #[derive(Debug, Clone)]
@@ -213,7 +220,7 @@ fn to_ast(pair: Pair<Rule>, file_name: &String, line_starts: &Vec<usize>) -> AST
                     }
                     Rule::function_definition => {
                         let fd = to_function_declaration(file_name, pair, line_starts);
-                        decls.insert(fd.clone().name, fd.clone());
+                        decls.insert(fd.name.clone(), fd);
                     }
                     Rule::main => return AST { function_declarations: decls, type_declarations, main: to_expression(pair.into_inner().next().unwrap(), file_name, &"StartRule".to_string(), line_starts) },
                     Rule::EOI => continue,
@@ -226,7 +233,7 @@ fn to_ast(pair: Pair<Rule>, file_name: &String, line_starts: &Vec<usize>) -> AST
     }
 }
 
-fn to_type_definition(pair: Pair<Rule>, file_name: &String, line_starts: &Vec<usize>) -> ADT {
+fn to_type_definition(pair: Pair<Rule>, _file_name: &String, _line_starts: &Vec<usize>) -> ADT {
     let type_definition = pair.into_inner().next().unwrap();
     match type_definition.as_rule() {
         Rule::adt_definition => {
@@ -329,15 +336,20 @@ fn to_term(pair: Pair<Rule>, file_name: &String, function_name: &String, line_st
             let head = children.next().unwrap();
             let tail = children.next().unwrap();
             LonghandListLiteral(loc_info, Box::new(to_expression(head, file_name, function_name, line_starts)), Box::new(to_expression(tail, file_name, function_name, line_starts)))
-        }
-        Rule::inline_match => {
-            //println!("Inline match: {:?}", sub);
+        },
+        Rule::case_expression => {
             let mut children = sub.into_inner();
-            let identifier = children.next().unwrap().as_str().to_string();
-            let match_expression = to_match_expression(children.next().unwrap().into_inner().next().unwrap(), file_name, function_name, line_starts);
-            InlineMatch(loc_info, identifier, Box::new(match_expression))
+            let expression = to_term(children.next().unwrap(), file_name, function_name, line_starts);
+            let rules = children.map(|match_rule| {
+                let (line, col) = line_col_number(line_starts, match_rule.as_span().start());
+                let location = Location { file: file_name.clone(), function: function_name.clone(), line, col };
+                let mut scs = match_rule.into_inner();
+                let case_rule = to_match_expression(scs.next().unwrap().into_inner().next().unwrap(), file_name, function_name, line_starts);
+                let result_rule = to_expression(scs.next().unwrap(), file_name, function_name, line_starts);
+                CaseRule{loc_info: location, case_rule, result_rule}
+            }).collect();
+            Case(loc_info, Box::new(expression), rules)
         }
-
         Rule::adt_term => {
             let mut elements = sub.into_inner();
             let alternative = elements.next().unwrap().as_str().to_string();
@@ -369,10 +381,8 @@ fn to_function_type(file_name: &String, function_name: &String, pair: Pair<Rule>
 
 fn to_function_body(file_name: &String, function_name: &String, pair: Pair<Rule>, line_starts: &Vec<usize>) -> FunctionBody {
     let (line, col) = line_col_number(line_starts, pair.as_span().start());
-    println!("to_function_body: {:#?}", pair);
     let mut rules = pair.into_inner();
     let mut match_expressions = Vec::new();
-
 
     for me in rules.next().unwrap().into_inner() {
         match_expressions.push(to_match_expression(me.into_inner().next().unwrap(), file_name, function_name, line_starts));
@@ -410,7 +420,6 @@ fn to_function_rule(pair: Pair<Rule>, file_name: &String, function_name: &String
 fn to_match_expression(match_expression: Pair<Rule>, file_name: &String, function_name: &String, line_starts: &Vec<usize>) -> MatchExpression {
     match match_expression.as_rule() {
         Rule::identifier => {
-            println!("Match identifier: {}", match_expression.as_str().to_string());
             MatchExpression::Identifier(match_expression.as_str().to_string())
         },
         Rule::match_wildcard => MatchExpression::Wildcard,

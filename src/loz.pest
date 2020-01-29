@@ -8,7 +8,7 @@ number = @{
 float = @{ ASCII_DIGIT ~ "." ~ ASCII_DIGIT+ }
 
 identifier = @{
-    (LOWERCASE_LETTER | DECIMAL_NUMBER )+
+    (LOWERCASE_LETTER | "_") ~ (LETTER | DECIMAL_NUMBER )*
 }
 
 capital_identifier = @{ UPPERCASE_LETTER ~ (LETTER | DECIMAL_NUMBER)*}
@@ -103,15 +103,24 @@ minus = @{"-" ~ expression}
 
 term = {
       simple_term
+    | case_expression
     | adt_term
     | call // Function call
-    | inline_match
     | identifier // Variable reference
+}
+
+case_expression = {
+    "case" ~ function_argument ~ "of"~ NEWLINE
+        ~ case_expression_rule
+        ~ ("," ~ NEWLINE ~ case_expression_rule)*
+}
+
+case_expression_rule = {
+    match_expression ~ "=>" ~ expression
 }
 
 adt_term = { capital_identifier ~ expression*}
 
-inline_match = { identifier ~ ":=" ~ match_expression }
 tuple_literal = !{ "(" ~ NEWLINE* ~ expression ~ NEWLINE* ~ ("," ~ NEWLINE* ~ expression)+ ~ NEWLINE* ~ ")" }
 list_literal = _{ list_empty
     | list_singleton

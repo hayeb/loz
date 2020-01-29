@@ -38,7 +38,7 @@ fn main() {
         process::exit(1);
     }
 
-    let result = interpreter::interpret(&ast.clone());
+    let result = interpreter::interpret(&ast);
     if let Err(e) = result {
         eprintln!("Runtime error: {:?}",e)
     }

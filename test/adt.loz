@@ -6,9 +6,18 @@
 :: ValueNumber = N Int Int Int
 
 test :: Value -> Int
-test v
-| v := (A i t n) = i
-| v := (B i t n) = i
-| v := (C i t n) = i
+test v = (case v of
+    (A i t n) => i,
+    (B i t n) => i,
+    (C i t n) => i) + 1
 
-Main = test (B 18 (TypeA) (N 1 2 3))
+testtest :: Int Int -> Int
+testtest x y = case (x * y) of
+    0 => (case y of
+        0 => 0,
+        1 => 1,
+        2 => 1111),
+    1 => 10,
+    5 => 50
+
+Main = (test (B 18 (TypeA) (N 1 2 3)), testtest 0 1)

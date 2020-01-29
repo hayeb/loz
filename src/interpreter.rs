@@ -12,6 +12,24 @@ impl RunState {
     fn new() -> Self {
         RunState { frames: Vec::new() }
     }
+
+    fn push_frame(&mut self, frame: Frame) {
+        self.frames.push(frame)
+    }
+
+    fn pop_frame(&mut self) -> Frame {
+        return self.frames.remove(self.frames.len() - 1);
+    }
+
+    fn retrieve_variable_value(&self, name: &String) -> Value {
+        for f in self.frames.iter().rev() {
+            let val = f.variables.get(name);
+            if let Some(v) = val {
+                return v.clone();
+            }
+        }
+        panic!("No value for variable {}", name);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -22,6 +40,9 @@ struct Frame {
 impl Frame {
     fn new() -> Self {
         Frame { variables: HashMap::new() }
+    }
+    fn with_variables(variables: HashMap<String, Value>) -> Self {
+        Frame { variables }
     }
 }
 
@@ -43,6 +64,7 @@ pub enum InterpreterError {
     NoApplicableFunctionBody(String),
     DivisionByZero,
     ExpressionDoesNotMatch(MatchExpression, Value),
+    NoMatchingCaseRule(Value),
 }
 
 pub fn interpret(ast: &AST) -> Result<(), InterpreterError> {
@@ -98,26 +120,27 @@ fn evaluate(e: &Expression, ast: &AST, state: &mut RunState) -> Result<Value, In
             }
         }
 
-        Expression::InlineMatch(_, identifier, match_expression) => {
-            //println!("Evaluate InlineMatch: {} {:?}", identifier, match_expression);
-            let identifier_value = state.frames.last().unwrap().variables.get(identifier).unwrap();
-            //println!("Identifier value: {:?}", identifier_value);
-            let match_result = collect_match_variables(match_expression, identifier_value);
-            match match_result {
-                Ok(variables) => {
-                    state.frames.last_mut().unwrap().variables.extend(variables);
-                    //println!("{:?} matches", match_expression);
-                    Ok(Value::Bool(true))
+        Expression::Case(_, e, rules) => {
+            let evaluated = evaluate(e, ast, state)?;
+            for rule in rules {
+                let r = collect_match_variables(&rule.case_rule, &evaluated);
+                if let Err(InterpreterError::ExpressionDoesNotMatch(_, _)) = r {
+                    continue;
                 }
-                Err(InterpreterError::ExpressionDoesNotMatch(_, _)) => {
-                    //println!("{:?} does not match", match_expression);
-                    Ok(Value::Bool(false))
+                if let Err(e) = r {
+                    return Err(e);
                 }
-                Err(e) => Err(e)
+                if let Ok(vars) = r {
+                    state.push_frame(Frame::with_variables(vars));
+                    let r = evaluate(&rule.result_rule, ast, state);
+                    state.pop_frame();
+                    return r;
+                }
             }
+            Err(InterpreterError::NoMatchingCaseRule(evaluated))
         }
 
-        Expression::Variable(_, v) => Ok(state.frames.last().unwrap().variables.get(v).unwrap().clone()),
+        Expression::Variable(_, v) => Ok(state.retrieve_variable_value(v)),
         Expression::Negation(_, e) => Ok(Value::Bool(!eval_bool(e, ast, state)?)),
         Expression::Minus(_, e) => Ok(Value::Int(-eval_int(e, ast, state)?)),
         Expression::Times(_, e1, e2) => {
@@ -219,7 +242,10 @@ fn eval_function_body(name: &String, body: &FunctionBody, state: &mut RunState, 
                     return evaluate(&result_expression, ast, state);
                 }
             }
-            FunctionRule::ExpressionRule(_, result_expression) => return evaluate(&result_expression, ast, state),
+            FunctionRule::ExpressionRule(_, result_expression) => {
+                return evaluate(&result_expression, ast, state);
+            }
+
             FunctionRule::LetRule(_, match_expression, e) => {
                 let variables = collect_match_variables(match_expression, &evaluate(e, ast, state)?)?;
 
