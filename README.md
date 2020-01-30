@@ -7,29 +7,11 @@ Does NOT support laziness and does NOT use graph/term rewriting as basis for eva
 ## TODO
 
 ### Features
-* Implement algebraic datatypes
-    
-    ```
-    Tree = Node Tree Tree
-        | Leaf Int
-  
-    Maybe = Just a
-        | Nothing
-    ```
 * Implement tail call elimination (in interpreter?)
 * Implement interactive interpreter
     * Implement evaluating expression
     * Implement help
     * Global variables/state?
-* Implement records 
-
-    ```
-    Person = {
-        name :: String,
-        phone_numer :: String,
-        age :: Int
-    }
-    ```
 * Implement type inference (Hindley-Milner probably)
     * Can leave out type signatures for functions
     * More overloaded operators?

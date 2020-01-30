@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::fmt::{Display, Error, Formatter};
 use std::iter;
 
-use crate::parser::{ADT, AST, Expression, FunctionBody, FunctionDeclaration, FunctionRule, FunctionType, Location, MatchExpression, Type};
+use crate::parser::{ADTDefinition, AST, CustomType, Expression, FunctionBody, FunctionDeclaration, FunctionRule, FunctionType, Location, MatchExpression, RecordDefinition, Type};
 use crate::parser::FunctionRule::{ConditionalRule, ExpressionRule, LetRule};
-use crate::parser::Type::CustomType;
-use crate::typer::TypeErrorType::{DuplicateVariableNameSingleMatchExpression, FunctionCallArgumentCountMismatch, MatchWrongType, OperatorArgumentsNotEqual, ParameterCountMismatch, TypeConstructorArgumentCountMismatch, TypeMismatch, UndefinedFunction, UndefinedTypeConstructor, UndefinedVariable};
+use crate::parser::Type::UserType;
+use crate::typer::TypeErrorType::{DuplicateVariableNameSingleMatchExpression, FunctionCallArgumentCountMismatch, MatchWrongType, OperatorArgumentsNotEqual, ParameterCountMismatch, TypeConstructorArgumentCountMismatch, TypeMismatch, UndefinedFunction, UndefinedRecordField, UndefinedTypeConstructor, UndefinedVariable};
 
 #[derive(Debug)]
 pub struct TypeError {
@@ -43,6 +43,7 @@ pub enum TypeErrorType {
     OperatorArgumentsNotEqual(String, Type, Type),
     MatchWrongType(Type),
     DuplicateVariableNameSingleMatchExpression(String),
+    UndefinedRecordField(String, String),
 }
 
 #[derive(Debug)]
@@ -62,17 +63,49 @@ impl Display for TypeError {
             TypeConstructorArgumentCountMismatch(constructor, expected, got) => write!(f, "Expected {} arguments to constructor {}, got {}", expected, constructor, got),
             TypeMismatch(expected, got) => {
                 if expected.len() == 1 {
-                    write!(f, "Expected type {:?}, got {:?}", expected[0], got)
+                    write!(f, "Expected type '{}', got '{}'", expected.get(0).unwrap(), got)
                 } else {
-                    write!(f, "Expected on of type {:?}, got {:?}", expected, got)
+                    write!(f, "Expected one of type {}, got '{}'", expected.iter().map(|t| t.to_string()).collect::<Vec<String>>().join(", "), got)
                 }
             }
-            UndefinedVariable(name) => write!(f, "Undefined variable {}", name),
-            UndefinedFunction(name) => write!(f, "Undefined function {}", name),
-            UndefinedTypeConstructor(name) => write!(f, "Undefined type constructor: {}", name),
-            OperatorArgumentsNotEqual(o, l, r) => write!(f, "Arguments to {} operator do not have equal type: {:?} and {:?}", o, l, r),
-            MatchWrongType(expected_type) => write!(f, "Match expression has wrong type, expected type {:#?}", expected_type),
-            DuplicateVariableNameSingleMatchExpression(v) => write!(f, "Duplicate variable introduced in single match: {}", v)
+            UndefinedVariable(name) => write!(f, "Undefined variable '{}'", name),
+            UndefinedFunction(name) => write!(f, "Undefined function '{}'", name),
+            UndefinedTypeConstructor(name) => write!(f, "Undefined type constructor: '{}'", name),
+            OperatorArgumentsNotEqual(o, l, r) => write!(f, "Arguments to '{}' operator do not have equal type: '{}' and '{}'", o, l, r),
+            MatchWrongType(expected_type) => write!(f, "Match expression has wrong type, expected type '{}'", expected_type),
+            DuplicateVariableNameSingleMatchExpression(v) => write!(f, "Duplicate variable introduced in single match: '{}'", v),
+            UndefinedRecordField(record_name, field_name) => write!(f, "Undefined record field '{}' in record '{}'", field_name, record_name)
+        }
+    }
+}
+
+impl Display for Type {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        match self {
+            Type::Bool => write!(f, "Bool"),
+            Type::Char => write!(f, "Char"),
+            Type::String => write!(f, "String"),
+            Type::Int => write!(f, "Int"),
+            Type::Float => write!(f, "Float"),
+            UserType(t) => write!(f, "{}", t),
+            Type::Tuple(elements) => {
+                write!(f, "(")?;
+                let mut peekable = elements.into_iter().peekable();
+                while let Some(e) = peekable.next() {
+                    write!(f, "{}", e)?;
+                    if peekable.peek().is_some() {
+                        write!(f, ", ")?;
+                    }
+                }
+                write!(f, ")")
+            }
+            Type::List(e) => {
+                if e.is_none() {
+                    write!(f, "[?]")
+                } else {
+                    write!(f, "[{}]", e.clone().unwrap())
+                }
+            }
         }
     }
 }
@@ -87,7 +120,8 @@ pub struct TypeResult {}
 struct TyperState<'a> {
     ast: &'a AST,
     function_name_to_type: HashMap<String, FunctionType>,
-    type_constructor_to_type: HashMap<String, ADT>,
+    adt_type_constructor_to_type: HashMap<String, ADTDefinition>,
+    record_name_to_definition: HashMap<String, RecordDefinition>,
 }
 
 pub fn _type(ast: &AST) -> Result<TypeResult, Vec<TypeError>> {
@@ -114,10 +148,29 @@ impl TyperState<'_> {
         return TyperState {
             ast: ast,
             function_name_to_type: build_function_type_cache(ast),
-            type_constructor_to_type: (&ast).type_declarations.iter()
-                .flat_map(|td| td.constructors.iter().zip(iter::repeat(td)))
+            adt_type_constructor_to_type: (&ast.type_declarations).iter()
+                .filter(|td| match td {
+                    CustomType::ADT(_, _) => true,
+                    _ => false
+                })
+                .flat_map(|adt| {
+                    match adt {
+                        CustomType::ADT(_, adt_def) => adt_def.constructors.iter().zip(iter::repeat(adt_def)),
+                        _ => unreachable!()
+                    }
+                })
                 .map(|((alternative, _), alternative_type)| {
                     (alternative.clone(), alternative_type.clone())
+                })
+                .collect(),
+            record_name_to_definition: (&ast.type_declarations).into_iter()
+                .filter(|td| match td {
+                    CustomType::Record(_, _) => true,
+                    _ => false
+                })
+                .map(|record| match record {
+                    CustomType::Record(_, record_def) => (record_def.name.clone(), record_def.clone()),
+                    _ => unreachable!()
                 })
                 .collect(),
         };
@@ -249,15 +302,15 @@ impl TyperState<'_> {
                 head_checked.extend(tail_checked);
                 Ok(head_checked)
             }
-            (MatchExpression::ADT(constructor_name, constructor_arguments), Type::CustomType(type_name)) => {
-                let maybe_adt = self.type_constructor_to_type.get(constructor_name);
+            (MatchExpression::ADT(constructor_name, constructor_arguments), Type::UserType(type_name)) => {
+                let maybe_adt = self.adt_type_constructor_to_type.get(constructor_name);
                 if let None = maybe_adt {
                     return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::UndefinedTypeConstructor(constructor_name.clone()))]);
                 }
 
                 let adt = maybe_adt.unwrap();
                 if adt.name != *type_name {
-                    return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::TypeMismatch(vec![Type::CustomType(type_name.clone())], Type::CustomType(adt.name.clone())))]);
+                    return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::TypeMismatch(vec![Type::UserType(type_name.clone())], Type::UserType(adt.name.clone())))]);
                 }
 
                 let adt_alternative = adt.constructors.get(constructor_name).unwrap();
@@ -268,6 +321,25 @@ impl TyperState<'_> {
                 let mut variables = HashMap::new();
                 for (arg, arg_type) in constructor_arguments.into_iter().zip((&adt_alternative.elements).into_iter()) {
                     variables.extend(self.check_match_expression(loc_info, arg, &arg_type)?);
+                }
+                Ok(variables)
+            }
+            (MatchExpression::Record(fields), Type::UserType(record_name)) => {
+                let record_definition = self.record_name_to_definition.get(record_name);
+
+                if let None = record_definition {
+                    return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::UndefinedTypeConstructor(record_name.clone()))]);
+                }
+
+                let record_definition = record_definition.unwrap();
+                let mut variables = HashMap::new();
+                for field in fields {
+                    let field_definition = record_definition.fields.get(field);
+                    if let None = field_definition {
+                        return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::UndefinedRecordField(record_definition.name.clone(), field.clone()))]);
+                    }
+                    let field_type = field_definition.unwrap();
+                    variables.insert(field.clone(), field_type.clone());
                 }
                 Ok(variables)
             }
@@ -311,14 +383,14 @@ impl TyperState<'_> {
             }
 
             Expression::ADTTypeConstructor(loc_info, alternative_name, arguments) => {
-                let maybe_adtdefinition = self.type_constructor_to_type.get(alternative_name);
+                let maybe_adtdefinition = self.adt_type_constructor_to_type.get(alternative_name);
                 if let None = maybe_adtdefinition {
                     return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::UndefinedTypeConstructor(alternative_name.clone()))]);
                 }
 
-                let adt = maybe_adtdefinition.unwrap();
+                let adt_def = maybe_adtdefinition.unwrap();
 
-                let adt_alternative = adt.constructors.get(alternative_name).unwrap();
+                let adt_alternative = adt_def.constructors.get(alternative_name).unwrap();
                 if adt_alternative.elements.len() != arguments.len() {
                     return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::TypeConstructorArgumentCountMismatch(alternative_name.clone(), adt_alternative.elements.len(), arguments.len()))]);
                 }
@@ -332,7 +404,25 @@ impl TyperState<'_> {
                 if errors.len() > 0 {
                     return Err(errors);
                 }
-                (Ok(CustomType(adt.name.clone())), loc_info)
+                (Ok(UserType(adt_def.name.clone())), loc_info)
+            }
+
+            Expression::Record(loc_info, record_name, field_expressions) => {
+                let record_definition = self.record_name_to_definition.get(record_name);
+                if let None = record_definition {
+                    return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::UndefinedTypeConstructor(record_name.clone()))]);
+                }
+                let record_definition = record_definition.unwrap();
+
+                for (field_name, expression) in field_expressions {
+                    let required_type = record_definition.fields.get(field_name);
+                    if let None = required_type {
+                        return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::UndefinedRecordField(record_name.clone(), field_name.clone()))]);
+                    }
+                    let required_type = required_type.unwrap();
+                    self.check_expression(expression, &vec![required_type.clone()], parameter_to_type)?;
+                }
+                (Ok(Type::UserType(record_name.clone())), loc_info)
             }
 
             Expression::TupleLiteral(loc_info, elements) => {
@@ -371,7 +461,7 @@ impl TyperState<'_> {
                 let mut last_type: Option<Type> = None;
                 for case_rule in case_rules {
                     let mut lhs_variables: HashMap<String, Type> = self.check_match_expression(loc_info, &case_rule.case_rule, &case_expression_type)?;
-                    lhs_variables.extend(parameter_to_type.into_iter().map(|(k,v)| (k.clone(), v.clone())));
+                    lhs_variables.extend(parameter_to_type.into_iter().map(|(k, v)| (k.clone(), v.clone())));
                     let rhs_type = self.check_expression(&case_rule.result_rule, &vec![], &lhs_variables)?;
                     if last_type.is_some() && last_type.clone().filter(|lt| lt.clone() != rhs_type).is_some() {
                         return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::TypeMismatch(vec![last_type.clone().unwrap()], rhs_type))]);

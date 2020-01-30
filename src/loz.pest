@@ -8,7 +8,7 @@ number = @{
 float = @{ ASCII_DIGIT ~ "." ~ ASCII_DIGIT+ }
 
 identifier = @{
-    (LOWERCASE_LETTER | "_") ~ (LETTER | DECIMAL_NUMBER )*
+    (LOWERCASE_LETTER | "_") ~ (LETTER | DECIMAL_NUMBER | "_" )*
 }
 
 capital_identifier = @{ UPPERCASE_LETTER ~ (LETTER | DECIMAL_NUMBER)*}
@@ -97,6 +97,7 @@ simple_term = _{
     | minus
     | tuple_literal
     | list_literal
+    | record_term
 }
 
 minus = @{"-" ~ expression}
@@ -120,6 +121,8 @@ case_expression_rule = {
 }
 
 adt_term = { capital_identifier ~ expression*}
+record_term = {"{" ~ capital_identifier ~ "|" ~ NEWLINE? ~ record_field_term ~ NEWLINE? ~ ("," ~ NEWLINE? ~ record_field_term)* ~ NEWLINE? ~ "}"}
+    record_field_term = {identifier ~ "=" ~ expression}
 
 tuple_literal = !{ "(" ~ NEWLINE* ~ expression ~ NEWLINE* ~ ("," ~ NEWLINE* ~ expression)+ ~ NEWLINE* ~ ")" }
 list_literal = _{ list_empty
@@ -151,7 +154,8 @@ match_term = _{
     list_match
     | tuple_match
     | sub_match
-    | custom_type_match
+    | adt_match
+    | record_match
     | identifier
     | number
     | char_literal
@@ -172,8 +176,9 @@ list_match = _{
 }
 
 sub_match = {"(" ~ match_term ~ ")"}
-custom_type_match = { capital_identifier |
+adt_match = { capital_identifier |
     "(" ~ capital_identifier ~ (match_term)* ~ ")" }
+record_match = {"{" ~ identifier ~ ("," ~ identifier)* ~ "}"}
 
 list_match_empty = { "[]" }
 list_match_singleton = { "[" ~ match_term ~ "]" }
@@ -225,8 +230,17 @@ adt_definition = {
     "::" ~ capital_identifier ~ "=" ~ NEWLINE? ~ adt_alternative ~ (NEWLINE? ~ "|" ~ adt_alternative)* ~ NEWLINE?
 }
 
+record_definition = {
+    "::" ~ capital_identifier ~ "=" ~ NEWLINE? ~ "{" ~ NEWLINE? ~ record_field_definition ~ (NEWLINE? ~ "," ~ NEWLINE? ~ record_field_definition)* ~ NEWLINE? ~ "}" ~ NEWLINE?
+}
+
+record_field_definition = {
+    identifier ~ "::" ~ loz_type
+}
+
 type_definition = {
     adt_definition
+    | record_definition
 }
 
 ast = {

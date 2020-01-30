@@ -1,0 +1,21 @@
+:: Address = {
+    address_line_1 :: String,
+    address_line_2 :: String,
+    zip_code :: String,
+    city :: String,
+    country :: String
+}
+
+:: Person = {
+    name :: String,
+    phone_number :: String,
+    age :: Int,
+    addresses :: [Address]
+}
+
+getAddress :: Person -> Address
+getAddress {addresses, bla} = case addresses of
+    [a:_] => a
+
+Main = getAddress ({Person| name = "John", phone_number = "0612345678", age = 18,
+    addresses = [{Address| address_line_1 = "Test", address_line_2 = "", zip_code = "666611", city = "New York", country = "USA"}]})

@@ -11,7 +11,7 @@ use Expression::StringLiteral;
 
 use crate::parser::Expression::*;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Location {
     pub file: String,
     pub function: String,
@@ -40,15 +40,27 @@ pub enum Type {
     String,
     Int,
     Float,
-    CustomType(String),
+    UserType(String),
     Tuple(Vec<Type>),
     List(Box<Option<Type>>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ADT {
+pub enum CustomType {
+    ADT(Location, ADTDefinition),
+    Record(Location, RecordDefinition),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordDefinition {
     pub name: String,
-    pub(crate) constructors: HashMap<String, ADTAlternative>,
+    pub fields: HashMap<String, Type>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ADTDefinition {
+    pub name: String,
+    pub constructors: HashMap<String, ADTAlternative>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -87,6 +99,7 @@ pub enum Expression {
     LonghandListLiteral(Location, Box<Expression>, Box<Expression>),
 
     ADTTypeConstructor(Location, String, Vec<Expression>),
+    Record(Location, String, Vec<(String, Expression)>),
 
     Case(Location, Box<Expression>, Vec<CaseRule>),
 
@@ -122,7 +135,7 @@ pub enum Expression {
 pub struct CaseRule {
     pub loc_info: Location,
     pub case_rule: MatchExpression,
-    pub result_rule: Expression
+    pub result_rule: Expression,
 }
 
 #[derive(Debug, Clone)]
@@ -137,12 +150,13 @@ pub enum MatchExpression {
     LonghandList(Box<MatchExpression>, Box<MatchExpression>),
     Wildcard,
     ADT(String, Vec<MatchExpression>),
+    Record(Vec<String>)
 }
 
 #[derive(Debug, Clone)]
 pub struct AST {
     pub function_declarations: HashMap<String, FunctionDeclaration>,
-    pub type_declarations: Vec<ADT>,
+    pub type_declarations: Vec<CustomType>,
     pub main: Expression,
 }
 
@@ -233,11 +247,11 @@ fn to_ast(pair: Pair<Rule>, file_name: &String, line_starts: &Vec<usize>) -> AST
     }
 }
 
-fn to_type_definition(pair: Pair<Rule>, _file_name: &String, _line_starts: &Vec<usize>) -> ADT {
+fn to_type_definition(pair: Pair<Rule>, file_name: &String, line_starts: &Vec<usize>) -> CustomType {
     let type_definition = pair.into_inner().next().unwrap();
     match type_definition.as_rule() {
         Rule::adt_definition => {
-            let mut elements = type_definition.into_inner();
+            let mut elements = type_definition.clone().into_inner();
             let type_name = elements.next().unwrap().as_str().to_string();
             let constructors = elements.map(|alternative_rule| {
                 let mut alternative_elements = alternative_rule.into_inner();
@@ -245,13 +259,25 @@ fn to_type_definition(pair: Pair<Rule>, _file_name: &String, _line_starts: &Vec<
                 let alternative_elements = alternative_elements.map(to_type).collect();
                 (alternative_name.clone(), ADTAlternative { name: alternative_name.clone(), elements: alternative_elements })
             }).collect();
-            return ADT { name: type_name.clone(), constructors };
-        },
+
+            let (line, col) = line_col_number(line_starts, type_definition.clone().as_span().start());
+            CustomType::ADT(Location { file: file_name.clone(), function: type_name.clone(), line, col }, ADTDefinition { name: type_name.clone(), constructors })
+        }
+        Rule::record_definition => {
+            let mut elements = type_definition.clone().into_inner();
+            let type_name = elements.next().unwrap().as_str().to_string();
+            let record_fields = elements.map(|field_rule| {
+                let mut field_elements = field_rule.into_inner();
+                let field_name = field_elements.next().unwrap().as_str().to_string();
+                let field_type = to_type(field_elements.next().unwrap());
+                (field_name, field_type)
+            }).collect();
+
+            let (line, col) = line_col_number(line_starts, type_definition.clone().as_span().start());
+            CustomType::Record(Location { file: file_name.clone(), function: type_name.clone(), line, col }, RecordDefinition { name: type_name.clone(), fields: record_fields })
+        }
         r => unreachable!("Unhandled type rule: {:?}", r)
     }
-
-
-
 }
 
 fn to_function_declaration(file_name: &String, pair: Pair<Rule>, line_starts: &Vec<usize>) -> FunctionDeclaration {
@@ -336,7 +362,7 @@ fn to_term(pair: Pair<Rule>, file_name: &String, function_name: &String, line_st
             let head = children.next().unwrap();
             let tail = children.next().unwrap();
             LonghandListLiteral(loc_info, Box::new(to_expression(head, file_name, function_name, line_starts)), Box::new(to_expression(tail, file_name, function_name, line_starts)))
-        },
+        }
         Rule::case_expression => {
             let mut children = sub.into_inner();
             let expression = to_term(children.next().unwrap(), file_name, function_name, line_starts);
@@ -346,7 +372,7 @@ fn to_term(pair: Pair<Rule>, file_name: &String, function_name: &String, line_st
                 let mut scs = match_rule.into_inner();
                 let case_rule = to_match_expression(scs.next().unwrap().into_inner().next().unwrap(), file_name, function_name, line_starts);
                 let result_rule = to_expression(scs.next().unwrap(), file_name, function_name, line_starts);
-                CaseRule{loc_info: location, case_rule, result_rule}
+                CaseRule { loc_info: location, case_rule, result_rule }
             }).collect();
             Case(loc_info, Box::new(expression), rules)
         }
@@ -355,6 +381,23 @@ fn to_term(pair: Pair<Rule>, file_name: &String, function_name: &String, line_st
             let alternative = elements.next().unwrap().as_str().to_string();
             let arguments = elements.map(|e| to_expression(e, file_name, function_name, line_starts)).collect();
             ADTTypeConstructor(loc_info, alternative, arguments)
+        }
+
+        Rule::record_term => {
+            let mut record_term_elements = sub.into_inner();
+            let record_name = record_term_elements.next().unwrap().as_str().to_string();
+            let field_expressions = record_term_elements
+                .map(|e| {
+                    let mut field_expression_elements = e.into_inner();
+                    let identifier = field_expression_elements.next().unwrap().as_str().to_string();
+                    let expression = to_expression(field_expression_elements.next().unwrap(), file_name, function_name, line_starts);
+                    (identifier, expression)
+                })
+                .collect();
+
+
+            Record(loc_info, record_name , field_expressions)
+
         }
 
         r => panic!("Reached term {:#?}", r),
@@ -421,7 +464,7 @@ fn to_match_expression(match_expression: Pair<Rule>, file_name: &String, functio
     match match_expression.as_rule() {
         Rule::identifier => {
             MatchExpression::Identifier(match_expression.as_str().to_string())
-        },
+        }
         Rule::match_wildcard => MatchExpression::Wildcard,
         Rule::tuple_match => MatchExpression::Tuple(match_expression.into_inner().map(|e| to_match_expression(e, file_name, function_name, line_starts)).collect()),
         Rule::sub_match => to_match_expression(match_expression.into_inner().next().unwrap(), file_name, function_name, line_starts),
@@ -439,11 +482,15 @@ fn to_match_expression(match_expression: Pair<Rule>, file_name: &String, functio
         Rule::string_literal => MatchExpression::StringLiteral(match_expression.into_inner().next().unwrap().as_str().to_string()),
         Rule::bool_literal => MatchExpression::BoolLiteral(match_expression.as_str().parse::<bool>().unwrap()),
 
-        Rule::custom_type_match => {
+        Rule::adt_match => {
             let mut elements = match_expression.into_inner();
             let alternative_name = elements.next().unwrap().as_str().to_string();
 
             MatchExpression::ADT(alternative_name, elements.map(|m| to_match_expression(m, file_name, function_name, line_starts)).collect())
+        }
+
+        Rule::record_match => {
+            MatchExpression::Record(match_expression.into_inner().map(|e| e.as_str().to_string()).collect())
         }
 
         r => unreachable!("Reached to_match_expression with: {:?}", r)
@@ -463,7 +510,7 @@ fn to_type(pair: Pair<Rule>) -> Type {
             Type::List(Box::new(Option::Some(to_type(pair.into_inner().nth(0).unwrap()))))
         }
         Rule::custom_type => {
-            Type::CustomType(pair.as_str().to_string())
+            Type::UserType(pair.as_str().to_string())
         }
         t => unreachable!("Unhandled type: {:?}", t)
     }

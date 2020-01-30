@@ -55,7 +55,8 @@ pub enum Value {
     String(String),
     Tuple(Vec<Value>),
     List(Vec<Value>),
-    CustomValue(String, Vec<Value>),
+    ADTValue(String, Vec<Value>),
+    RecordValue(HashMap<String, Value>)
 }
 
 #[derive(Debug, Clone)]
@@ -88,8 +89,16 @@ fn evaluate(e: &Expression, ast: &AST, state: &mut RunState) -> Result<Value, In
             for e in arguments {
                 evaluated_arguments.push(evaluate(e, ast, state)?);
             }
-            Ok(Value::CustomValue(name.clone(), evaluated_arguments))
+            Ok(Value::ADTValue(name.clone(), evaluated_arguments))
         }
+
+        Expression::Record(_, _, field_expressions) => {
+            let mut result = HashMap::new();
+            for (name, expression) in field_expressions.iter() {
+                result.insert(name.clone(), evaluate(expression, ast, state)?);
+            }
+            Ok(Value::RecordValue(result))
+        },
 
         Expression::TupleLiteral(_, elements) => {
             let mut evaluated_elements = Vec::new();
@@ -320,9 +329,9 @@ fn collect_match_variables(match_expression: &MatchExpression, evaluated_express
 
             Ok(head_variables)
         }
-        (MatchExpression::ADT(match_name, match_arguments), Value::CustomValue(name, arguments)) => {
+        (MatchExpression::ADT(match_name, match_arguments), Value::ADTValue(name, arguments)) => {
             if match_name != name {
-                return Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::ADT(match_name.clone(), match_arguments.clone()), Value::CustomValue(name.clone(), arguments.clone())));
+                return Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::ADT(match_name.clone(), match_arguments.clone()), Value::ADTValue(name.clone(), arguments.clone())));
             }
 
             let mut variables = HashMap::new();
@@ -330,6 +339,9 @@ fn collect_match_variables(match_expression: &MatchExpression, evaluated_express
                 variables.extend(collect_match_variables(e, v)?);
             }
             Ok(variables)
+        }
+        (MatchExpression::Record(fields), Value::RecordValue(field_to_value)) => {
+            Ok(fields.iter().map(|field| (field.clone(), field_to_value.get(field).unwrap().clone())).collect())
         }
         (MatchExpression::Wildcard, _type) => Ok(HashMap::new()),
         (mexpr, mvalue) => unreachable!("Could not collect match variables for expression {:?} with value {:?}", mexpr, mvalue)
