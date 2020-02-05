@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::interpreter::InterpreterError::{DivisionByZero, NoApplicableFunctionBody};
 use crate::parser::{AST, Expression, FunctionBody, FunctionRule, MatchExpression};
+use std::fmt::{Display, Formatter, Error};
 
 #[derive(Debug, Clone)]
 struct RunState {
@@ -59,6 +60,37 @@ pub enum Value {
     RecordValue(HashMap<String, Value>)
 }
 
+impl Display for Value {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        match self {
+            Value::Bool(b) => write!(f, "{}", b),
+            Value::Int(i) => write!(f, "{}", i),
+            Value::Float(float) => write!(f, "{}", float),
+            Value::Char(c) => write!(f, "{}", c),
+            Value::String(s) => write!(f, "\"{}\"", s),
+            Value::Tuple(elements) => {
+                write!(f, "(")?;
+                write!(f, "{}", elements.iter().map(|e| e.to_string()).collect::<Vec<String>>().join(", "))?;
+                write!(f, ")")
+            },
+            Value::List(elements) => {
+                write!(f, "[")?;
+                write!(f, "{}", elements.iter().map(|e| e.to_string()).collect::<Vec<String>>().join(", "))?;
+                write!(f, "]")
+            },
+            Value::ADTValue(constructor, arguments) => {
+                write!(f, "{}", constructor )?;
+                write!(f, "{}", arguments.iter().map(|a| a.to_string()).collect::<Vec<String>>().join(" "))
+            },
+            Value::RecordValue(fields) => {
+                write!(f, "{{", )?;
+                write!(f, "{}", fields.iter().map(|(name, value)| format!("{} = {}", name, value)).collect::<Vec<String>>().join(", "))?;
+                write!(f, "}}")
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum InterpreterError {
     NoApplicableFunctionRule(String),
@@ -70,7 +102,7 @@ pub enum InterpreterError {
 
 pub fn interpret(ast: &AST) -> Result<(), InterpreterError> {
     let result = evaluate(&ast.main, ast, &mut RunState::new())?;
-    println!("> {:?}", result);
+    println!("> {}", result);
     Ok(())
 }
 

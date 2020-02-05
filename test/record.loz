@@ -1,9 +1,17 @@
+:: Country =
+    USA
+    | UK
+    | France
+    | Germany
+
+:: Test = UK
+
 :: Address = {
     address_line_1 :: String,
     address_line_2 :: String,
     zip_code :: String,
     city :: String,
-    country :: String
+    country :: Country
 }
 
 :: Person = {
@@ -14,8 +22,21 @@
 }
 
 getAddress :: Person -> Address
-getAddress {addresses, bla} = case addresses of
+getAddress {addresses} = case addresses of
     [a:_] => a
 
-Main = getAddress ({Person| name = "John", phone_number = "0612345678", age = 18,
-    addresses = [{Address| address_line_1 = "Test", address_line_2 = "", zip_code = "666611", city = "New York", country = "USA"}]})
+getPersonCity :: Person -> String
+getPersonCity p
+# {addresses} = p
+# [{city} : _] = addresses
+= city
+
+getPersonInfo :: Person -> (Address, String, Country)
+getPersonInfo p
+# address = getAddress p
+# city = getPersonCity p
+# {country} = address
+= (address, city, country)
+
+Main = getPersonInfo {Person| name = "John", phone_number = "0612345678", age = 18,
+    addresses = [{Address| address_line_1 = "Test", address_line_2 = "", zip_code = "666611", city = "New York", country = UK}]}
