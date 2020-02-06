@@ -1,0 +1,16 @@
+test :: Int -> Int
+test x = x
+
+test :: Int -> Int
+test x = 0
+
+:: H = A Int
+:: H = B String
+
+:: Test = C String
+:: Test2 = C Int
+
+:: R = {test :: String}
+:: R = {test :: String}
+
+Main = test 0

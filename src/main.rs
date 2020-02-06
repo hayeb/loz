@@ -38,7 +38,7 @@ fn main() {
         process::exit(1);
     }
 
-    let result = interpreter::interpret(&ast);
+    let result = interpreter::interpret(&typer_result.unwrap());
     if let Err(e) = result {
         eprintln!("Runtime error: {:?}",e)
     }

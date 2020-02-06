@@ -10,6 +10,7 @@ use pest::prec_climber::*;
 use Expression::StringLiteral;
 
 use crate::parser::Expression::*;
+use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Location {
@@ -17,6 +18,12 @@ pub struct Location {
     pub function: String,
     pub line: usize,
     pub col: usize,
+}
+
+impl Display for Location{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
+        write!(f, "{}::{}[{}:{}]", self.file, self.function, self.line, self.col)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -155,7 +162,7 @@ pub enum MatchExpression {
 
 #[derive(Debug, Clone)]
 pub struct AST {
-    pub function_declarations: HashMap<String, FunctionDeclaration>,
+    pub function_declarations: Vec<FunctionDeclaration>,
     pub type_declarations: Vec<CustomType>,
     pub main: Expression,
 }
@@ -206,10 +213,11 @@ fn build_line_start_cache(input: &str) -> Vec<usize> {
 }
 
 fn line_col_number(line_starts: &Vec<usize>, pos: usize) -> (usize, usize) {
-    let mut previous_index = 1;
+
+    let mut previous_index = 0;
     let mut previous_start = 0;
     for (i, line_start) in line_starts.iter().enumerate() {
-        if *line_start >= pos {
+        if *line_start > pos {
             return (previous_index + 1, pos - previous_start + 1);
         }
         previous_index = i;
@@ -223,7 +231,7 @@ fn to_ast(pair: Pair<Rule>, file_name: &String, line_starts: &Vec<usize>) -> AST
     match pair.as_rule() {
         Rule::ast => {
             let mut rules = pair.into_inner().peekable();
-            let mut decls = HashMap::new();
+            let mut decls = Vec::new();
             let mut type_declarations = Vec::new();
 
             while let Some(pair) = rules.next() {
@@ -234,7 +242,7 @@ fn to_ast(pair: Pair<Rule>, file_name: &String, line_starts: &Vec<usize>) -> AST
                     }
                     Rule::function_definition => {
                         let fd = to_function_declaration(file_name, pair, line_starts);
-                        decls.insert(fd.name.clone(), fd);
+                        decls.push( fd);
                     }
                     Rule::main => return AST { function_declarations: decls, type_declarations, main: to_expression(pair.into_inner().next().unwrap(), file_name, &"StartRule".to_string(), line_starts) },
                     Rule::EOI => continue,

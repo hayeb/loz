@@ -38,5 +38,8 @@ getPersonInfo p
 # {country} = address
 = (address, city, country)
 
+getPersonInfo :: Int -> Int
+getPersonInfo i = i
+
 Main = getPersonInfo {Person| name = "John", phone_number = "0612345678", age = 18,
     addresses = [{Address| address_line_1 = "Test", address_line_2 = "", zip_code = "666611", city = "New York", country = UK}]}

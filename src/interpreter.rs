@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use crate::interpreter::InterpreterError::{DivisionByZero, NoApplicableFunctionBody};
-use crate::parser::{AST, Expression, FunctionBody, FunctionRule, MatchExpression};
+use crate::parser::{Expression, FunctionBody, FunctionRule, MatchExpression};
 use std::fmt::{Display, Formatter, Error};
+use crate::typer::TypedAST;
 
 #[derive(Debug, Clone)]
 struct RunState {
@@ -100,13 +101,13 @@ pub enum InterpreterError {
     NoMatchingCaseRule(Value),
 }
 
-pub fn interpret(ast: &AST) -> Result<(), InterpreterError> {
+pub fn interpret(ast: &TypedAST) -> Result<(), InterpreterError> {
     let result = evaluate(&ast.main, ast, &mut RunState::new())?;
     println!("> {}", result);
     Ok(())
 }
 
-fn evaluate(e: &Expression, ast: &AST, state: &mut RunState) -> Result<Value, InterpreterError> {
+fn evaluate(e: &Expression, ast: &TypedAST, state: &mut RunState) -> Result<Value, InterpreterError> {
     match e {
         Expression::BoolLiteral(_, b) => Ok(Value::Bool(*b)),
         Expression::StringLiteral(_, s) => Ok(Value::String(s.clone())),
@@ -242,8 +243,8 @@ fn evaluate(e: &Expression, ast: &AST, state: &mut RunState) -> Result<Value, In
     }
 }
 
-fn eval_function_call(f: &String, args: &Vec<Expression>, state: &mut RunState, ast: &AST) -> Result<Value, InterpreterError> {
-    let declaration = ast.function_declarations.get(f).unwrap();
+fn eval_function_call(f: &String, args: &Vec<Expression>, state: &mut RunState, ast: &TypedAST) -> Result<Value, InterpreterError> {
+    let declaration = ast.function_name_to_declaration.get(f).unwrap();
 
     for body in &declaration.function_bodies {
         let mut body_frame = Frame::new();
@@ -272,7 +273,7 @@ fn eval_function_call(f: &String, args: &Vec<Expression>, state: &mut RunState, 
     Err(NoApplicableFunctionBody(declaration.name.clone()))
 }
 
-fn eval_function_body(name: &String, body: &FunctionBody, state: &mut RunState, ast: &AST) -> Result<Value, InterpreterError> {
+fn eval_function_body(name: &String, body: &FunctionBody, state: &mut RunState, ast: &TypedAST) -> Result<Value, InterpreterError> {
     //println!("Evaluating function {:?} in {:?}", name, state.frames.last().unwrap());
 
     for rule in &body.rules {
@@ -380,14 +381,14 @@ fn collect_match_variables(match_expression: &MatchExpression, evaluated_express
     }
 }
 
-fn eval_bool(e: &Expression, ast: &AST, state: &mut RunState) -> Result<bool, InterpreterError> {
+fn eval_bool(e: &Expression, ast: &TypedAST, state: &mut RunState) -> Result<bool, InterpreterError> {
     match evaluate(e, ast, state) {
         Ok(Value::Bool(b)) => Ok(b),
         _ => unreachable!("evaluate wrong type (expected bool)")
     }
 }
 
-fn eval_int(e: &Expression, ast: &AST, state: &mut RunState) -> Result<isize, InterpreterError> {
+fn eval_int(e: &Expression, ast: &TypedAST, state: &mut RunState) -> Result<isize, InterpreterError> {
     match evaluate(e, ast, state) {
         Ok(Value::Int(n)) => Ok(n),
         e => unreachable!("evaluate wrong type (expected int): {:?}", e)

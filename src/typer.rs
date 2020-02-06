@@ -1,11 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap};
 use std::fmt::{Display, Error, Formatter};
 use std::iter;
 
 use crate::parser::{ADTDefinition, AST, CustomType, Expression, FunctionBody, FunctionDeclaration, FunctionRule, FunctionType, Location, MatchExpression, RecordDefinition, Type};
 use crate::parser::FunctionRule::{ConditionalRule, ExpressionRule, LetRule};
 use crate::parser::Type::UserType;
-use crate::typer::TypeErrorType::{DuplicateVariableNameSingleMatchExpression, FunctionCallArgumentCountMismatch, MatchWrongType, OperatorArgumentsNotEqual, ParameterCountMismatch, TypeConstructorArgumentCountMismatch, TypeMismatch, UndefinedFunction, UndefinedRecordField, UndefinedTypeConstructor, UndefinedVariable};
+use crate::typer::TypeErrorType::{DuplicateVariableNameSingleMatchExpression, FunctionCallArgumentCountMismatch, MatchWrongType, OperatorArgumentsNotEqual, ParameterCountMismatch, TypeConstructorArgumentCountMismatch, TypeMismatch, UndefinedFunction, UndefinedRecordField, UndefinedTypeConstructor, UndefinedVariable, FunctionMultiplyDefined, TypeMultiplyDefined, TypeConstructorMultiplyDefined};
 
 #[derive(Debug)]
 pub struct TypeError {
@@ -44,6 +44,16 @@ pub enum TypeErrorType {
     MatchWrongType(Type),
     DuplicateVariableNameSingleMatchExpression(String),
     UndefinedRecordField(String, String),
+    FunctionMultiplyDefined(String, Location),
+    TypeMultiplyDefined(String, Location),
+    TypeConstructorMultiplyDefined(String, String, Location)
+}
+#[derive(Debug)]
+pub struct TypedAST {
+    pub function_name_to_declaration: HashMap<String, FunctionDeclaration>,
+    pub adt_type_constructor_to_type: HashMap<String, ADTDefinition>,
+    pub record_name_to_definition: HashMap<String, RecordDefinition>,
+    pub main: Expression
 }
 
 #[derive(Debug)]
@@ -74,7 +84,10 @@ impl Display for TypeError {
             OperatorArgumentsNotEqual(o, l, r) => write!(f, "Arguments to '{}' operator do not have equal type: '{}' and '{}'", o, l, r),
             MatchWrongType(expected_type) => write!(f, "Match expression has wrong type, expected type '{}'", expected_type),
             DuplicateVariableNameSingleMatchExpression(v) => write!(f, "Duplicate variable introduced in single match: '{}'", v),
-            UndefinedRecordField(record_name, field_name) => write!(f, "Undefined record field '{}' in record '{}'", field_name, record_name)
+            UndefinedRecordField(record_name, field_name) => write!(f, "Undefined record field '{}' in record '{}'", field_name, record_name),
+            FunctionMultiplyDefined(name, location) => write!(f, "Function {} already defined, encountered earlier at {}", name, location),
+            TypeMultiplyDefined(name, location) => write!(f, "Type {} already defined, encountered earlier at {}", name, location),
+            TypeConstructorMultiplyDefined(constructor_name, defined_in_type, defined_in_location) => write!(f, "Type constructor {} already defined in type {} at {}", constructor_name, defined_in_type, defined_in_location)
         }
     }
 }
@@ -111,7 +124,7 @@ impl Display for Type {
 }
 
 fn write_error_context(f: &mut Formatter<'_>, context: &ErrorContext) -> Result<(), Error> {
-    write!(f, "{}[{}:{}]::{}: ", context.file, context.line, context.col, context.function)
+    write!(f, "{}::{}[{}:{}]: ", context.file, context.function, context.line, context.col)
 }
 
 #[derive(Debug)]
@@ -124,13 +137,44 @@ struct TyperState<'a> {
     record_name_to_definition: HashMap<String, RecordDefinition>,
 }
 
-pub fn _type(ast: &AST) -> Result<TypeResult, Vec<TypeError>> {
-    TyperState::new(ast).check_types()
+pub fn _type(ast: &AST) -> Result<TypedAST, Vec<TypeError>> {
+    TyperState::new(ast)?.check_types()
 }
 
-pub fn build_function_type_cache(ast: &AST) -> HashMap<String, FunctionType> {
-    ast.function_declarations.iter()
-        .map(|(n, d)| (n.clone(), d.function_type.clone()))
+fn build_function_type_cache(function_declarations: &Vec<FunctionDeclaration>) -> HashMap<String, FunctionType> {
+    function_declarations.iter()
+        .map(|d| (d.name.clone(), d.function_type.clone()))
+        .collect()
+}
+
+fn build_adt_cache(type_declarations: &Vec<CustomType>) -> HashMap<String, ADTDefinition> {
+    type_declarations.iter()
+        .filter(|td| match td {
+            CustomType::ADT(_, _) => true,
+            _ => false
+        })
+        .flat_map(|adt| {
+            match adt {
+                CustomType::ADT(_, adt_def) => adt_def.constructors.iter().zip(iter::repeat(adt_def)),
+                _ => unreachable!()
+            }
+        })
+        .map(|((alternative, _), alternative_type)| {
+            (alternative.clone(), alternative_type.clone())
+        })
+        .collect()
+}
+
+fn build_record_cache(type_declarations: &Vec<CustomType>) -> HashMap<String, RecordDefinition> {
+    type_declarations.iter()
+        .filter(|td| match td {
+            CustomType::Record(_, _) => true,
+            _ => false
+        })
+        .map(|record| match record {
+            CustomType::Record(_, record_def) => (record_def.name.clone(), record_def.clone()),
+            _ => unreachable!()
+        })
         .collect()
 }
 
@@ -143,42 +187,85 @@ fn combine(type_transformer: impl FnOnce(Type, Type) -> Result<Type, TypeError>,
     }
 }
 
-impl TyperState<'_> {
-    fn new(ast: &AST) -> TyperState {
-        return TyperState {
-            ast: ast,
-            function_name_to_type: build_function_type_cache(ast),
-            adt_type_constructor_to_type: (&ast.type_declarations).iter()
-                .filter(|td| match td {
-                    CustomType::ADT(_, _) => true,
-                    _ => false
-                })
-                .flat_map(|adt| {
-                    match adt {
-                        CustomType::ADT(_, adt_def) => adt_def.constructors.iter().zip(iter::repeat(adt_def)),
-                        _ => unreachable!()
-                    }
-                })
-                .map(|((alternative, _), alternative_type)| {
-                    (alternative.clone(), alternative_type.clone())
-                })
-                .collect(),
-            record_name_to_definition: (&ast.type_declarations).into_iter()
-                .filter(|td| match td {
-                    CustomType::Record(_, _) => true,
-                    _ => false
-                })
-                .map(|record| match record {
-                    CustomType::Record(_, record_def) => (record_def.name.clone(), record_def.clone()),
-                    _ => unreachable!()
-                })
-                .collect(),
-        };
+fn check_unique_definitions(ast: &AST) -> Vec<TypeError> {
+    let mut type_errors = Vec::new();
+
+    // 1. Ensure there are no functions multiply defined
+    let mut function_names: HashMap<String, Location> = HashMap::new();
+    for d in &ast.function_declarations {
+        if function_names.contains_key(&d.name) {
+            type_errors.push(TypeError::from_loc(d.location.clone(), TypeErrorType::FunctionMultiplyDefined(d.name.clone(), function_names.get(&d.name).unwrap().clone())));
+        } else {
+            function_names.insert(d.name.clone(), d.location.clone());
+        }
     }
 
-    fn check_types(&self) -> Result<TypeResult, Vec<TypeError>> {
+    // 2. Ensure no ADTs with the same name are defined
+    // 3. Ensure all ADT constructors are unique
+    // 4. Ensure no records with the same name are defined
+    let mut adt_names: HashMap<String, Location> = HashMap::new();
+    let mut adt_constructors : HashMap<String, (String, Location)> = HashMap::new();
+    let mut record_names: HashMap<String, Location> = HashMap::new();
+    for td in &ast.type_declarations {
+        match td {
+            CustomType::ADT(location, adt_definition) => {
+                if adt_names.contains_key(&adt_definition.name) {
+                    type_errors.push(TypeError::from_loc(location.clone(), TypeErrorType::TypeMultiplyDefined(adt_definition.name.clone(), adt_names.get(&adt_definition.name).unwrap().clone())))
+                } else {
+                    for (constructor_name, _) in &adt_definition.constructors {
+                        if adt_constructors.contains_key(constructor_name) {
+                            let (defined_in, defined_in_location) = adt_constructors.get(constructor_name).unwrap();
+                            type_errors.push(TypeError::from_loc(location.clone(), TypeErrorType::TypeConstructorMultiplyDefined(constructor_name.clone(), defined_in.clone(), defined_in_location.clone())))
+                        } else {
+                            adt_constructors.insert(constructor_name.clone(), (adt_definition.name.clone(), location.clone()));
+                        }
+                    }
+
+                    adt_names.insert(adt_definition.name.clone(), location.clone());
+                }
+            }
+            CustomType::Record(location, record_definition) => {
+                if record_names.contains_key(&record_definition.name) {
+                    type_errors.push(TypeError::from_loc(location.clone(), TypeErrorType::TypeMultiplyDefined(record_definition.name.clone(), record_names.get(&record_definition.name).unwrap().clone())))
+                } else {
+                    record_names.insert(record_definition.name.clone(), location.clone());
+                }
+            },
+        }
+    }
+    type_errors
+
+}
+
+impl TyperState<'_> {
+    fn new(ast: &AST) -> Result<TyperState, Vec<TypeError>> {
+        let type_errors = check_unique_definitions(ast);
+        if type_errors.len() > 0 {
+            return Err(type_errors)
+        }
+        let function_name_to_type = build_function_type_cache(&ast.function_declarations);
+        let adt_type_constructor_to_type = build_adt_cache(&ast.type_declarations);
+        let record_name_to_definition = build_record_cache(&ast.type_declarations);
+        return Ok(TyperState {
+            ast,
+            function_name_to_type,
+            adt_type_constructor_to_type,
+            record_name_to_definition,
+        });
+    }
+
+    fn to_typed_ast(&self) -> TypedAST {
+        TypedAST {
+            function_name_to_declaration: self.ast.function_declarations.iter().map(|d| (d.name.clone(), d.clone())).collect(),
+            adt_type_constructor_to_type: self.adt_type_constructor_to_type.clone(),
+            record_name_to_definition: self.record_name_to_definition.clone(),
+            main: self.ast.main.clone()
+        }
+    }
+
+    fn check_types(&self) -> Result<TypedAST, Vec<TypeError>> {
         let mut errors: Vec<TypeError> = self.ast.function_declarations.iter()
-            .map(|(_, d)| self.check_function_declaration(d))
+            .map(|d| self.check_function_declaration(d))
             .filter(|r| r.is_err())
             .flat_map(|err| err.err().unwrap().into_iter())
             .collect();
@@ -191,7 +278,7 @@ impl TyperState<'_> {
         if errors.len() > 0 {
             Err(errors)
         } else {
-            Ok(TypeResult {})
+            Ok(self.to_typed_ast())
         }
     }
 
