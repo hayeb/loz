@@ -1,9 +1,9 @@
 use std::collections::HashMap;
+use std::fmt::{Display, Error, Formatter};
 
 use crate::interpreter::InterpreterError::{DivisionByZero, NoApplicableFunctionBody};
 use crate::parser::{Expression, FunctionBody, FunctionRule, MatchExpression};
-use std::fmt::{Display, Formatter, Error};
-use crate::typer::TypedAST;
+use crate::inferencer::TypedAST;
 
 #[derive(Debug, Clone)]
 struct RunState {
@@ -58,7 +58,7 @@ pub enum Value {
     Tuple(Vec<Value>),
     List(Vec<Value>),
     ADTValue(String, Vec<Value>),
-    RecordValue(HashMap<String, Value>)
+    RecordValue(HashMap<String, Value>),
 }
 
 impl Display for Value {
@@ -70,24 +70,17 @@ impl Display for Value {
             Value::Char(c) => write!(f, "{}", c),
             Value::String(s) => write!(f, "\"{}\"", s),
             Value::Tuple(elements) => {
-                write!(f, "(")?;
-                write!(f, "{}", elements.iter().map(|e| e.to_string()).collect::<Vec<String>>().join(", "))?;
-                write!(f, ")")
-            },
+                write!(f, "({})", elements.iter().map(|e| e.to_string()).collect::<Vec<String>>().join(", "))
+            }
             Value::List(elements) => {
-                write!(f, "[")?;
-                write!(f, "{}", elements.iter().map(|e| e.to_string()).collect::<Vec<String>>().join(", "))?;
-                write!(f, "]")
-            },
+                write!(f, "[{}]", elements.iter().map(|e| e.to_string()).collect::<Vec<String>>().join(", "))
+            }
             Value::ADTValue(constructor, arguments) => {
-                write!(f, "{}", constructor )?;
-                write!(f, "{}", arguments.iter().map(|a| a.to_string()).collect::<Vec<String>>().join(" "))
-            },
+                write!(f, "{} {}", constructor, arguments.iter().map(|a| a.to_string()).collect::<Vec<String>>().join(" "))
+            }
             Value::RecordValue(fields) => {
-                write!(f, "{{", )?;
-                write!(f, "{}", fields.iter().map(|(name, value)| format!("{} = {}", name, value)).collect::<Vec<String>>().join(", "))?;
-                write!(f, "}}")
-            },
+                write!(f, "{{{}}}", fields.iter().map(|(name, value)| format!("{} = {}", name, value)).collect::<Vec<String>>().join(", "))
+            }
         }
     }
 }
@@ -112,8 +105,8 @@ fn evaluate(e: &Expression, ast: &TypedAST, state: &mut RunState) -> Result<Valu
         Expression::BoolLiteral(_, b) => Ok(Value::Bool(*b)),
         Expression::StringLiteral(_, s) => Ok(Value::String(s.clone())),
         Expression::CharacterLiteral(_, c) => Ok(Value::Char(*c)),
-        Expression::Number(_, n) => Ok(Value::Int(*n)),
-        Expression::Float(_, f) => Ok(Value::Float(*f)),
+        Expression::IntegerLiteral(_, n) => Ok(Value::Int(*n)),
+        Expression::FloatLiteral(_, f) => Ok(Value::Float(*f)),
 
         Expression::Call(_, f, args) => eval_function_call(f, args, state, ast),
 
@@ -131,7 +124,7 @@ fn evaluate(e: &Expression, ast: &TypedAST, state: &mut RunState) -> Result<Valu
                 result.insert(name.clone(), evaluate(expression, ast, state)?);
             }
             Ok(Value::RecordValue(result))
-        },
+        }
 
         Expression::TupleLiteral(_, elements) => {
             let mut evaluated_elements = Vec::new();

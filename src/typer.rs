@@ -2,9 +2,8 @@ use std::collections::{HashMap};
 use std::fmt::{Display, Error, Formatter};
 use std::iter;
 
-use crate::parser::{ADTDefinition, AST, CustomType, Expression, FunctionBody, FunctionDeclaration, FunctionRule, FunctionType, Location, MatchExpression, RecordDefinition, Type};
+use crate::parser::{ADTDefinition, AST, CustomType, Expression, FunctionBody, FunctionDeclaration, FunctionRule, Location, MatchExpression, RecordDefinition, Type, TypeScheme};
 use crate::parser::FunctionRule::{ConditionalRule, ExpressionRule, LetRule};
-use crate::parser::Type::UserType;
 use crate::typer::TypeErrorType::{DuplicateVariableNameSingleMatchExpression, FunctionCallArgumentCountMismatch, MatchWrongType, OperatorArgumentsNotEqual, ParameterCountMismatch, TypeConstructorArgumentCountMismatch, TypeMismatch, UndefinedFunction, UndefinedRecordField, UndefinedTypeConstructor, UndefinedVariable, FunctionMultiplyDefined, TypeMultiplyDefined, TypeConstructorMultiplyDefined};
 
 #[derive(Debug)]
@@ -92,37 +91,6 @@ impl Display for TypeError {
     }
 }
 
-impl Display for Type {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
-        match self {
-            Type::Bool => write!(f, "Bool"),
-            Type::Char => write!(f, "Char"),
-            Type::String => write!(f, "String"),
-            Type::Int => write!(f, "Int"),
-            Type::Float => write!(f, "Float"),
-            UserType(t) => write!(f, "{}", t),
-            Type::Tuple(elements) => {
-                write!(f, "(")?;
-                let mut peekable = elements.into_iter().peekable();
-                while let Some(e) = peekable.next() {
-                    write!(f, "{}", e)?;
-                    if peekable.peek().is_some() {
-                        write!(f, ", ")?;
-                    }
-                }
-                write!(f, ")")
-            }
-            Type::List(e) => {
-                if e.is_none() {
-                    write!(f, "[?]")
-                } else {
-                    write!(f, "[{}]", e.clone().unwrap())
-                }
-            }
-        }
-    }
-}
-
 fn write_error_context(f: &mut Formatter<'_>, context: &ErrorContext) -> Result<(), Error> {
     write!(f, "{}::{}[{}:{}]: ", context.file, context.function, context.line, context.col)
 }
@@ -132,7 +100,7 @@ pub struct TypeResult {}
 
 struct TyperState<'a> {
     ast: &'a AST,
-    function_name_to_type: HashMap<String, FunctionType>,
+    function_name_to_type: HashMap<String, TypeScheme>,
     adt_type_constructor_to_type: HashMap<String, ADTDefinition>,
     record_name_to_definition: HashMap<String, RecordDefinition>,
 }
@@ -141,7 +109,7 @@ pub fn _type(ast: &AST) -> Result<TypedAST, Vec<TypeError>> {
     TyperState::new(ast)?.check_types()
 }
 
-fn build_function_type_cache(function_declarations: &Vec<FunctionDeclaration>) -> HashMap<String, FunctionType> {
+fn build_function_type_cache(function_declarations: &Vec<FunctionDeclaration>) -> HashMap<String, TypeScheme> {
     function_declarations.iter()
         .map(|d| (d.name.clone(), d.function_type.clone()))
         .collect()
@@ -296,28 +264,30 @@ impl TyperState<'_> {
 
     fn check_function_body(&self, name: &String, body: &FunctionBody) -> Result<TypeResult, Vec<TypeError>> {
         let function_type = &self.function_name_to_type[name];
+        if let Type::Function(from, to) = &function_type.enclosed_type {
+            if from.len() != body.match_expressions.len() {
+                return Err(vec![TypeError::from(ErrorContext { file: body.location.file.clone(), function: name.to_string(), line: body.location.line, col: body.location.col }, ParameterCountMismatch(from.len(), body.match_expressions.len()))]);
+            }
 
-        if function_type.from.len() != body.match_expressions.len() {
-            return Err(vec![TypeError::from(ErrorContext { file: body.location.file.clone(), function: name.to_string(), line: body.location.line, col: body.location.col }, ParameterCountMismatch(function_type.from.len(), body.match_expressions.len()))]);
+            let parameter_to_type: &mut HashMap<String, Type> = &mut HashMap::new();
+            for (me, match_type) in (&body.match_expressions).into_iter().zip(from) {
+                parameter_to_type.extend(self.check_match_expression(&body.location, &me, &match_type)?);
+            }
+
+            let errors: Vec<TypeError> = (&body.rules).into_iter()
+                .map(|r| self.check_function_rule(&to, parameter_to_type, r))
+                .filter(|r| r.is_err())
+                .flat_map(|err| err.err().unwrap().into_iter())
+                .collect();
+
+            if errors.len() > 0 {
+                return Err(errors)
+            } else {
+                return Ok(TypeResult {})
+            }
         }
 
-        let parameter_to_type: &mut HashMap<String, Type> = &mut HashMap::new();
-        for (me, match_type) in (&body.match_expressions).into_iter().zip(&function_type.from) {
-            parameter_to_type.extend(self.check_match_expression(&body.location, &me, &match_type)?);
-        }
-
-
-        let errors: Vec<TypeError> = (&body.rules).into_iter()
-            .map(|r| self.check_function_rule(&function_type.clone().to, parameter_to_type, r))
-            .filter(|r| r.is_err())
-            .flat_map(|err| err.err().unwrap().into_iter())
-            .collect();
-
-        if errors.len() > 0 {
-            Err(errors)
-        } else {
-            Ok(TypeResult {})
-        }
+        unreachable!()
     }
 
     fn check_function_rule(&self, result_type: &Type, parameter_to_type: &mut HashMap<String, Type>, rule: &FunctionRule) -> Result<TypeResult, Vec<TypeError>> {
@@ -364,16 +334,11 @@ impl TyperState<'_> {
                 }
                 Ok(variables_to_type)
             }
-            (MatchExpression::ShorthandList(match_elements), Type::List(option_element_type))
-            if match_elements.len() == 0 && option_element_type.is_none() => Ok(HashMap::new()),
 
             (MatchExpression::ShorthandList(match_elements), Type::List(option_element_type)) => {
-                if option_element_type.as_ref().is_none() {
-                    return Ok(HashMap::new());
-                }
                 let mut variables_to_type: HashMap<String, Type> = HashMap::new();
                 for match_element in match_elements {
-                    let variables = self.check_match_expression(loc_info, match_element, &option_element_type.as_ref().as_ref().unwrap())?;
+                    let variables = self.check_match_expression(loc_info, match_element, &option_element_type.as_ref())?;
                     for (name, vtype) in &variables {
                         if variables_to_type.contains_key(name) {
                             return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::DuplicateVariableNameSingleMatchExpression(name.clone()))]);
@@ -384,12 +349,12 @@ impl TyperState<'_> {
                 Ok(variables_to_type)
             }
             (MatchExpression::LonghandList(head, tail), Type::List(option_element_type)) => {
-                let mut head_checked = self.check_match_expression(loc_info, head, &option_element_type.clone().unwrap())?;
+                let mut head_checked = self.check_match_expression(loc_info, head, &option_element_type.clone())?;
                 let tail_checked = self.check_match_expression(loc_info, tail, &Type::List(option_element_type.clone()))?;
                 head_checked.extend(tail_checked);
                 Ok(head_checked)
             }
-            (MatchExpression::ADT(constructor_name, constructor_arguments), Type::UserType(type_name)) => {
+            (MatchExpression::ADT(constructor_name, constructor_arguments), Type::UserType(type_name, _type_arguments)) => {
                 let maybe_adt = self.adt_type_constructor_to_type.get(constructor_name);
                 if let None = maybe_adt {
                     return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::UndefinedTypeConstructor(constructor_name.clone()))]);
@@ -397,7 +362,7 @@ impl TyperState<'_> {
 
                 let adt = maybe_adt.unwrap();
                 if adt.name != *type_name {
-                    return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::TypeMismatch(vec![Type::UserType(type_name.clone())], Type::UserType(adt.name.clone())))]);
+                    return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::TypeMismatch(vec![Type::UserType(type_name.clone(), Vec::new())], Type::UserType(adt.name.clone(), Vec::new())))]);
                 }
 
                 let adt_alternative = adt.constructors.get(constructor_name).unwrap();
@@ -411,7 +376,7 @@ impl TyperState<'_> {
                 }
                 Ok(variables)
             }
-            (MatchExpression::Record(fields), Type::UserType(record_name)) => {
+            (MatchExpression::Record(fields), Type::UserType(record_name,_)) => {
                 let record_definition = self.record_name_to_definition.get(record_name);
 
                 if let None = record_definition {
@@ -459,8 +424,8 @@ impl TyperState<'_> {
             Expression::BoolLiteral(loc_info, _) => (Ok(Type::Bool), loc_info),
             Expression::StringLiteral(loc_info, _) => (Ok(Type::String), loc_info),
             Expression::CharacterLiteral(loc_info, _) => (Ok(Type::Char), loc_info),
-            Expression::Number(loc_info, _) => (Ok(Type::Int), loc_info),
-            Expression::Float(loc_info, _) => (Ok(Type::Float), loc_info),
+            Expression::IntegerLiteral(loc_info, _) => (Ok(Type::Int), loc_info),
+            Expression::FloatLiteral(loc_info, _) => (Ok(Type::Float), loc_info),
             Expression::Call(loc_info, f, args) => (self.check_function_call(&f, &args, required_type, parameter_to_type, loc_info), loc_info),
             Expression::Variable(loc_info, v) => {
                 (match parameter_to_type.get(v) {
@@ -491,7 +456,7 @@ impl TyperState<'_> {
                 if errors.len() > 0 {
                     return Err(errors);
                 }
-                (Ok(UserType(adt_def.name.clone())), loc_info)
+                (Ok(Type::UserType(adt_def.name.clone(), Vec::new())), loc_info)
             }
 
             Expression::Record(loc_info, record_name, field_expressions) => {
@@ -509,7 +474,7 @@ impl TyperState<'_> {
                     let required_type = required_type.unwrap();
                     self.check_expression(expression, &vec![required_type.clone()], parameter_to_type)?;
                 }
-                (Ok(Type::UserType(record_name.clone())), loc_info)
+                (Ok(Type::UserType(record_name.clone(), Vec::new())), loc_info)
             }
 
             Expression::TupleLiteral(loc_info, elements) => {
@@ -521,7 +486,7 @@ impl TyperState<'_> {
                 (Ok(Type::Tuple(types)), loc_info)
             }
 
-            Expression::EmptyListLiteral(loc_info) => (Ok(Type::List(Box::new(Option::None))), loc_info),
+            Expression::EmptyListLiteral(loc_info) => (Ok(Type::List(Box::new(Type::Int))), loc_info),
             Expression::ShorthandListLiteral(loc_info, elements) => {
                 let mut det_type = Option::None;
                 for e in elements {
@@ -534,11 +499,11 @@ impl TyperState<'_> {
                     det_type = Some(c_type);
                 }
 
-                (Ok(Type::List(Box::new(det_type))), loc_info)
+                (Ok(Type::List(Box::new(det_type.unwrap()))), loc_info)
             }
 
             Expression::LonghandListLiteral(loc_info, head, tail) => {
-                let list_type = Type::List(Box::new(Some(self.check_expression(head, &vec![], parameter_to_type)?)));
+                let list_type = Type::List(Box::new(self.check_expression(head, &vec![], parameter_to_type)?));
                 let tail_type = self.check_expression(tail, &vec![list_type], parameter_to_type)?;
                 (Ok(tail_type), loc_info)
             }
@@ -606,13 +571,6 @@ impl TyperState<'_> {
             return Ok(determined_type);
         }
 
-        if determined_type == Type::List(Box::new(None)) && required_type.len() == 1 {
-            // FIXME: Hack to allow polymorph []
-            if let Some(Type::List(t)) = required_type.get(0) {
-                return Ok(Type::List(t.clone()));
-            }
-        }
-
         if !required_type.contains(&determined_type) {
             return Err(vec![TypeError::from(ErrorContext { file: loc_info.file.clone(), function: loc_info.function.clone(), line: loc_info.line, col: loc_info.col }, TypeMismatch(required_type.clone(), determined_type))]);
         }
@@ -622,29 +580,30 @@ impl TyperState<'_> {
 
     fn check_function_call(&self, name: &String, args: &Vec<Expression>, required_type: &Vec<Type>, parameter_to_type: &HashMap<String, Type>, loc_info: &Location) -> Result<Type, Vec<TypeError>> {
         let ftype = self.function_name_to_type.get(name);
-        if let None = ftype {
+        if let None = ftype.clone() {
             return Err(vec![TypeError::from(ErrorContext { file: loc_info.file.clone(), function: loc_info.function.clone(), line: loc_info.line, col: loc_info.col }, UndefinedFunction(name.clone()))]);
         }
 
-        let ftype = ftype.unwrap();
+        if let Type::Function(from, to) = ftype.unwrap().clone().enclosed_type {
+            if from.len() != args.len() {
+                return Err(vec![TypeError::from(ErrorContext { file: loc_info.file.clone(), function: loc_info.function.clone(), line: loc_info.line, col: loc_info.col }, FunctionCallArgumentCountMismatch(name.clone(), from.len(), args.len()))]);
+            }
 
-        if ftype.from.len() != args.len() {
-            return Err(vec![TypeError::from(ErrorContext { file: loc_info.file.clone(), function: loc_info.function.clone(), line: loc_info.line, col: loc_info.col }, FunctionCallArgumentCountMismatch(name.clone(), ftype.from.len(), args.len()))]);
+            let errors: Vec<TypeError> = from.into_iter().zip(args.into_iter())
+                .map(|(atype, e)| self.check_expression(e, &vec![atype.clone()], parameter_to_type))
+                .filter(|r| r.is_err())
+                .flat_map(|r| r.err().unwrap())
+                .collect();
+
+            if errors.len() > 0 {
+                return Err(errors);
+            }
+
+            if required_type.is_empty() || required_type.contains(&to) {
+                return Ok(*to);
+            }
+            return Err(vec![TypeError::from(ErrorContext { file: loc_info.file.clone(), function: loc_info.function.clone(), line: loc_info.line, col: loc_info.col }, TypeMismatch(required_type.clone(), *to))])
         }
-
-        let errors: Vec<TypeError> = ftype.clone().from.into_iter().zip(args.into_iter())
-            .map(|(atype, e)| self.check_expression(e, &vec![atype], parameter_to_type))
-            .filter(|r| r.is_err())
-            .flat_map(|r| r.err().unwrap())
-            .collect();
-
-        if errors.len() > 0 {
-            return Err(errors);
-        }
-
-        if required_type.is_empty() || required_type.contains(&ftype.clone().to) {
-            return Ok(ftype.clone().to);
-        }
-        Err(vec![TypeError::from(ErrorContext { file: loc_info.file.clone(), function: loc_info.function.clone(), line: loc_info.line, col: loc_info.col }, TypeMismatch(required_type.clone(), ftype.clone().to))])
+        unreachable!()
     }
 }

@@ -11,7 +11,7 @@ identifier = @{
     (LOWERCASE_LETTER | "_") ~ (LETTER | DECIMAL_NUMBER | "_" )*
 }
 
-capital_identifier = @{ UPPERCASE_LETTER ~ (LETTER | DECIMAL_NUMBER)*}
+capital_identifier = @{ UPPERCASE_LETTER ~ (LETTER | DECIMAL_NUMBER | "_")*}
 
 char_literal = @{
     "'" ~ (CASED_LETTER | TITLECASE_LETTER) ~ "'"
@@ -32,10 +32,15 @@ string_char = {
 }
 
 function_definition = {
-    PUSH(identifier) ~ NEWLINE* ~ "::" ~ NEWLINE* ~ function_type ~ NEWLINE+ ~ function_body+
+    PUSH(identifier) ~ NEWLINE* ~ "::" ~ NEWLINE* ~ loz_top_type ~ NEWLINE+ ~ function_body+
 }
 
-loz_type = _{
+loz_top_type = _{
+    function_type
+    | loz_type_term
+}
+
+loz_type_term = _{
     bool_type
     | string_type
     | int_type
@@ -43,17 +48,24 @@ loz_type = _{
     | custom_type
     | tuple_type
     | list_type
+    | type_variable
+    | "(" ~ function_type ~ ")"
 }
+
+type_variable = @{LOWERCASE_LETTER+}
 
 bool_type = { "Bool"}
 string_type = {"String"}
 int_type = {"Int"}
 float_type = { "Float" }
 char_type = {"Char"}
-list_type = { "[" ~ loz_type ~ "]"}
-custom_type = { capital_identifier }
+list_type = { "[" ~ loz_type_term ~ "]"}
+custom_type = { capital_identifier ~ loz_type_term*}
+function_type = {
+    (loz_type_term ~ NEWLINE*)* ~ NEWLINE? ~ "->" ~ NEWLINE? ~ loz_type_term
+}
 
-tuple_type = { "(" ~ loz_type ~ ("," ~ loz_type)+ ~ ")" }
+tuple_type = { "(" ~ loz_type_term ~ ("," ~ loz_type_term)+ ~ ")" }
 
 function_header = ${ PEEK ~ (WHITESPACE+ ~ match_expression)*}
 function_let_rule = {NEWLINE ~ ( "let" | "#") ~ match_expression ~ "=" ~ expression}
@@ -71,10 +83,6 @@ function_body = {
 
 function_conditional = {
     "|" ~ expression ~ "=" ~ expression
-}
-
-function_type = {
-    (loz_type ~ NEWLINE*)* ~ NEWLINE? ~ "->" ~ NEWLINE? ~ loz_type
 }
 
 call = {
@@ -224,19 +232,19 @@ operation = _{
 
 main = {"Main" ~ "=" ~ expression }
 
-adt_alternative = {capital_identifier ~ loz_type*}
-
 adt_definition = {
-    "::" ~ capital_identifier ~ "=" ~ NEWLINE? ~ adt_alternative ~ (NEWLINE? ~ "|" ~ adt_alternative)* ~ NEWLINE?
+    "::" ~ capital_identifier ~ adt_type_variables ~ "=" ~ NEWLINE? ~ adt_constructors ~ NEWLINE?
 }
+    adt_type_variables = { identifier* }
+    adt_constructors = {adt_contructor ~ ("|" ~ adt_contructor)*}
+    adt_contructor = {capital_identifier ~ loz_top_type*}
 
 record_definition = {
-    "::" ~ capital_identifier ~ "=" ~ NEWLINE? ~ "{" ~ NEWLINE? ~ record_field_definition ~ (NEWLINE? ~ "," ~ NEWLINE? ~ record_field_definition)* ~ NEWLINE? ~ "}" ~ NEWLINE?
+    "::" ~ capital_identifier ~ record_type_variable ~ "=" ~ NEWLINE? ~ "{" ~ NEWLINE? ~ record_field_definitions ~ NEWLINE? ~ "}" ~ NEWLINE?
 }
-
-record_field_definition = {
-    identifier ~ "::" ~ loz_type
-}
+    record_type_variable = { identifier* }
+    record_field_definitions = { record_field_definition ~ (NEWLINE? ~ "," ~ NEWLINE? ~ record_field_definition)*}
+    record_field_definition = { identifier ~ "::" ~ loz_top_type }
 
 type_definition = {
     adt_definition

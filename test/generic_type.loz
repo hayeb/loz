@@ -1,0 +1,26 @@
+:: Maybe a = Nothing | Just a
+
+:: Result a e = Ok a | Error e
+
+:: Data a = {name :: String, description :: String, value :: a}
+
+head :: [a] -> Maybe a
+head [h:t] = Just h
+head _ = Nothing
+
+tail :: [a] -> Maybe [a]
+tail [h : t] = Just t
+tail _ = Nothing
+
+test :: [(a,b)] -> Maybe a
+test [(a, b)] = Just a
+test _ = Nothing
+
+main :: [Data Int] -> Int
+main d
+# data = head d
+= case data of
+    (Just {value}) => value,
+    Nothing => 0
+
+Main = head [{Data|name = "bla", description = "bla", value = 15}]

@@ -1,6 +1,6 @@
 extern crate pest;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use pest::error::Error;
 use pest::iterators::Pair;
@@ -40,6 +40,8 @@ pub struct FunctionBody {
     pub rules: Vec<FunctionRule>,
 }
 
+pub type TypeVar = String;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Bool,
@@ -47,9 +49,99 @@ pub enum Type {
     String,
     Int,
     Float,
-    UserType(String),
+    UserType(String, Vec<Type>),
     Tuple(Vec<Type>),
-    List(Box<Option<Type>>),
+    List(Box<Type>),
+    Variable(TypeVar),
+
+    // a a b b -> b
+    Function(Vec<Type>, Box<Type>)
+}
+
+impl Display for Type {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            Type::Bool => write!(f, "Bool"),
+            Type::Char => write!(f, "Char"),
+            Type::String => write!(f, "String"),
+            Type::Int => write!(f, "Int"),
+            Type::Float => write!(f, "Float"),
+            Type::UserType(t, type_arguments) if type_arguments.len() == 0 => write!(f, "{}", t),
+            Type::UserType(t, type_arguments) => write!(f, "{} {}", t, type_arguments.into_iter().map(|e| e.to_string()).collect::<Vec<String>>().join(" ")),
+            Type::Variable(name) => write!(f, "{}", name),
+            Type::Tuple(elements) => {
+                write!(f, "({})", elements.into_iter().map(|e| e.to_string()).collect::<Vec<String>>().join(", "))
+            }
+            Type::List(e) => {
+                    write!(f, "[{}]", e)
+            }
+            Type::Function(from, to) => {
+                write!(f, "{} -> {}", from.iter().map(|t| t.to_string()).collect::<Vec<String>>().join(" "), to.to_string())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeScheme {
+    pub bound_variables: HashSet<String>,
+    pub enclosed_type: Type
+}
+
+impl Type {
+
+
+    /*
+    f :: a a a Int -> a
+
+    map :: (a -> b) [a] -> [b]
+
+    foldr :: [a] a (a a -> a) -> a
+
+
+    */
+    pub fn collect_free_type_variables(&self) -> HashSet<String> {
+        match self {
+            Type::Bool => HashSet::new(),
+            Type::Char => HashSet::new(),
+            Type::String => HashSet::new(),
+            Type::Int => HashSet::new(),
+            Type::Float => HashSet::new(),
+            Type::UserType(_, argument_types) => {
+                let mut variables = HashSet::new();
+                for t in argument_types {
+                    for v in t.collect_free_type_variables() {
+                        variables.insert(v);
+                    }
+                }
+                variables
+            }
+            Type::Tuple(element_types) => {
+                let mut variables = HashSet::new();
+                for t in element_types {
+                    for v in t.collect_free_type_variables() {
+                        variables.insert(v);
+                    }
+                }
+                variables
+            },
+            Type::List(t) => t.collect_free_type_variables(),
+            Type::Variable(tv) => vec![tv.clone()].into_iter().collect(),
+            Type::Function(from, to) => {
+                let mut variables = HashSet::new();
+                for t in from {
+                    for v in t.collect_free_type_variables() {
+                        variables.insert(v);
+                    }
+                }
+                for v in to.collect_free_type_variables() {
+                    variables.insert(v);
+                }
+
+                variables
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -61,33 +153,28 @@ pub enum CustomType {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordDefinition {
     pub name: String,
+    pub type_variables: Vec<String>,
     pub fields: HashMap<String, Type>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ADTDefinition {
     pub name: String,
-    pub constructors: HashMap<String, ADTAlternative>,
+    pub type_variables : Vec<String>,
+    pub constructors: HashMap<String, ADTConstructor>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ADTAlternative {
+pub struct ADTConstructor {
     pub name: String,
     pub elements: Vec<Type>,
-}
-
-#[derive(Debug, Clone)]
-pub struct FunctionType {
-    pub location: Location,
-    pub from: Vec<Type>,
-    pub to: Type,
 }
 
 #[derive(Debug, Clone)]
 pub struct FunctionDeclaration {
     pub location: Location,
     pub name: String,
-    pub function_type: FunctionType,
+    pub function_type: TypeScheme,
     pub function_bodies: Vec<FunctionBody>,
 }
 
@@ -96,8 +183,8 @@ pub enum Expression {
     BoolLiteral(Location, bool),
     StringLiteral(Location, String),
     CharacterLiteral(Location, char),
-    Number(Location, isize),
-    Float(Location, f64),
+    IntegerLiteral(Location, isize),
+    FloatLiteral(Location, f64),
 
     TupleLiteral(Location, Vec<Expression>),
 
@@ -136,6 +223,44 @@ pub enum Expression {
 
     And(Location, Box<Expression>, Box<Expression>),
     Or(Location, Box<Expression>, Box<Expression>),
+}
+
+impl Expression {
+    pub fn locate(&self) -> Location {
+        match self {
+            BoolLiteral(loc, _) => loc.clone(),
+            StringLiteral(loc, _) => loc.clone(),
+            CharacterLiteral(loc, _) => loc.clone(),
+            IntegerLiteral(loc, _) => loc.clone(),
+            FloatLiteral(loc, _) => loc.clone(),
+            TupleLiteral(loc, _) => loc.clone(),
+            EmptyListLiteral(loc) => loc.clone(),
+            ShorthandListLiteral(loc, _) => loc.clone(),
+            LonghandListLiteral(loc, _, _) => loc.clone(),
+            ADTTypeConstructor(loc, _, _) => loc.clone(),
+            Record(loc, _, _) => loc.clone(),
+            Case(loc, _, _) => loc.clone(),
+            Call(loc, _, _) => loc.clone(),
+            Variable(loc, _) => loc.clone(),
+            Negation(loc, _) => loc.clone(),
+            Minus(loc, _) => loc.clone(),
+            Times(loc, _, _) => loc.clone(),
+            Divide(loc, _, _) => loc.clone(),
+            Modulo(loc, _, _) => loc.clone(),
+            Add(loc, _, _) => loc.clone(),
+            Subtract(loc, _, _) => loc.clone(),
+            ShiftLeft(loc, _, _) => loc.clone(),
+            ShiftRight(loc, _, _) => loc.clone(),
+            Greater(loc, _, _) => loc.clone(),
+            Greq(loc, _, _) => loc.clone(),
+            Leq(loc, _, _) => loc.clone(),
+            Lesser(loc, _, _) => loc.clone(),
+            Eq(loc, _, _) => loc.clone(),
+            Neq(loc, _, _) => loc.clone(),
+            And(loc, _, _) => loc.clone(),
+            Or(loc, _, _) => loc.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -260,21 +385,30 @@ fn to_type_definition(pair: Pair<Rule>, file_name: &String, line_starts: &Vec<us
     match type_definition.as_rule() {
         Rule::adt_definition => {
             let mut elements = type_definition.clone().into_inner();
-            let type_name = elements.next().unwrap().as_str().to_string();
-            let constructors = elements.map(|alternative_rule| {
-                let mut alternative_elements = alternative_rule.into_inner();
-                let alternative_name = alternative_elements.next().unwrap().as_str().to_string();
-                let alternative_elements = alternative_elements.map(to_type).collect();
-                (alternative_name.clone(), ADTAlternative { name: alternative_name.clone(), elements: alternative_elements })
-            }).collect();
+            let name = elements.next().unwrap().as_str().to_string();
+            let type_variables = elements.next().unwrap().into_inner()
+                .map(|tv| tv.as_str().to_string())
+                .collect();
+
+            let constructors = elements.next().unwrap().into_inner()
+                .map(|alternative_rule| {
+                    let mut alternative_elements = alternative_rule.into_inner();
+                    let alternative_name = alternative_elements.next().unwrap().as_str().to_string();
+                    let alternative_elements = alternative_elements.map(to_type).collect();
+                    (alternative_name.clone(), ADTConstructor { name: alternative_name.clone(), elements: alternative_elements })
+                })
+                .collect();
 
             let (line, col) = line_col_number(line_starts, type_definition.clone().as_span().start());
-            CustomType::ADT(Location { file: file_name.clone(), function: type_name.clone(), line, col }, ADTDefinition { name: type_name.clone(), constructors })
+            CustomType::ADT(Location { file: file_name.clone(), function: name.clone(), line, col }, ADTDefinition { name: name.clone(), constructors, type_variables})
         }
         Rule::record_definition => {
             let mut elements = type_definition.clone().into_inner();
-            let type_name = elements.next().unwrap().as_str().to_string();
-            let record_fields = elements.map(|field_rule| {
+            let name = elements.next().unwrap().as_str().to_string();
+            let type_variables = elements.next().unwrap().into_inner()
+                .map(|tv| tv.as_str().to_string())
+                .collect();
+            let fields = elements.next().unwrap().into_inner().map(|field_rule| {
                 let mut field_elements = field_rule.into_inner();
                 let field_name = field_elements.next().unwrap().as_str().to_string();
                 let field_type = to_type(field_elements.next().unwrap());
@@ -282,7 +416,7 @@ fn to_type_definition(pair: Pair<Rule>, file_name: &String, line_starts: &Vec<us
             }).collect();
 
             let (line, col) = line_col_number(line_starts, type_definition.clone().as_span().start());
-            CustomType::Record(Location { file: file_name.clone(), function: type_name.clone(), line, col }, RecordDefinition { name: type_name.clone(), fields: record_fields })
+            CustomType::Record(Location { file: file_name.clone(), function: name.clone(), line, col }, RecordDefinition { name: name.clone(), fields, type_variables})
         }
         r => unreachable!("Unhandled type rule: {:?}", r)
     }
@@ -292,11 +426,11 @@ fn to_function_declaration(file_name: &String, pair: Pair<Rule>, line_starts: &V
     let (line, col) = line_col_number(line_starts, pair.as_span().start());
     let mut inner_rules = pair.into_inner();
     let name = inner_rules.next().unwrap().as_str();
-    let function_type = to_function_type(file_name, &name.to_string(), inner_rules.next().unwrap(), line_starts);
+    let function_type = to_function_type( inner_rules.next().unwrap());
     FunctionDeclaration {
         location: Location { file: file_name.clone(), function: name.to_string(), line, col },
         name: name.to_string(),
-        function_type,
+        function_type: TypeScheme{bound_variables: function_type.clone().collect_free_type_variables(), enclosed_type: function_type.clone()},
         function_bodies: inner_rules.map(|b| to_function_body(file_name, &name.to_string(), b, line_starts)).collect(),
     }
 }
@@ -348,8 +482,8 @@ fn to_term(pair: Pair<Rule>, file_name: &String, function_name: &String, line_st
         Rule::bool_literal => BoolLiteral(loc_info, sub.as_str().parse::<bool>().unwrap()),
         Rule::string_literal => StringLiteral(loc_info, sub.into_inner().next().unwrap().as_str().to_string()),
         Rule::char_literal => CharacterLiteral(loc_info, sub.as_str().to_string().chars().nth(1).unwrap()),
-        Rule::number => Number(loc_info, sub.as_str().parse::<isize>().unwrap()),
-        Rule::float => Float(loc_info, sub.as_str().parse::<f64>().unwrap()),
+        Rule::number => IntegerLiteral(loc_info, sub.as_str().parse::<isize>().unwrap()),
+        Rule::float => FloatLiteral(loc_info, sub.as_str().parse::<f64>().unwrap()),
         Rule::call => {
             let mut subs = sub.into_inner();
             let function = subs.next().unwrap().as_str();
@@ -412,22 +546,12 @@ fn to_term(pair: Pair<Rule>, file_name: &String, function_name: &String, line_st
     }
 }
 
-fn to_function_type(file_name: &String, function_name: &String, pair: Pair<Rule>, line_starts: &Vec<usize>) -> FunctionType {
-    let (line, col) = line_col_number(line_starts, pair.as_span().start());
-    let mut types = pair.into_inner().peekable();
-    let mut from_types = Vec::new();
+fn to_function_type(pair: Pair<Rule>) -> Type {
+    let type_elements = pair.into_inner().peekable();
 
-    // f :: From From From -> To
-    while let Some(t) = types.next() {
-        if types.peek().is_some() {
-            // Not the last, from type
-            from_types.push(to_type(t));
-        } else {
-            // The last, to type
-            return FunctionType { location: Location { file: file_name.clone(), function: function_name.clone(), line, col }, from: from_types, to: to_type(t) };
-        }
-    }
-    unreachable!()
+    let types: Vec<Type> = type_elements.map(|e| to_type(e)).collect();
+    let (to, from) = types.split_last().unwrap();
+    Type::Function(from.to_vec(), Box::new(to.clone()))
 }
 
 fn to_function_body(file_name: &String, function_name: &String, pair: Pair<Rule>, line_starts: &Vec<usize>) -> FunctionBody {
@@ -515,10 +639,21 @@ fn to_type(pair: Pair<Rule>) -> Type {
             Type::Tuple(pair.into_inner().map(|r| to_type(r)).collect())
         }
         Rule::list_type => {
-            Type::List(Box::new(Option::Some(to_type(pair.into_inner().nth(0).unwrap()))))
+            Type::List(Box::new(to_type(pair.into_inner().next().unwrap())))
         }
         Rule::custom_type => {
-            Type::UserType(pair.as_str().to_string())
+            //println!("custom_type {:#?}", pair);
+            let mut elements = pair.into_inner();
+            let name = elements.next().unwrap().as_str().to_string();
+
+            let mut type_arguments = Vec::new();
+            while let Some(e) = elements.next() {
+                type_arguments.push(to_type(e))
+            }
+            Type::UserType(name, type_arguments)
+        }
+        Rule::type_variable => {
+            Type::Variable(pair.as_str().to_string())
         }
         t => unreachable!("Unhandled type: {:?}", t)
     }

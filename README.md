@@ -40,6 +40,7 @@ Does NOT support laziness and does NOT use graph/term rewriting as basis for eva
     * Reading files
     * Retrieving data from the web
     * ...?
+* Implement checking match completeness
 
 ### Technical improvements
 * Clean-up AST, should speed up parsing
