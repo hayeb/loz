@@ -295,46 +295,46 @@ fn eval_function_body(name: &String, body: &FunctionBody, state: &mut RunState, 
 fn collect_match_variables(match_expression: &MatchExpression, evaluated_expression: &Value) -> Result<HashMap<String, Value>, InterpreterError> {
     //println!("Collecting match variables match_expression '{:?}' value '{:?}'", match_expression, evaluated_expression);
     match (match_expression, evaluated_expression) {
-        (MatchExpression::Identifier(identifier), value) => {
+        (MatchExpression::Identifier(loc_info, identifier), value) => {
             let mut map = HashMap::new();
             map.insert(identifier.clone(), value.clone());
             Ok(map)
         }
-        (MatchExpression::Number(_n), Value::Int(n)) => {
+        (MatchExpression::IntLiteral(loc_info, _n), Value::Int(n)) => {
             if _n == n {
                 return Ok(HashMap::new());
             }
-            Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::Number(_n.clone()), Value::Int(n.clone())))
+            Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::IntLiteral(loc_info.clone(), _n.clone()), Value::Int(n.clone())))
         }
-        (MatchExpression::CharLiteral(_c), Value::Char(c)) => {
+        (MatchExpression::CharLiteral(loc_info, _c), Value::Char(c)) => {
             if _c == c {
                 return Ok(HashMap::new());
             }
-            Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::CharLiteral(_c.clone()), Value::Char(c.clone())))
+            Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::CharLiteral(loc_info.clone(), _c.clone()), Value::Char(c.clone())))
         }
-        (MatchExpression::StringLiteral(_s), Value::String(s)) => {
+        (MatchExpression::StringLiteral(loc_info, _s), Value::String(s)) => {
             if _s == s {
                 return Ok(HashMap::new());
             }
-            Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::StringLiteral(_s.clone()), Value::String(s.clone())))
+            Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::StringLiteral(loc_info.clone(), _s.clone()), Value::String(s.clone())))
         }
-        (MatchExpression::BoolLiteral(_b), Value::Bool(b)) => {
+        (MatchExpression::BoolLiteral(loc_info, _b), Value::Bool(b)) => {
             if _b == b {
                 return Ok(HashMap::new());
             }
-            Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::BoolLiteral(_b.clone()), Value::Bool(b.clone())))
+            Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::BoolLiteral(loc_info.clone(), _b.clone()), Value::Bool(b.clone())))
         }
 
-        (MatchExpression::Tuple(elements), Value::Tuple(values)) => {
+        (MatchExpression::Tuple(loc_info, elements), Value::Tuple(values)) => {
             let mut map = HashMap::new();
             for (e, v) in elements.iter().zip(values.iter()) {
                 map.extend(collect_match_variables(e, v)?);
             }
             Ok(map)
         }
-        (MatchExpression::ShorthandList(elements), Value::List(values)) => {
+        (MatchExpression::ShorthandList(loc_info, elements), Value::List(values)) => {
             if elements.len() != values.len() {
-                return Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::ShorthandList(elements.clone()), Value::List(values.clone())));
+                return Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::ShorthandList(loc_info.clone(), elements.clone()), Value::List(values.clone())));
             }
 
             let mut map = HashMap::new();
@@ -343,10 +343,10 @@ fn collect_match_variables(match_expression: &MatchExpression, evaluated_express
             }
             Ok(map)
         }
-        (MatchExpression::LonghandList(head, tail), Value::List(values)) => {
+        (MatchExpression::LonghandList(loc_info, head, tail), Value::List(values)) => {
             //println!("Matching longhand list: [{:?} : {:?}] with value List({:?})", head, tail, values);
             if values.is_empty() {
-                return Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::LonghandList(head.clone(), tail.clone()), Value::List(values.clone())));
+                return Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::LonghandList(loc_info.clone(), head.clone(), tail.clone()), Value::List(values.clone())));
             }
 
             let mut head_variables = collect_match_variables(head, values.iter().next().unwrap())?;
@@ -355,9 +355,9 @@ fn collect_match_variables(match_expression: &MatchExpression, evaluated_express
 
             Ok(head_variables)
         }
-        (MatchExpression::ADT(match_name, match_arguments), Value::ADTValue(name, arguments)) => {
+        (MatchExpression::ADT(loc_info, match_name, match_arguments), Value::ADTValue(name, arguments)) => {
             if match_name != name {
-                return Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::ADT(match_name.clone(), match_arguments.clone()), Value::ADTValue(name.clone(), arguments.clone())));
+                return Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::ADT(loc_info.clone(), match_name.clone(), match_arguments.clone()), Value::ADTValue(name.clone(), arguments.clone())));
             }
 
             let mut variables = HashMap::new();
@@ -366,10 +366,10 @@ fn collect_match_variables(match_expression: &MatchExpression, evaluated_express
             }
             Ok(variables)
         }
-        (MatchExpression::Record(fields), Value::RecordValue(field_to_value)) => {
+        (MatchExpression::Record(loc_info, name , fields), Value::RecordValue(field_to_value)) => {
             Ok(fields.iter().map(|field| (field.clone(), field_to_value.get(field).unwrap().clone())).collect())
         }
-        (MatchExpression::Wildcard, _type) => Ok(HashMap::new()),
+        (MatchExpression::Wildcard(loc_info), _type) => Ok(HashMap::new()),
         (mexpr, mvalue) => unreachable!("Could not collect match variables for expression {:?} with value {:?}", mexpr, mvalue)
     }
 }

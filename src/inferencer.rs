@@ -101,7 +101,6 @@ impl Display for InferenceError {
             => write!(f, "Fields [{}] are missing a value in record {}", missing_fields_values.join(","), name),
 
             InferenceErrorType::UndefinedVariable(name) => write!(f, "Variable {} is not defined", name)
-
         }
     }
 }
@@ -317,7 +316,115 @@ impl InferencerState<'_> {
     }
 
     fn infer_match_expression(&mut self, me: &MatchExpression, expected_type: &Type) -> Result<HashMap<TypeVar, Type>, Vec<InferenceError>> {
-        panic!("infer_match_expression not implemented");
+        let res = match me {
+            MatchExpression::IntLiteral(loc, _) => map_unify(loc.clone(), unify(&Type::Int, expected_type))?,
+            MatchExpression::CharLiteral(loc, _) => map_unify(loc.clone(), unify(&Type::Char, expected_type))?,
+            MatchExpression::StringLiteral(loc, _) => map_unify(loc.clone(), unify(&Type::String, expected_type))?,
+            MatchExpression::BoolLiteral(loc, _) => map_unify(loc.clone(), unify(&Type::Bool, expected_type))?,
+
+            MatchExpression::Identifier(loc, _) => {
+                let fresh = self.fresh();
+                map_unify(loc.clone(), unify(&fresh, &expected_type))?
+            }
+
+            MatchExpression::Tuple(loc, elements) => {
+                let mut element_types = Vec::new();
+                for e in elements {
+                    let fresh = self.fresh();
+                    let subs = self.infer_match_expression(e, &fresh)?;
+                    self.extend_type_environment(&subs);
+                    element_types.push(substitute(&subs, &fresh));
+                }
+
+                map_unify(loc.clone(), unify(&Type::Tuple(element_types), &expected_type))?
+            }
+            MatchExpression::LonghandList(loc, head, tail) => {
+                let fresh_head = self.fresh();
+                let subs = self.infer_match_expression(head, &fresh_head)?;
+                self.extend_type_environment(&subs);
+
+                let head_type = substitute(&subs, &fresh_head);
+
+                let subs = self.infer_match_expression(tail, &Type::List(Box::new(head_type.clone())))?;
+                self.extend_type_environment(&subs);
+                map_unify(loc.clone(), unify(&substitute(&subs, &Type::List(Box::new(head_type))), &expected_type))?
+            }
+            MatchExpression::ShorthandList(loc, elements) => {
+                let mut element_type = self.fresh();
+                for e in elements {
+                    let fresh = self.fresh();
+                    let subs = self.infer_match_expression(e, &fresh)?;
+                    self.extend_type_environment(&subs);
+                    let subs = map_unify(e.locate(), unify(&substitute(&subs, &fresh), &element_type))?;
+                    element_type = substitute(&subs, &element_type);
+                }
+
+                map_unify(loc.clone(), unify(&Type::List(Box::new(element_type)), expected_type))?
+            }
+            MatchExpression::Wildcard(loc) => HashMap::new(),
+
+            MatchExpression::ADT(loc, constructor_name, constructor_arguments) => {
+                let adt_definition = match self.adt_type_constructor_to_type.get(constructor_name) {
+                    Some(d) => d.clone(),
+                    None => return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::UndefinedTypeConstructor(constructor_name.clone()))]),
+                };
+                let adt_constructor_definition = adt_definition.constructors.get(constructor_name).unwrap();
+
+                if adt_constructor_definition.elements.len() != constructor_arguments.len() {
+                    return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::WrongNumberConstructorArguments(constructor_name.clone(), adt_constructor_definition.elements.len(), constructor_arguments.len()))]);
+                }
+
+                let mut type_variable_to_type = HashMap::new();
+                for v in &adt_definition.type_variables {
+                    type_variable_to_type.insert(v.clone(), self.fresh());
+                }
+
+                let instantiated_definition_argument_types = substitute_list(&type_variable_to_type, &adt_constructor_definition.elements);
+
+                let mut argument_types = Vec::new();
+                for arg in constructor_arguments {
+                    let fresh = self.fresh();
+                    let subs = self.infer_match_expression(&arg, &fresh)?;
+                    self.extend_type_environment(&subs);
+                    argument_types.push(substitute(&subs, &fresh));
+                }
+
+                let mut argument_substitutions = HashMap::new();
+                for ((l, r), ex) in argument_types.iter().zip(instantiated_definition_argument_types.iter()).zip(constructor_arguments.iter()) {
+                    let subs = map_unify(ex.locate(), unify(&l, &r))?;
+                    self.extend_type_environment(&subs);
+                    argument_substitutions.extend(subs);
+                }
+
+                type_variable_to_type = type_variable_to_type.iter()
+                    .map(|(name, t)| (name.clone(), substitute(&argument_substitutions, t))).collect();
+
+                let mut concrete_types = Vec::new();
+                for tv in &adt_definition.type_variables {
+                    concrete_types.push(type_variable_to_type.get(tv).unwrap().clone());
+                }
+
+                map_unify(loc.clone(), unify(&Type::UserType(adt_definition.name.clone(), concrete_types), expected_type))?
+            }
+            MatchExpression::Record(loc, name, fields) => {
+                let record_definition = match self.record_name_to_definition.get(name) {
+                    Some(d) => d.clone(),
+                    None => return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::UndefinedRecord(name.clone()))]),
+                };
+
+                let undefined_fields: Vec<String> = fields.into_iter()
+                    .filter(|n| !record_definition.fields.contains_key(*n))
+                    .map(|n| n.clone())
+                    .collect();
+
+                if undefined_fields.len() > 0 {
+                    return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::UndefinedRecordFields(name.clone(), undefined_fields))]);
+                }
+
+                map_unify(loc.clone(), unify(&Type::UserType(record_definition.name.clone(), record_definition.type_variables.iter().map(|tv| self.fresh()).collect()), expected_type))?
+            }
+        };
+        Ok(res)
     }
 
     fn infer_binary_expression(&mut self, loc: &Location, l: &Expression, r: &Expression, sub_types: &Vec<Type>, type_transformer: impl FnOnce(&Type, &Type) -> Type, expected_type: &Type) -> Result<HashMap<TypeVar, Type>, Vec<InferenceError>> {
@@ -645,7 +752,7 @@ impl InferencerState<'_> {
                 let mut argument_types = Vec::new();
                 let mut argument_locations = Vec::new();
                 for a in arguments {
-                    let fresh= self.fresh();
+                    let fresh = self.fresh();
                     let subs = self.infer_expression(&a, &fresh)?;
                     self.extend_type_environment(&subs);
                     argument_types.push(substitute(&subs, &fresh));
@@ -1681,7 +1788,6 @@ mod test {
             }
         }
 
-
         #[cfg(test)]
         mod tuple {
             use super::*;
@@ -1787,12 +1893,12 @@ mod test {
             use super::*;
 
             /*
-                                                                    Tests the following code:
+                                                                                Tests the following code:
 
-                                                                    :: Test = A Bool | B Int
+                                                                                :: Test = A Bool | B Int
 
-                                                                    Is "A true" valid?
-                                                                    */
+                                                                                Is "A true" valid?
+                                                                                */
             #[test]
             fn test_infer_adt_1() {
                 let mut ast = test_ast();
@@ -2038,23 +2144,27 @@ mod test {
 
         #[cfg(test)]
         mod call {
-            use super::*;
             use std::collections::HashSet;
+
+            use super::*;
 
             #[test]
             fn test_infer_call_simple() {
                 let mut ast = test_ast();
-                ast.function_declarations = vec![FunctionDeclaration{
+                ast.function_declarations = vec![FunctionDeclaration {
                     location: test_loc(1),
                     name: "f".to_string(),
-                    function_type: TypeScheme { bound_variables: HashSet::new(), enclosed_type:
-                        Type::Function(vec![Type::String, Type::Int], Box::new(Type::Int)) },
-                    function_bodies: vec![]
+                    function_type: TypeScheme {
+                        bound_variables: HashSet::new(),
+                        enclosed_type:
+                        Type::Function(vec![Type::String, Type::Int], Box::new(Type::Int)),
+                    },
+                    function_bodies: vec![],
                 }];
 
                 let mut state = test_state(&ast);
                 let expression = Expression::Call(test_loc(2), "f".to_string(),
-                    vec![Expression::StringLiteral(test_loc(3), "Hello".to_string()), Expression::IntegerLiteral(test_loc(4), 15)]);
+                                                  vec![Expression::StringLiteral(test_loc(3), "Hello".to_string()), Expression::IntegerLiteral(test_loc(4), 15)]);
 
                 let result = state.infer_expression(&expression, &Type::Int);
                 println!("{:#?}", result);
@@ -2064,12 +2174,15 @@ mod test {
             #[test]
             fn test_infer_call_simple_err() {
                 let mut ast = test_ast();
-                ast.function_declarations = vec![FunctionDeclaration{
+                ast.function_declarations = vec![FunctionDeclaration {
                     location: test_loc(1),
                     name: "f".to_string(),
-                    function_type: TypeScheme { bound_variables: HashSet::new(), enclosed_type:
-                    Type::Function(vec![Type::String, Type::Int], Box::new(Type::Int)) },
-                    function_bodies: vec![]
+                    function_type: TypeScheme {
+                        bound_variables: HashSet::new(),
+                        enclosed_type:
+                        Type::Function(vec![Type::String, Type::Int], Box::new(Type::Int)),
+                    },
+                    function_bodies: vec![],
                 }];
 
                 let mut state = test_state(&ast);
@@ -2085,16 +2198,19 @@ mod test {
             #[test]
             fn test_infer_call_variable() {
                 let mut ast = test_ast();
-                ast.function_declarations = vec![FunctionDeclaration{
+                ast.function_declarations = vec![FunctionDeclaration {
                     location: test_loc(1),
                     name: "f".to_string(),
-                    function_type: TypeScheme { bound_variables: {
-                        let mut set = HashSet::new();
-                        set.insert("a".to_string());
-                        set
-                    }, enclosed_type:
-                    Type::Function(vec![Type::Variable("a".to_string()), Type::Variable("a".to_string())], Box::new(Type::Variable("a".to_string()))) },
-                    function_bodies: vec![]
+                    function_type: TypeScheme {
+                        bound_variables: {
+                            let mut set = HashSet::new();
+                            set.insert("a".to_string());
+                            set
+                        },
+                        enclosed_type:
+                        Type::Function(vec![Type::Variable("a".to_string()), Type::Variable("a".to_string())], Box::new(Type::Variable("a".to_string()))),
+                    },
+                    function_bodies: vec![],
                 }];
 
                 let mut state = test_state(&ast);
@@ -2109,16 +2225,19 @@ mod test {
             #[test]
             fn test_infer_call_variable_err() {
                 let mut ast = test_ast();
-                ast.function_declarations = vec![FunctionDeclaration{
+                ast.function_declarations = vec![FunctionDeclaration {
                     location: test_loc(1),
                     name: "f".to_string(),
-                    function_type: TypeScheme { bound_variables: {
-                        let mut set = HashSet::new();
-                        set.insert("a".to_string());
-                        set
-                    }, enclosed_type:
-                    Type::Function(vec![Type::Variable("a".to_string()), Type::Variable("a".to_string())], Box::new(Type::Variable("a".to_string()))) },
-                    function_bodies: vec![]
+                    function_type: TypeScheme {
+                        bound_variables: {
+                            let mut set = HashSet::new();
+                            set.insert("a".to_string());
+                            set
+                        },
+                        enclosed_type:
+                        Type::Function(vec![Type::Variable("a".to_string()), Type::Variable("a".to_string())], Box::new(Type::Variable("a".to_string()))),
+                    },
+                    function_bodies: vec![],
                 }];
 
                 let mut state = test_state(&ast);
@@ -2133,16 +2252,19 @@ mod test {
             #[test]
             fn test_infer_call_variables_err() {
                 let mut ast = test_ast();
-                ast.function_declarations = vec![FunctionDeclaration{
+                ast.function_declarations = vec![FunctionDeclaration {
                     location: test_loc(1),
                     name: "f".to_string(),
-                    function_type: TypeScheme { bound_variables: {
-                        let mut set = HashSet::new();
-                        set.insert("a".to_string());
-                        set
-                    }, enclosed_type:
-                    Type::Function(vec![Type::Variable("a".to_string()), Type::Variable("a".to_string())], Box::new(Type::Variable("a".to_string()))) },
-                    function_bodies: vec![]
+                    function_type: TypeScheme {
+                        bound_variables: {
+                            let mut set = HashSet::new();
+                            set.insert("a".to_string());
+                            set
+                        },
+                        enclosed_type:
+                        Type::Function(vec![Type::Variable("a".to_string()), Type::Variable("a".to_string())], Box::new(Type::Variable("a".to_string()))),
+                    },
+                    function_bodies: vec![],
                 }];
 
                 let mut state = test_state(&ast);
@@ -2152,6 +2274,283 @@ mod test {
                 let result = state.infer_expression(&expression, &Type::Int);
                 println!("{:#?}", result);
                 assert!(result.is_err());
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod match_expression {
+        use super::*;
+
+        #[cfg(test)]
+        mod simple {
+            use super::*;
+
+            #[test]
+            fn test_match_int() {
+                let ast = test_ast();
+                let mut state = test_state(&ast);
+                let result = state.infer_match_expression(&MatchExpression::IntLiteral(test_loc(1), 18), &Type::Int);
+                println!("{:#?}", result);
+                assert!(result.is_ok())
+            }
+
+            #[test]
+            fn test_match_char() {
+                let ast = test_ast();
+                let mut state = test_state(&ast);
+                let result = state.infer_match_expression(&MatchExpression::CharLiteral(test_loc(1), 'c'), &Type::Char);
+                println!("{:#?}", result);
+                assert!(result.is_ok())
+            }
+
+            #[test]
+            fn test_match_string() {
+                let ast = test_ast();
+                let mut state = test_state(&ast);
+                let result = state.infer_match_expression(&MatchExpression::StringLiteral(test_loc(1), "hello".to_string()), &Type::String);
+                println!("{:#?}", result);
+                assert!(result.is_ok())
+            }
+
+            #[test]
+            fn test_match_bool() {
+                let ast = test_ast();
+                let mut state = test_state(&ast);
+                let result = state.infer_match_expression(&MatchExpression::BoolLiteral(test_loc(1), true), &Type::Bool);
+                println!("{:#?}", result);
+                assert!(result.is_ok())
+            }
+        }
+
+        #[cfg(test)]
+        mod tuple {
+            use super::*;
+
+            #[test]
+            fn test_infer_match_tuple_simple() {
+                let ast = test_ast();
+                let mut state = test_state(&ast);
+                let result = state.infer_match_expression(&MatchExpression::Tuple(test_loc(1), vec![
+                    MatchExpression::IntLiteral(test_loc(2), 18),
+                    MatchExpression::BoolLiteral(test_loc(3), true)
+                ]), &Type::Tuple(vec![Type::Int, Type::Bool]));
+
+                println!("{:#?}", result);
+                assert!(result.is_ok())
+            }
+
+            #[test]
+            fn test_infer_match_tuple_simple_err() {
+                let ast = test_ast();
+                let mut state = test_state(&ast);
+                let result = state.infer_match_expression(&MatchExpression::Tuple(test_loc(1), vec![
+                    MatchExpression::IntLiteral(test_loc(2), 18),
+                    MatchExpression::IntLiteral(test_loc(3), 19)
+                ]), &Type::Tuple(vec![Type::Int, Type::Bool]));
+
+                println!("{:#?}", result);
+                assert!(result.is_err())
+            }
+
+            #[test]
+            fn test_infer_match_tuple_variable() {
+                let ast = test_ast();
+                let mut state = test_state(&ast);
+                let result = state.infer_match_expression(&MatchExpression::Tuple(test_loc(1), vec![
+                    MatchExpression::IntLiteral(test_loc(2), 18),
+                    MatchExpression::IntLiteral(test_loc(3), 19)
+                ]), &Type::Variable("a".to_string()));
+
+                println!("{:#?}", result);
+                assert!(result.is_ok());
+
+                let result = result.unwrap();
+                assert!(result.contains_key("a"));
+                assert_eq!(result.get("a").unwrap(), &Type::Tuple(vec![Type::Int, Type::Int]));
+            }
+        }
+
+        #[cfg(test)]
+        mod shorthand_list {
+            use super::*;
+
+            #[test]
+            fn test_infer_match_list_simple() {
+                let ast = test_ast();
+                let mut state = test_state(&ast);
+                let result = state.infer_match_expression(&MatchExpression::ShorthandList(test_loc(1), vec![
+                    MatchExpression::IntLiteral(test_loc(2), 18),
+                    MatchExpression::IntLiteral(test_loc(3), 19)
+                ]), &Type::List(Box::new(Type::Int)));
+
+                println!("{:#?}", result);
+                assert!(result.is_ok())
+            }
+
+            #[test]
+            fn test_infer_match_list_simple_err() {
+                let ast = test_ast();
+                let mut state = test_state(&ast);
+                let result = state.infer_match_expression(&MatchExpression::ShorthandList(test_loc(1), vec![
+                    MatchExpression::IntLiteral(test_loc(2), 18),
+                    MatchExpression::BoolLiteral(test_loc(3), true)
+                ]), &Type::List(Box::new(Type::Int)));
+
+                println!("{:#?}", result);
+                assert!(result.is_err())
+            }
+
+            #[test]
+            fn test_infer_match_list_simple_err_return() {
+                let ast = test_ast();
+                let mut state = test_state(&ast);
+                let result = state.infer_match_expression(&MatchExpression::ShorthandList(test_loc(1), vec![
+                    MatchExpression::IntLiteral(test_loc(2), 18),
+                    MatchExpression::IntLiteral(test_loc(3), 19)
+                ]), &Type::List(Box::new(Type::Bool)));
+
+                println!("{:#?}", result);
+                assert!(result.is_err())
+            }
+        }
+
+        #[cfg(test)]
+        mod longhand_list {
+            use super::*;
+
+            #[test]
+            fn test_infer_match_list_simple() {
+                let ast = test_ast();
+                let mut state = test_state(&ast);
+                let result = state.infer_match_expression(
+                    &MatchExpression::LonghandList(test_loc(1),
+                                                   Box::new(MatchExpression::IntLiteral(test_loc(2), 18)),
+                                                   Box::new(MatchExpression::LonghandList(test_loc(3),
+                                                                                          Box::new(MatchExpression::IntLiteral(test_loc(4), 19)),
+                                                                                          Box::new(MatchExpression::ShorthandList(test_loc(5), vec![]))))),
+                    &Type::List(Box::new(Type::Int)));
+
+                println!("{:#?}", result);
+                assert!(result.is_ok())
+            }
+
+            #[test]
+            fn test_infer_match_list_simple_err() {
+                let ast = test_ast();
+                let mut state = test_state(&ast);
+                let result = state.infer_match_expression(
+                    &MatchExpression::LonghandList(test_loc(1),
+                                                   Box::new(MatchExpression::IntLiteral(test_loc(2), 18)),
+                                                   Box::new(MatchExpression::LonghandList(test_loc(3),
+                                                                                          Box::new(MatchExpression::BoolLiteral(test_loc(4), true)),
+                                                                                          Box::new(MatchExpression::ShorthandList(test_loc(5), vec![]))))),
+                    &Type::List(Box::new(Type::Int)));
+
+                println!("{:#?}", result);
+                assert!(result.is_err())
+            }
+
+            #[test]
+            fn test_infer_match_list_simple_err_return() {
+                let ast = test_ast();
+                let mut state = test_state(&ast);
+                let result = state.infer_match_expression(
+                    &MatchExpression::LonghandList(test_loc(1),
+                                                   Box::new(MatchExpression::IntLiteral(test_loc(2), 18)),
+                                                   Box::new(MatchExpression::LonghandList(test_loc(3),
+                                                                                          Box::new(MatchExpression::IntLiteral(test_loc(4), 19)),
+                                                                                          Box::new(MatchExpression::ShorthandList(test_loc(5), vec![]))))),
+                    &Type::List(Box::new(Type::Bool)));
+
+                println!("{:#?}", result);
+                assert!(result.is_err())
+            }
+        }
+
+        #[cfg(test)]
+        mod adt {
+            use super::*;
+
+            #[test]
+            fn test_infer_record_missing_fields() {
+                let mut ast = test_ast();
+                ast.type_declarations = vec![CustomType::Record(test_loc(1), RecordDefinition {
+                    name: "A".to_string(),
+                    type_variables: vec![],
+                    fields: vec![
+                        ("a".to_string(), Type::Int),
+                        ("b".to_string(), Type::String)
+                    ].into_iter().collect(),
+                })];
+
+                let mut state = test_state(&ast);
+                println!("State: {:#?}", state.record_name_to_definition);
+                let expression = Expression::Record(test_loc(2), "A".to_string(), vec![("a".to_string(), Expression::StringLiteral(test_loc(3), "test".to_string()))]);
+                let etype = Type::Variable("a".to_string());
+
+                let result = state.infer_expression(&expression, &etype);
+                println!("{:#?}", result);
+                assert!(result.is_err());
+            }
+        }
+
+        #[cfg(test)]
+        mod record {
+            use super::*;
+
+            #[test]
+            fn test_infer_record_undefined_field() {
+                let mut ast = test_ast();
+                ast.type_declarations = vec![CustomType::Record(test_loc(1), RecordDefinition {
+                    name: "A".to_string(),
+                    type_variables: vec![],
+                    fields: vec![].into_iter().collect(),
+                })];
+
+                let mut state = test_state(&ast);
+                let expression = MatchExpression::Record(test_loc(2), "A".to_string(), vec!["a".to_string()]);
+                let etype = Type::Variable("a".to_string());
+
+                let result = state.infer_match_expression(&expression, &etype);
+                println!("{:#?}", result);
+                assert!(result.is_err());
+            }
+
+            #[test]
+            fn test_infer_record_simple() {
+                let mut ast = test_ast();
+                ast.type_declarations = vec![CustomType::Record(test_loc(1), RecordDefinition {
+                    name: "A".to_string(),
+                    type_variables: vec![],
+                    fields: vec![("a".to_string(), Type::Int)].into_iter().collect(),
+                })];
+
+                let mut state = test_state(&ast);
+                let expression = MatchExpression::Record(test_loc(2), "A".to_string(), vec!["a".to_string()]);
+                let etype = Type::Variable("a".to_string());
+
+                let result = state.infer_match_expression(&expression, &etype);
+                println!("{:#?}", result);
+                assert!(result.is_ok());
+            }
+
+            #[test]
+            fn test_infer_record_variable() {
+                let mut ast = test_ast();
+                ast.type_declarations = vec![CustomType::Record(test_loc(1), RecordDefinition {
+                    name: "A".to_string(),
+                    type_variables: vec!["c".to_string()],
+                    fields: vec![("a".to_string(), Type::Variable("c".to_string()))].into_iter().collect(),
+                })];
+
+                let mut state = test_state(&ast);
+                let expression = MatchExpression::Record(test_loc(2), "A".to_string(), vec!["a".to_string()]);
+                let etype = Type::Variable("a".to_string());
+
+                let result = state.infer_match_expression(&expression, &etype);
+                println!("{:#?}", result);
+                assert!(result.is_ok());
             }
         }
     }

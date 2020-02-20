@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::inferencer::InferenceErrorType;
 use crate::parser::Type;
 use crate::inferencer::substitutor::substitute;
+use std::collections::hash_map::RandomState;
 
 pub fn unify(a: &Type, b: &Type) -> Result<HashMap<String, Type>, InferenceErrorType> {
     match (a, b) {
@@ -26,7 +27,11 @@ pub fn unify(a: &Type, b: &Type) -> Result<HashMap<String, Type>, InferenceError
         }
 
         (Type::List(a_type), Type::List(b_type)) => {
-            unify(a_type, b_type)
+            match unify(a_type, b_type) {
+                Ok(subs) => Ok(subs),
+                Err(InferenceErrorType::UnificationError(l, r)) => Err(InferenceErrorType::UnificationError(Type::List(Box::new(l)), Type::List(Box::new(r)))),
+                Err(e) => Err(e)
+            }
         }
 
         (Type::Function(a_from_types, a_to_type), Type::Function(b_from_types, b_to_type))

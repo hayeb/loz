@@ -272,17 +272,35 @@ pub struct CaseRule {
 
 #[derive(Debug, Clone)]
 pub enum MatchExpression {
-    Number(isize),
-    CharLiteral(char),
-    StringLiteral(String),
-    BoolLiteral(bool),
-    Identifier(String),
-    Tuple(Vec<MatchExpression>),
-    ShorthandList(Vec<MatchExpression>),
-    LonghandList(Box<MatchExpression>, Box<MatchExpression>),
-    Wildcard,
-    ADT(String, Vec<MatchExpression>),
-    Record(Vec<String>)
+    IntLiteral(Location, isize),
+    CharLiteral(Location, char),
+    StringLiteral(Location, String),
+    BoolLiteral(Location, bool),
+    Identifier(Location, String),
+    Tuple(Location, Vec<MatchExpression>),
+    ShorthandList(Location, Vec<MatchExpression>),
+    LonghandList(Location, Box<MatchExpression>, Box<MatchExpression>),
+    Wildcard(Location),
+    ADT(Location, String, Vec<MatchExpression>),
+    Record(Location, String, Vec<String>)
+}
+
+impl MatchExpression {
+    pub fn locate(&self) -> Location {
+        match self {
+            MatchExpression::IntLiteral(loc, _) => loc.clone(),
+            MatchExpression::CharLiteral(loc, _) => loc.clone(),
+            MatchExpression::StringLiteral(loc, _) => loc.clone(),
+            MatchExpression::BoolLiteral(loc, _) => loc.clone(),
+            MatchExpression::Identifier(loc, _) => loc.clone(),
+            MatchExpression::Tuple(loc, _) => loc.clone(),
+            MatchExpression::ShorthandList(loc, _) => loc.clone(),
+            MatchExpression::LonghandList(loc, _, _) => loc.clone(),
+            MatchExpression::Wildcard(loc) => loc.clone(),
+            MatchExpression::ADT(loc, _, _) => loc.clone(),
+            MatchExpression::Record(loc, _, _) => loc.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -593,36 +611,40 @@ fn to_function_rule(pair: Pair<Rule>, file_name: &String, function_name: &String
 }
 
 fn to_match_expression(match_expression: Pair<Rule>, file_name: &String, function_name: &String, line_starts: &Vec<usize>) -> MatchExpression {
+    let (line, col) = line_col_number(line_starts, match_expression.as_span().start());
+    let loc_info = Location { file: file_name.clone(), function: function_name.clone(), line, col };
     match match_expression.as_rule() {
         Rule::identifier => {
-            MatchExpression::Identifier(match_expression.as_str().to_string())
+            MatchExpression::Identifier(loc_info, match_expression.as_str().to_string())
         }
-        Rule::match_wildcard => MatchExpression::Wildcard,
-        Rule::tuple_match => MatchExpression::Tuple(match_expression.into_inner().map(|e| to_match_expression(e, file_name, function_name, line_starts)).collect()),
+        Rule::match_wildcard => MatchExpression::Wildcard(loc_info),
+        Rule::tuple_match => MatchExpression::Tuple(loc_info, match_expression.into_inner().map(|e| to_match_expression(e, file_name, function_name, line_starts)).collect()),
         Rule::sub_match => to_match_expression(match_expression.into_inner().next().unwrap(), file_name, function_name, line_starts),
-        Rule::list_match_empty => MatchExpression::ShorthandList(vec![]),
-        Rule::list_match_singleton => MatchExpression::ShorthandList(vec![to_match_expression(match_expression.into_inner().next().unwrap(), file_name, function_name, line_starts)]),
-        Rule::list_match_shorthand => MatchExpression::ShorthandList(match_expression.into_inner().map(|e| to_match_expression(e, file_name, function_name, line_starts)).collect()),
+        Rule::list_match_empty => MatchExpression::ShorthandList(loc_info, vec![]),
+        Rule::list_match_singleton => MatchExpression::ShorthandList(loc_info, vec![to_match_expression(match_expression.into_inner().next().unwrap(), file_name, function_name, line_starts)]),
+        Rule::list_match_shorthand => MatchExpression::ShorthandList(loc_info, match_expression.into_inner().map(|e| to_match_expression(e, file_name, function_name, line_starts)).collect()),
         Rule::list_match_longhand => {
             let mut inner = match_expression.into_inner();
             let head = to_match_expression(inner.next().unwrap(), file_name, function_name, line_starts);
             let tail = to_match_expression(inner.next().unwrap(), file_name, function_name, line_starts);
-            MatchExpression::LonghandList(Box::new(head), Box::new(tail))
+            MatchExpression::LonghandList(loc_info, Box::new(head), Box::new(tail))
         }
-        Rule::number => MatchExpression::Number(match_expression.as_str().parse::<isize>().unwrap()),
-        Rule::char_literal => MatchExpression::CharLiteral(match_expression.as_str().to_string().chars().nth(1).unwrap()),
-        Rule::string_literal => MatchExpression::StringLiteral(match_expression.into_inner().next().unwrap().as_str().to_string()),
-        Rule::bool_literal => MatchExpression::BoolLiteral(match_expression.as_str().parse::<bool>().unwrap()),
+        Rule::number => MatchExpression::IntLiteral(loc_info, match_expression.as_str().parse::<isize>().unwrap()),
+        Rule::char_literal => MatchExpression::CharLiteral(loc_info, match_expression.as_str().to_string().chars().nth(1).unwrap()),
+        Rule::string_literal => MatchExpression::StringLiteral(loc_info, match_expression.into_inner().next().unwrap().as_str().to_string()),
+        Rule::bool_literal => MatchExpression::BoolLiteral(loc_info, match_expression.as_str().parse::<bool>().unwrap()),
 
         Rule::adt_match => {
             let mut elements = match_expression.into_inner();
             let alternative_name = elements.next().unwrap().as_str().to_string();
 
-            MatchExpression::ADT(alternative_name, elements.map(|m| to_match_expression(m, file_name, function_name, line_starts)).collect())
+            MatchExpression::ADT(loc_info, alternative_name, elements.map(|m| to_match_expression(m, file_name, function_name, line_starts)).collect())
         }
 
         Rule::record_match => {
-            MatchExpression::Record(match_expression.into_inner().map(|e| e.as_str().to_string()).collect())
+            let mut children = match_expression.into_inner();
+            let name = children.next().unwrap().as_str().to_string();
+            MatchExpression::Record(loc_info, name, children.map(|e| e.as_str().to_string()).collect())
         }
 
         r => unreachable!("Reached to_match_expression with: {:?}", r)

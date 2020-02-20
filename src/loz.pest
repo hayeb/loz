@@ -186,7 +186,7 @@ list_match = _{
 sub_match = {"(" ~ match_term ~ ")"}
 adt_match = { capital_identifier |
     "(" ~ capital_identifier ~ (match_term)* ~ ")" }
-record_match = {"{" ~ identifier ~ ("," ~ identifier)* ~ "}"}
+record_match = {"{" ~ capital_identifier ~ "|"  ~ identifier ~ ("," ~ identifier)* ~ "}"}
 
 list_match_empty = { "[]" }
 list_match_singleton = { "[" ~ match_term ~ "]" }

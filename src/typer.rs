@@ -316,17 +316,17 @@ impl TyperState<'_> {
 
     fn check_match_expression(&self, loc_info: &Location, match_expression: &MatchExpression, expression_type: &Type) -> Result<HashMap<String, Type>, Vec<TypeError>> {
         match (match_expression, expression_type) {
-            (MatchExpression::Identifier(identifier), expression_type) => {
+            (MatchExpression::Identifier(loc_info, identifier), expression_type) => {
                 let mut map = HashMap::new();
                 map.insert(identifier.clone(), expression_type.clone());
                 Ok(map)
             }
-            (MatchExpression::Wildcard, _) => Ok(HashMap::new()),
-            (MatchExpression::Number(_n), Type::Int) => Ok(HashMap::new()),
-            (MatchExpression::CharLiteral(_c), Type::Char) => Ok(HashMap::new()),
-            (MatchExpression::StringLiteral(_s), Type::String) => Ok(HashMap::new()),
-            (MatchExpression::BoolLiteral(_b), Type::Bool) => Ok(HashMap::new()),
-            (MatchExpression::Tuple(match_elements), Type::Tuple(element_types)) => {
+            (MatchExpression::Wildcard(loc_info), _) => Ok(HashMap::new()),
+            (MatchExpression::IntLiteral(loc_info, _n), Type::Int) => Ok(HashMap::new()),
+            (MatchExpression::CharLiteral(loc_info,_c), Type::Char) => Ok(HashMap::new()),
+            (MatchExpression::StringLiteral(loc_info,_s), Type::String) => Ok(HashMap::new()),
+            (MatchExpression::BoolLiteral(loc_info,_b), Type::Bool) => Ok(HashMap::new()),
+            (MatchExpression::Tuple(loc_info,match_elements), Type::Tuple(element_types)) => {
                 let mut variables_to_type = HashMap::new();
                 for (match_element, element_type) in match_elements.iter().zip(element_types.iter()) {
                     let variables = self.check_match_expression(loc_info, match_element, element_type)?;
@@ -335,7 +335,7 @@ impl TyperState<'_> {
                 Ok(variables_to_type)
             }
 
-            (MatchExpression::ShorthandList(match_elements), Type::List(option_element_type)) => {
+            (MatchExpression::ShorthandList(loc_info,match_elements), Type::List(option_element_type)) => {
                 let mut variables_to_type: HashMap<String, Type> = HashMap::new();
                 for match_element in match_elements {
                     let variables = self.check_match_expression(loc_info, match_element, &option_element_type.as_ref())?;
@@ -348,13 +348,13 @@ impl TyperState<'_> {
                 }
                 Ok(variables_to_type)
             }
-            (MatchExpression::LonghandList(head, tail), Type::List(option_element_type)) => {
+            (MatchExpression::LonghandList(loc_info,head, tail), Type::List(option_element_type)) => {
                 let mut head_checked = self.check_match_expression(loc_info, head, &option_element_type.clone())?;
                 let tail_checked = self.check_match_expression(loc_info, tail, &Type::List(option_element_type.clone()))?;
                 head_checked.extend(tail_checked);
                 Ok(head_checked)
             }
-            (MatchExpression::ADT(constructor_name, constructor_arguments), Type::UserType(type_name, _type_arguments)) => {
+            (MatchExpression::ADT(loc_info,constructor_name, constructor_arguments), Type::UserType(type_name, _type_arguments)) => {
                 let maybe_adt = self.adt_type_constructor_to_type.get(constructor_name);
                 if let None = maybe_adt {
                     return Err(vec![TypeError::from_loc(loc_info.clone(), TypeErrorType::UndefinedTypeConstructor(constructor_name.clone()))]);
@@ -376,7 +376,7 @@ impl TyperState<'_> {
                 }
                 Ok(variables)
             }
-            (MatchExpression::Record(fields), Type::UserType(record_name,_)) => {
+            (MatchExpression::Record(loc_info,_, fields), Type::UserType(record_name,_)) => {
                 let record_definition = self.record_name_to_definition.get(record_name);
 
                 if let None = record_definition {
