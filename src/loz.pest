@@ -49,6 +49,7 @@ loz_type_term = _{
     | tuple_type
     | list_type
     | type_variable
+    | "(" ~ loz_type_term ~ ")"
     | "(" ~ function_type ~ ")"
 }
 

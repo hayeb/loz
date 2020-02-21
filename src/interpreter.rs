@@ -96,7 +96,7 @@ pub enum InterpreterError {
 
 pub fn interpret(ast: &TypedAST) -> Result<(), InterpreterError> {
     let result = evaluate(&ast.main, ast, &mut RunState::new())?;
-    println!("> {}", result);
+    println!("{}", result);
     Ok(())
 }
 
@@ -295,7 +295,7 @@ fn eval_function_body(name: &String, body: &FunctionBody, state: &mut RunState, 
 fn collect_match_variables(match_expression: &MatchExpression, evaluated_expression: &Value) -> Result<HashMap<String, Value>, InterpreterError> {
     //println!("Collecting match variables match_expression '{:?}' value '{:?}'", match_expression, evaluated_expression);
     match (match_expression, evaluated_expression) {
-        (MatchExpression::Identifier(loc_info, identifier), value) => {
+        (MatchExpression::Identifier(_loc_info, identifier), value) => {
             let mut map = HashMap::new();
             map.insert(identifier.clone(), value.clone());
             Ok(map)
@@ -325,7 +325,7 @@ fn collect_match_variables(match_expression: &MatchExpression, evaluated_express
             Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::BoolLiteral(loc_info.clone(), _b.clone()), Value::Bool(b.clone())))
         }
 
-        (MatchExpression::Tuple(loc_info, elements), Value::Tuple(values)) => {
+        (MatchExpression::Tuple(_loc_info, elements), Value::Tuple(values)) => {
             let mut map = HashMap::new();
             for (e, v) in elements.iter().zip(values.iter()) {
                 map.extend(collect_match_variables(e, v)?);
@@ -366,10 +366,10 @@ fn collect_match_variables(match_expression: &MatchExpression, evaluated_express
             }
             Ok(variables)
         }
-        (MatchExpression::Record(loc_info, name , fields), Value::RecordValue(field_to_value)) => {
+        (MatchExpression::Record(_loc_info, _name , fields), Value::RecordValue(field_to_value)) => {
             Ok(fields.iter().map(|field| (field.clone(), field_to_value.get(field).unwrap().clone())).collect())
         }
-        (MatchExpression::Wildcard(loc_info), _type) => Ok(HashMap::new()),
+        (MatchExpression::Wildcard(_loc_info), _type) => Ok(HashMap::new()),
         (mexpr, mvalue) => unreachable!("Could not collect match variables for expression {:?} with value {:?}", mexpr, mvalue)
     }
 }

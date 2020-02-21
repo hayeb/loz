@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use crate::inferencer::InferenceErrorType;
 use crate::parser::Type;
 use crate::inferencer::substitutor::substitute;
-use std::collections::hash_map::RandomState;
 
 pub fn unify(a: &Type, b: &Type) -> Result<HashMap<String, Type>, InferenceErrorType> {
+    //println!("Trying to unify {:#?} with {:#?}", a, b);
     match (a, b) {
         // Basic types always succeed with no unifications
         (Type::Bool, Type::Bool) => Ok(HashMap::new()),
@@ -36,6 +36,8 @@ pub fn unify(a: &Type, b: &Type) -> Result<HashMap<String, Type>, InferenceError
 
         (Type::Function(a_from_types, a_to_type), Type::Function(b_from_types, b_to_type))
         => unify_functions(a_from_types, a_to_type, b_from_types, b_to_type),
+
+        (Type::Variable(a_var), Type::Variable(b_var)) => Ok(HashMap::new()),
 
         (Type::Variable(a_var), b_type) if !b_type.collect_free_type_variables().contains(a_var) => {
             let mut subs = HashMap::new();
@@ -77,7 +79,7 @@ fn unify_types(a_types: &Vec<Type>, b_types: &Vec<Type>) -> Result<HashMap<Strin
 fn unify_functions(a_arguments: &Vec<Type>, a_result: &Type, b_arguments: &Vec<Type>, b_result: &Type) -> Result<HashMap<String, Type>, InferenceErrorType> {
     let mut argument_unifiers = unify_types(a_arguments, b_arguments)?;
 
-    let result_unifiers = unify(a_result, b_result)?;
+    let result_unifiers = unify(&substitute(&argument_unifiers, a_result), &substitute(&argument_unifiers, b_result))?;
     argument_unifiers.extend(result_unifiers);
     Ok(argument_unifiers.to_owned())
 }

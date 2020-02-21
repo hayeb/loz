@@ -4,7 +4,7 @@ use std::iter;
 
 use crate::inferencer::substitutor::{substitute, substitute_list};
 use crate::inferencer::unifier::{unify, unify_one_of};
-use crate::parser::{ADTConstructor, ADTDefinition, AST, CustomType, Expression, FunctionDeclaration, Location, MatchExpression, RecordDefinition, Type, TypeScheme, TypeVar};
+use crate::parser::{ADTConstructor, ADTDefinition, AST, CustomType, Expression, FunctionDeclaration, Location, MatchExpression, RecordDefinition, Type, TypeScheme, TypeVar, FunctionRule};
 
 mod unifier;
 mod substitutor;
@@ -126,8 +126,6 @@ impl Iterator for VariableNameStream {
     }
 }
 
-enum TypeVariableType {}
-
 struct InferencerState<'a> {
     ast: &'a AST,
     function_name_to_type: HashMap<String, TypeScheme>,
@@ -155,8 +153,10 @@ struct InferencerState<'a> {
     local_type_context: HashMap<String, Type>,
 }
 
-pub fn infer(ast: &AST) -> Result<AST, Vec<InferenceError>> {
-    InferencerState::new(ast)?.infer()
+pub fn infer(ast: &AST) -> Result<TypedAST, Vec<InferenceError>> {
+    let mut infer_state = InferencerState::new(ast)?;
+    infer_state.infer()?;
+    Ok(infer_state.to_typed_ast())
 }
 
 fn build_function_scheme_cache(function_declarations: &Vec<FunctionDeclaration>) -> HashMap<String, TypeScheme> {
@@ -294,6 +294,15 @@ impl InferencerState<'_> {
             .collect();
     }
 
+    fn to_typed_ast(&self) -> TypedAST {
+        TypedAST {
+            function_name_to_declaration: self.ast.function_declarations.iter().map(|d| (d.name.clone(), d.clone())).collect(),
+            adt_type_constructor_to_type: self.adt_type_constructor_to_type.clone(),
+            record_name_to_definition: self.record_name_to_definition.clone(),
+            main: self.ast.main.clone()
+        }
+    }
+
     fn infer(&mut self) -> Result<AST, Vec<InferenceError>> {
         for f in &self.ast.function_declarations {
             let subs = self.infer_function_declaration(f)?;
@@ -301,18 +310,84 @@ impl InferencerState<'_> {
         }
 
         let fresh = self.fresh();
-        self.infer_expression(&(&self.ast).main, &fresh)?;
+        let subs = self.infer_expression(&(&self.ast).main, &fresh)?;
 
         Ok((&self).ast.clone())
     }
 
     fn infer_function_declaration(&mut self, declaration: &FunctionDeclaration) -> Result<HashMap<TypeVar, Type>, Vec<InferenceError>> {
-        for body in &declaration.function_bodies {
-            for me in &body.match_expressions {}
-
-            for r in &body.rules {}
+        let function_type_scheme = &declaration.function_type;
+        let mut instantiated_variables = HashMap::new();
+        for ts in &function_type_scheme.bound_variables {
+            instantiated_variables.insert(ts.clone(), self.fresh());
         }
-        Ok(HashMap::new())
+
+        let instantiated_function_type = substitute(&instantiated_variables, &function_type_scheme.enclosed_type);
+
+
+        /*
+            f :: a a -> a
+
+            g :: Int [a] a -> a
+            g n [] default = default
+            g 0 [h:t] default = h
+            g n [h:t] default = g (n - 1) t default
+
+        */
+
+        let mut function_type = self.fresh();
+        for (i, body) in (&declaration.function_bodies).into_iter().enumerate() {
+            let mut current_match_types = Vec::new();
+            let mut current_return_type = self.fresh();
+
+            for me in &body.match_expressions {
+                let fresh = self.fresh();
+                let subs = self.infer_match_expression(me, &fresh)?;
+                self.extend_type_environment(&subs);
+                current_match_types.push(substitute(&subs, &fresh));
+            }
+
+            for r in &body.rules {
+                match r {
+                    FunctionRule::ConditionalRule(_loc, condition, expression) => {
+                        let subs = self.infer_expression(&condition, &Type::Bool)?;
+                        self.extend_type_environment(&subs);
+
+                        let fresh = self.fresh();
+                        let subs = self.infer_expression(&expression, &fresh)?;
+                        self.extend_type_environment(&subs);
+
+                        let subs = map_unify(expression.locate(), unify(&substitute(&subs, &fresh), &current_return_type))?;
+                        current_return_type = substitute(&subs, &current_return_type);
+                    },
+                    FunctionRule::ExpressionRule(_loc, expression) => {
+                        let fresh = self.fresh();
+                        let subs = self.infer_expression(&expression, &fresh)?;
+                        self.extend_type_environment(&subs);
+
+                        let subs = map_unify(expression.locate(), unify(&substitute(&subs, &fresh), &current_return_type))?;
+                        current_return_type = substitute(&subs, &current_return_type);
+                    }
+                    FunctionRule::LetRule(_loc, match_expression, expression) => {
+                        let fresh = self.fresh();
+                        let subs = self.infer_match_expression(&match_expression, &fresh)?;
+                        self.extend_type_environment(&subs);
+
+                        let expression_type = &substitute(&subs, &fresh);
+                        let subs = self.infer_expression(&expression, expression_type)?;
+                        self.extend_type_environment(&subs);
+                    }
+                }
+            }
+
+            self.local_type_context.clear();
+
+            let subs = map_unify(body.location.clone(), unify(&Type::Function(current_match_types, Box::new(current_return_type)), &function_type))?;
+            self.extend_type_environment(&subs);
+            function_type = substitute(&subs, &function_type);
+        }
+
+        map_unify(declaration.location.clone(), unify(&function_type, &instantiated_function_type))
     }
 
     fn infer_match_expression(&mut self, me: &MatchExpression, expected_type: &Type) -> Result<HashMap<TypeVar, Type>, Vec<InferenceError>> {
@@ -322,9 +397,12 @@ impl InferencerState<'_> {
             MatchExpression::StringLiteral(loc, _) => map_unify(loc.clone(), unify(&Type::String, expected_type))?,
             MatchExpression::BoolLiteral(loc, _) => map_unify(loc.clone(), unify(&Type::Bool, expected_type))?,
 
-            MatchExpression::Identifier(loc, _) => {
+            MatchExpression::Identifier(loc, name) => {
                 let fresh = self.fresh();
-                map_unify(loc.clone(), unify(&fresh, &expected_type))?
+                let subs = map_unify(loc.clone(), unify(&fresh, &expected_type))?;
+                self.extend_type_environment(&subs);
+                self.local_type_context.insert(name.clone(), substitute(&subs, &fresh));
+                subs
             }
 
             MatchExpression::Tuple(loc, elements) => {
@@ -361,7 +439,7 @@ impl InferencerState<'_> {
 
                 map_unify(loc.clone(), unify(&Type::List(Box::new(element_type)), expected_type))?
             }
-            MatchExpression::Wildcard(loc) => HashMap::new(),
+            MatchExpression::Wildcard(_loc) => HashMap::new(),
 
             MatchExpression::ADT(loc, constructor_name, constructor_arguments) => {
                 let adt_definition = match self.adt_type_constructor_to_type.get(constructor_name) {
@@ -421,7 +499,40 @@ impl InferencerState<'_> {
                     return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::UndefinedRecordFields(name.clone(), undefined_fields))]);
                 }
 
-                map_unify(loc.clone(), unify(&Type::UserType(record_definition.name.clone(), record_definition.type_variables.iter().map(|tv| self.fresh()).collect()), expected_type))?
+
+
+                // :: Data a b c = {alpha: a, beta: b, gamam: c}
+                // >>>> :: Data v0 v1 v2 = {alpha: v0, beta: v1, gamma: v2}
+                let mut type_variable_to_type = HashMap::new();
+                let mut variables = Vec::new();
+                for tv in record_definition.type_variables {
+                    let fresh = self.fresh();
+                    variables.push(fresh.clone());
+                    type_variable_to_type.insert(tv.clone(), fresh.clone());
+                }
+
+                let mut instantiated_field_types = HashMap::new();
+                for field in fields {
+                    instantiated_field_types.insert(field.clone(), substitute(&type_variable_to_type, record_definition.fields.get(field).unwrap()));
+                }
+
+                /*
+                    Unify with the required type, which might be (Data Int String Int)
+                    For instance:
+                        v0 -> Int,
+                        v1 -> String,
+                        v2 -> Int,
+                */
+                let subs = map_unify(loc.clone(), unify(&Type::UserType(name.clone(), variables), &expected_type))?;
+                self.extend_type_environment(&subs);
+
+                // For every field used in the match expression, add a variable with the discovered type.
+                let mut field_to_type = HashMap::new();
+                for (field_name, field_type) in instantiated_field_types {
+                    self.local_type_context.insert(field_name.clone(), substitute(&subs, &field_type));
+                    field_to_type.insert(field_name.clone(), substitute(&subs, &field_type));
+                }
+                subs
             }
         };
         Ok(res)
@@ -532,7 +643,6 @@ impl InferencerState<'_> {
             => self.infer_binary_expression(loc, l, r, &vec![Type::Bool], static_type_combinator(Type::Bool), expected_type)?,
 
             Expression::Variable(loc, name) => {
-                println!("Inferring variable {}", name);
                 let variable_type = match self.local_type_context.get(name) {
                     None => return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::UndefinedVariable(name.clone()))]),
                     Some(vtype) => vtype,
@@ -622,7 +732,6 @@ impl InferencerState<'_> {
                 for v in &adt_definition.type_variables {
                     type_variable_to_type.insert(v.clone(), self.fresh());
                 }
-                println!("type_variable_to_type 1: {:#?}", type_variable_to_type);
 
                 let instantiated_definition_argument_types = substitute_list(&type_variable_to_type, &adt_constructor_definition.elements);
 
@@ -633,7 +742,6 @@ impl InferencerState<'_> {
                     self.extend_type_environment(&subs);
                     argument_types.push(substitute(&subs, &fresh));
                 }
-                println!("argument_types: {:#?}", argument_types);
 
                 let mut argument_substitutions = HashMap::new();
                 for ((l, r), ex) in argument_types.iter().zip(instantiated_definition_argument_types.iter()).zip(arguments.iter()) {
@@ -642,12 +750,8 @@ impl InferencerState<'_> {
                     argument_substitutions.extend(subs);
                 }
 
-                println!("argument_substitutions: {:#?}", argument_substitutions);
-
                 type_variable_to_type = type_variable_to_type.iter()
                     .map(|(name, t)| (name.clone(), substitute(&argument_substitutions, t))).collect();
-
-                println!("type_variable_to_type 2: {:#?}", type_variable_to_type);
 
                 let mut concrete_types = Vec::new();
                 for tv in &adt_definition.type_variables {
@@ -690,7 +794,6 @@ impl InferencerState<'_> {
                 for v in &record_definition.type_variables {
                     type_variable_to_type.insert(v.clone(), self.fresh());
                 }
-                println!("record type_variable_to_type 1: {:#?}", type_variable_to_type);
 
                 let instantiated_field_definition_types: HashMap<String, Type> = record_definition.fields.iter()
                     .map(|(field_name, field_type)| (field_name.clone(), substitute(&type_variable_to_type, field_type)))
@@ -705,7 +808,6 @@ impl InferencerState<'_> {
                     field_types.push((name.clone(), substitute(&subs, &fresh)));
                     field_location.insert(name.clone(), expression.locate());
                 }
-                println!("record field_types: {:#?}", field_types);
 
                 let mut field_substitutions = HashMap::new();
                 for (name, inferred_type) in field_types.iter() {
@@ -715,12 +817,8 @@ impl InferencerState<'_> {
                     field_substitutions.extend(subs);
                 }
 
-                println!("record field_substitutions: {:#?}", field_substitutions);
-
                 type_variable_to_type = type_variable_to_type.iter()
                     .map(|(name, t)| (name.clone(), substitute(&field_substitutions, t))).collect();
-
-                println!("record type_variable_to_type 2: {:#?}", type_variable_to_type);
 
                 let mut concrete_types = Vec::new();
                 for tv in &record_definition.type_variables {
@@ -736,19 +834,14 @@ impl InferencerState<'_> {
                 };
 
                 // f :: a a -> a
-                println!("call function type: {:#?}", function_type);
-
                 let mut type_variable_to_type = HashMap::new();
                 for a in &function_type.bound_variables {
                     type_variable_to_type.insert(a.clone(), self.fresh());
                 }
                 // [(a, v0)]
-                println!("call type_variable_to_type: {:#?}", type_variable_to_type);
-
                 let instantiated_function_type = substitute(&type_variable_to_type, &function_type.enclosed_type);
-                println!("call instantiated_function_type: {:#?}", instantiated_function_type);
-                // f :: v0 v0 -> v0
 
+                // f :: v0 v0 -> v0
                 let mut argument_types = Vec::new();
                 let mut argument_locations = Vec::new();
                 for a in arguments {
@@ -758,7 +851,6 @@ impl InferencerState<'_> {
                     argument_types.push(substitute(&subs, &fresh));
                     argument_locations.push(a.locate());
                 }
-                println!("call argument_types: {:#?}", argument_types);
 
                 // FIXME: This reports the wrong error location. Check if instantiated_function_type
                 //        is a function, then we can report better errors.. Otherwise we report the error
@@ -767,11 +859,10 @@ impl InferencerState<'_> {
                 let subs = map_unify(loc.clone(), unify(&Type::Function(argument_types, Box::new(fresh_result.clone())), &instantiated_function_type))?;
                 self.extend_type_environment(&subs);
                 let result_type = substitute(&subs, &fresh_result.clone());
-                println!("call result_type: {:#?}", result_type);
 
                 map_unify(loc.clone(), unify(&result_type, &expected_type))?
             }
-            Expression::Case(loc, expression, rules) => HashMap::new(),
+            Expression::Case(loc, expression, rules) => panic!("case not implemented"),
         };
 
         Ok(res)
@@ -2319,6 +2410,16 @@ mod test {
                 let mut state = test_state(&ast);
                 let result = state.infer_match_expression(&MatchExpression::BoolLiteral(test_loc(1), true), &Type::Bool);
                 println!("{:#?}", result);
+                assert!(result.is_ok())
+            }
+
+            #[test]
+            fn test_match_identifier() {
+                let ast = test_ast();
+                let mut state = test_state(&ast);
+                let result = state.infer_match_expression(&MatchExpression::Identifier(test_loc(1), "a".to_string()), &Type::Bool);
+                println!("{:#?}", result);
+                println!("{:#?}", state.local_type_context);
                 assert!(result.is_ok())
             }
         }

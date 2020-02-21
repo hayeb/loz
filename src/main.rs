@@ -1,7 +1,6 @@
 use std::{fs, env, process};
 
 mod parser;
-mod typer;
 mod interpreter;
 mod inferencer;
 
@@ -25,7 +24,7 @@ fn main() {
 
     let ast = parser::parse(filename, &contents[..]);
 
-    println!("AST: {:#?}", ast);
+    //println!("AST: {:#?}", ast);
 
     if let Err(err) = ast {
         eprintln!("{} {}", filename, err);
@@ -33,14 +32,14 @@ fn main() {
     }
 
     let ast = ast.unwrap();
-    let typer_result = inferencer::infer(&ast);
-    if let Err(err) = typer_result {
+    let inference_result = inferencer::infer(&ast);
+    if let Err(err) = inference_result {
         err.into_iter().for_each(|e| eprintln!("{}", e));
         process::exit(1);
     }
 
-//    let result = interpreter::interpret(&typer_result.unwrap());
-//    if let Err(e) = result {
-//        eprintln!("Runtime error: {:?}",e)
-//    }
+   let result = interpreter::interpret(&inference_result.unwrap());
+   if let Err(e) = result {
+       eprintln!("Runtime error: {:?}",e)
+   }
 }
