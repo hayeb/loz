@@ -12,10 +12,9 @@ tail :: [a] -> Maybe [a]
 tail [] = Nothing
 tail [h : t] = Just t
 
-
-map :: [a] (a -> b) -> [b]
-map [] _ = []
-map [x:xs] f = [f x : map xs f]
+map :: [a] -> [b]
+map [] = []
+map [x:xs] = [x : map xs]
 
 int :: Maybe (Data Int) -> Int
 int Nothing = 0
@@ -26,4 +25,5 @@ main d
 # data = head d
 = int data
 
-Main = id (tail [{Data|name = "bla", description = "bla", value = 15}])
+
+Main = filter_even [1, 2, 3, 4]

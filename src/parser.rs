@@ -677,6 +677,14 @@ fn to_type(pair: Pair<Rule>) -> Type {
         Rule::type_variable => {
             Type::Variable(pair.as_str().to_string())
         }
-        t => unreachable!("Unhandled type: {:?}", t)
+        Rule::function_type => {
+            let types : Vec<Type> = pair.into_inner()
+                .map(|t| to_type(t))
+                .collect();
+
+            let (result_type, arguments) = types.split_last().unwrap();
+            Type::Function(arguments.into_iter().cloned().collect(), Box::new(result_type.clone()))
+        }
+        t => unreachable!("Unhandled type: {:?}: {:#?}", t, pair)
     }
 }
