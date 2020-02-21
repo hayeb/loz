@@ -1,0 +1,10 @@
+// Comments should work here..
+f :: Int -> Int
+f 0 = 1
+// And here
+f 1 = 9
+f 2
+// And here
+= 10
+
+Main = f 0

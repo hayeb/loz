@@ -1,0 +1,7 @@
+filter_even :: [Int] -> [Int]
+filter_even [] = []
+filter_even [h : t ]
+| h % 2 == 0 = [h : filter_even t]
+= filter_even t
+
+Main = filter_even [1, 2, 3, 4]
