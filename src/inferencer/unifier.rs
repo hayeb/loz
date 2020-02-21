@@ -37,7 +37,7 @@ pub fn unify(a: &Type, b: &Type) -> Result<HashMap<String, Type>, InferenceError
         (Type::Function(a_from_types, a_to_type), Type::Function(b_from_types, b_to_type))
         => unify_functions(a_from_types, a_to_type, b_from_types, b_to_type),
 
-        (Type::Variable(a_var), Type::Variable(b_var)) => Ok(HashMap::new()),
+        (Type::Variable(a_var), Type::Variable(b_var)) if a_var == b_var => Ok(HashMap::new()),
 
         (Type::Variable(a_var), b_type) if !b_type.collect_free_type_variables().contains(a_var) => {
             let mut subs = HashMap::new();
