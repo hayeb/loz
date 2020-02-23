@@ -73,7 +73,7 @@ impl Display for InferenceError {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         write_error_context(f, &self.context)?;
         match &self.err {
-            InferenceErrorType::UnificationError(a, b) => write!(f, "Could not unify \n\t{}\nwith\n\t{}", a, b),
+            InferenceErrorType::UnificationError(a, b) => write!(f, "Could not unify expected type\n\t{}\nwith inferred type\n\t{}",b, a),
             InferenceErrorType::UnificationErrorMultiple(a, b) => write!(f, "Could not unify one of \n\t[{}]\nwith\n\t{}", a.into_iter().map(|a| a.to_string()).collect::<Vec<String>>().join(","), b),
             InferenceErrorType::UnboundTypeVariable(v) => write!(f, "Unbound type variable '{}'", v),
             InferenceErrorType::WrongNumberOfTypes(left, right) => write!(f, "Expected {} types, got {}", left, right),
