@@ -323,7 +323,7 @@ impl InferencerState<'_> {
         }
 
         let instantiated_function_type = substitute(&instantiated_variables, &function_type_scheme.enclosed_type);
-
+        println!("Inferring function declaration {} with instantiated type {}", declaration.name, instantiated_function_type);
 
         /*
             f :: a a -> a
@@ -334,7 +334,6 @@ impl InferencerState<'_> {
             g n [h:t] default = g (n - 1) t default
 
         */
-
         let mut function_type = self.fresh();
         for (i, body) in (&declaration.function_bodies).into_iter().enumerate() {
             let mut current_match_types = Vec::new();
@@ -538,7 +537,8 @@ impl InferencerState<'_> {
         Ok(res)
     }
 
-    fn infer_binary_expression(&mut self, loc: &Location, l: &Expression, r: &Expression, sub_types: &Vec<Type>, type_transformer: impl FnOnce(&Type, &Type) -> Type, expected_type: &Type) -> Result<HashMap<TypeVar, Type>, Vec<InferenceError>> {
+    fn infer_binary_expression(&mut self, loc: &Location, l: &Expression, r: &Expression, sub_types: &Vec<Type>, name: String, type_transformer: impl FnOnce(String,&Type, &Type) -> Type, expected_type: &Type) -> Result<HashMap<TypeVar, Type>, Vec<InferenceError>> {
+
         let fresh_l = self.fresh();
         let subs_l = self.infer_expression(l, &fresh_l)?;
         self.extend_type_environment(&subs_l);
@@ -558,15 +558,15 @@ impl InferencerState<'_> {
         let subs_e = map_unify(loc.clone(), unify(&substitute(&subs_l, l_type), &substitute(&subs_r, r_type)))?;
         self.extend_type_environment(&subs_e);
 
-        map_unify(loc.clone(), unify(&type_transformer(l_type, r_type), expected_type))
+        map_unify(loc.clone(), unify(&type_transformer(name, l_type, r_type), expected_type))
     }
 
     fn infer_expression(&mut self, e: &Expression, expected_type: &Type) -> Result<HashMap<TypeVar, Type>, Vec<InferenceError>> {
-        let static_type_combinator = |result_type: Type| |_ltype: &Type, _rtype: &Type| result_type;
-        let binary_number_type_combinator = |l_type: &Type, r_type: &Type| match (l_type, r_type) {
+        let static_type_combinator = |result_type: Type| |_, _ltype: &Type, _rtype: &Type| result_type;
+        let binary_number_type_combinator = |op: String, l_type: &Type, r_type: &Type| match (l_type, r_type) {
             (Type::Int, Type::Int) => Type::Int,
             (Type::Float, Type::Float) => Type::Float,
-            t => panic!("Unable to determine result type for *: {:#?}", t)
+            t => panic!("Unable to determine result type for operator '{}': {:#?}",op.clone(), t)
         };
         let res = match e {
             Expression::BoolLiteral(loc, _) => unifier::unify(&Type::Bool, &expected_type).map_err(|e| vec![InferenceError::from_loc(loc.clone(), e)])?,
@@ -598,49 +598,49 @@ impl InferencerState<'_> {
             }
 
             Expression::Times(loc, l, r)
-            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float], binary_number_type_combinator, expected_type)?,
+            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float], "*".to_string(), binary_number_type_combinator, expected_type)?,
 
             Expression::Divide(loc, l, r)
-            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float], binary_number_type_combinator, expected_type)?,
+            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float], "/".to_string(),binary_number_type_combinator, expected_type)?,
 
             Expression::Modulo(loc, l, r)
-            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float], binary_number_type_combinator, expected_type)?,
+            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float], "%".to_string(),binary_number_type_combinator, expected_type)?,
 
             Expression::Add(loc, l, r)
-            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float], binary_number_type_combinator, expected_type)?,
+            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float], "+".to_string(),binary_number_type_combinator, expected_type)?,
 
             Expression::Subtract(loc, l, r)
-            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float], binary_number_type_combinator, expected_type)?,
+            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float], "-".to_string(),binary_number_type_combinator, expected_type)?,
 
             Expression::ShiftLeft(loc, l, r)
-            => self.infer_binary_expression(loc, l, r, &vec![Type::Int], static_type_combinator(Type::Int), expected_type)?,
+            => self.infer_binary_expression(loc, l, r, &vec![Type::Int], "<<".to_string(), static_type_combinator(Type::Int), expected_type)?,
 
             Expression::ShiftRight(loc, l, r)
-            => self.infer_binary_expression(loc, l, r, &vec![Type::Int], static_type_combinator(Type::Int), expected_type)?,
+            => self.infer_binary_expression(loc, l, r, &vec![Type::Int], ">>".to_string(), static_type_combinator(Type::Int), expected_type)?,
 
             Expression::Greater(loc, l, r)
-            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float], static_type_combinator(Type::Bool), expected_type)?,
+            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float], ">".to_string(),static_type_combinator(Type::Bool), expected_type)?,
 
             Expression::Greq(loc, l, r)
-            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float], static_type_combinator(Type::Bool), expected_type)?,
+            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float], ">=".to_string(),static_type_combinator(Type::Bool), expected_type)?,
 
             Expression::Leq(loc, l, r)
-            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float], static_type_combinator(Type::Bool), expected_type)?,
+            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float], "<=".to_string(),static_type_combinator(Type::Bool), expected_type)?,
 
             Expression::Lesser(loc, l, r)
-            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float], static_type_combinator(Type::Bool), expected_type)?,
+            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float], "<".to_string(),static_type_combinator(Type::Bool), expected_type)?,
 
             Expression::Eq(loc, l, r)
-            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float, Type::String, Type::Char, Type::Bool], static_type_combinator(Type::Bool), expected_type)?,
+            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float, Type::String, Type::Char, Type::Bool], "==".to_string(),static_type_combinator(Type::Bool), expected_type)?,
 
             Expression::Neq(loc, l, r)
-            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float, Type::String, Type::Char, Type::Bool], static_type_combinator(Type::Bool), expected_type)?,
+            => self.infer_binary_expression(loc, l, r, &vec![Type::Int, Type::Float, Type::String, Type::Char, Type::Bool], "!=".to_string(),static_type_combinator(Type::Bool), expected_type)?,
 
             Expression::And(loc, l, r)
-            => self.infer_binary_expression(loc, l, r, &vec![Type::Bool], static_type_combinator(Type::Bool), expected_type)?,
+            => self.infer_binary_expression(loc, l, r, &vec![Type::Bool], "&&".to_string(),static_type_combinator(Type::Bool), expected_type)?,
 
             Expression::Or(loc, l, r)
-            => self.infer_binary_expression(loc, l, r, &vec![Type::Bool], static_type_combinator(Type::Bool), expected_type)?,
+            => self.infer_binary_expression(loc, l, r, &vec![Type::Bool], "||".to_string(),static_type_combinator(Type::Bool), expected_type)?,
 
             Expression::Variable(loc, name) => {
                 let variable_type = match self.local_type_context.get(name) {
