@@ -4,26 +4,25 @@
 id :: a -> a
 id a = a
 
-head :: [a] -> Maybe a
+head :: [a] -> (Maybe a)
 head [h:t] = Just h
 head _ = Nothing
 
-tail :: [a] -> Maybe [a]
+tail :: [a] -> (Maybe [a])
 tail [] = Nothing
 tail [h : t] = Just t
 
-map :: [a] -> [b]
+map :: [a] -> [a]
 map [] = []
 map [x:xs] = [x : map xs]
 
-int :: Maybe (Data Int) -> Int
+int :: (Maybe (Data Int)) -> Int
 int Nothing = 0
 int (Just {Data|value}) = value
 
-main :: [Data Int] -> Int
+main :: [(Data Int)] -> Int
 main d
 # data = head d
 = int data
 
-
-Main = filter_even [1, 2, 3, 4]
+Main = tail [1, 2, 3, 4]

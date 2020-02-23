@@ -62,11 +62,11 @@ string_type = {"String"}
 int_type = {"Int"}
 float_type = { "Float" }
 char_type = {"Char"}
-list_type = { "[" ~ loz_type_term ~ "]"}
+list_type = { "[" ~ loz_top_type ~ "]"}
 custom_type = { capital_identifier ~ loz_type_term*}
 custom_type_single = {capital_identifier}
 function_type = {
-    (loz_type_term ~ NEWLINE*)* ~ NEWLINE? ~ "->" ~ NEWLINE? ~ loz_type_term
+    (loz_type_term ~ NEWLINE*)* ~ NEWLINE? ~ "->" ~ NEWLINE? ~ (loz_type_term | custom_type)
 }
 
 tuple_type = { "(" ~ loz_type_term ~ ("," ~ loz_type_term)+ ~ ")" }

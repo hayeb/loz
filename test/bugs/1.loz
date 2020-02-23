@@ -1,4 +1,4 @@
-bug :: [a] -> [b]
+bug :: [a] -> [a]
 bug [] = []
 bug [x:xs] = [x : bug xs]
 
