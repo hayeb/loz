@@ -37,6 +37,7 @@ function_definition = {
 
 loz_top_type = _{
     function_type
+    | custom_type
     | loz_type_term
 }
 
@@ -45,12 +46,13 @@ loz_type_term = _{
     | string_type
     | int_type
     | char_type
-    | custom_type
+    | custom_type_single
     | tuple_type
     | list_type
     | type_variable
     | "(" ~ loz_type_term ~ ")"
     | "(" ~ function_type ~ ")"
+    | "(" ~ custom_type ~ ")"
 }
 
 type_variable = @{LOWERCASE_LETTER+}
@@ -62,6 +64,7 @@ float_type = { "Float" }
 char_type = {"Char"}
 list_type = { "[" ~ loz_type_term ~ "]"}
 custom_type = { capital_identifier ~ loz_type_term*}
+custom_type_single = {capital_identifier}
 function_type = {
     (loz_type_term ~ NEWLINE*)* ~ NEWLINE? ~ "->" ~ NEWLINE? ~ loz_type_term
 }
@@ -77,9 +80,9 @@ function_expression_rule = {NEWLINE* ~ "=" ~ expression}
 
 function_body = {
     function_header ~
-    (
-        function_let_rule* ~ function_conditional_rule* ~ function_let_rule* ~ function_expression_rule?
-    ) ~ NEWLINE+
+    (function_let_rule | function_conditional_rule)*
+    ~ function_expression_rule?
+    ~ NEWLINE+
 }
 
 function_conditional = {
@@ -237,15 +240,15 @@ adt_definition = {
     "::" ~ capital_identifier ~ adt_type_variables ~ "=" ~ NEWLINE? ~ adt_constructors ~ NEWLINE?
 }
     adt_type_variables = { identifier* }
-    adt_constructors = {adt_contructor ~ ("|" ~ adt_contructor)*}
-    adt_contructor = {capital_identifier ~ loz_top_type*}
+    adt_constructors = {adt_contructor ~ (NEWLINE* ~ "|" ~ adt_contructor)*}
+    adt_contructor = {capital_identifier ~ loz_type_term*}
 
 record_definition = {
     "::" ~ capital_identifier ~ record_type_variable ~ "=" ~ NEWLINE? ~ "{" ~ NEWLINE? ~ record_field_definitions ~ NEWLINE? ~ "}" ~ NEWLINE?
 }
     record_type_variable = { identifier* }
     record_field_definitions = { record_field_definition ~ (NEWLINE? ~ "," ~ NEWLINE? ~ record_field_definition)*}
-    record_field_definition = { identifier ~ "::" ~ loz_top_type }
+    record_field_definition = { identifier ~ "::" ~ loz_type_term* }
 
 type_definition = {
     adt_definition

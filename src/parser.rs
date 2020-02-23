@@ -352,6 +352,10 @@ fn build_line_start_cache(input: &str) -> Vec<usize> {
         previous_character = c;
     }
 
+    if previous_character != '\n' {
+        line_starts.push(start_current_line);
+    }
+
     line_starts
 }
 
@@ -662,6 +666,10 @@ fn to_type(pair: Pair<Rule>) -> Type {
         }
         Rule::list_type => {
             Type::List(Box::new(to_type(pair.into_inner().next().unwrap())))
+        }
+        Rule::custom_type_single => {
+            let name = pair.into_inner().next().unwrap().as_str().to_string();
+            Type::UserType(name, vec![])
         }
         Rule::custom_type => {
             //println!("custom_type {:#?}", pair);
