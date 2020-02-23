@@ -862,7 +862,31 @@ impl InferencerState<'_> {
 
                 map_unify(loc.clone(), unify(&result_type, &expected_type))?
             }
-            Expression::Case(loc, expression, rules) => panic!("case not implemented"),
+            Expression::Case(loc, expression, rules) => {
+                let fresh = self.fresh();
+                let subs = self.infer_expression(expression, &fresh)?;
+                self.extend_type_environment(&subs);
+
+                let mut match_type = substitute(&subs, &fresh);
+                let mut return_type = self.fresh();
+                println!("Case match type: {}", match_type);
+                println!("Case return type: {}", return_type);
+                for rule in rules {
+                    let subs = self.infer_match_expression(&rule.case_rule, &match_type)?;
+                    self.extend_type_environment(&subs);
+                    match_type = substitute(&subs, &match_type);
+
+                    let subs = self.infer_expression(&rule.result_rule, &return_type)?;
+                    self.extend_type_environment(&subs);
+                    return_type = substitute(&subs, &return_type);
+
+                    println!("Case match type: {}", match_type);
+                    println!("Case return type: {}", return_type);
+
+                }
+
+                map_unify(loc.clone(), unify(&return_type, &expected_type))?
+            }
         };
 
         Ok(res)
