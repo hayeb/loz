@@ -382,11 +382,9 @@ impl InferencerState<'_> {
             let subs = map_unify(body.location.clone(), unify(&Type::Function(current_match_types, Box::new(current_return_type)), &function_type))?;
             function_type = substitute(&subs, &function_type);
         }
-        println!("Inferred function '{}' type: {}", declaration.name, function_type);
         let generalized = self.generalize(function_type);
 
-        println!("Generalized type: {}", generalized);
-        println!("Declared type: {}", declaration.function_type);
+        println!("Derived type for function '{}': {}", declaration.name, generalized);
 
         let mut subs = HashMap::new();
         for v in generalized.bound_variables {
@@ -397,7 +395,6 @@ impl InferencerState<'_> {
 
         let subs = map_unify(declaration.location.clone(), unify(&rrr, &declaration.function_type.enclosed_type))?;
         let t = substitute(&subs, &rrr);
-        println!("Inferred type after unification: {}", t);
         if t != declaration.function_type.enclosed_type {
             Err(vec![InferenceError::from_loc(declaration.location.clone(), InferenceErrorType::UnificationError(declaration.function_type.enclosed_type.clone(), t.clone()))])
         } else {
