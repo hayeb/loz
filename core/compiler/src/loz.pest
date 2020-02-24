@@ -32,8 +32,42 @@ string_char = {
 }
 
 function_definition = {
-    PUSH(identifier) ~ NEWLINE* ~ "::" ~ NEWLINE* ~ loz_top_type ~ NEWLINE+ ~ function_body+
+        function_definition_with_type
+    |   function_definition_no_type
 }
+
+    function_definition_with_type = {
+        (PUSH(identifier) ~ NEWLINE* ~ "::" ~ NEWLINE* ~ loz_top_type ~ NEWLINE+ ~ function_body_with_type+)
+    }
+        function_body_with_type = {
+            function_header_with_type ~ function_body
+        }
+            function_header_with_type = ${ PEEK ~ (WHITESPACE+ ~ match_expression)*}
+
+    function_definition_no_type = {
+        function_body_no_type_first
+        ~ function_body_no_type_following*
+    }
+
+        function_body_no_type_first = {
+            function_header_no_type_first ~ function_body_no_type
+        }
+
+            function_body_no_type = {
+                function_body
+            }
+
+            function_header_no_type_first = {
+                PUSH(identifier) ~ match_expression*
+            }
+
+        function_body_no_type_following = {
+            function_header_no_type_following ~ function_body_no_type
+        }
+
+            function_header_no_type_following = {
+                PEEK ~ match_expression*
+            }
 
 loz_top_type = _{
     function_type
@@ -71,23 +105,21 @@ function_type = {
 
 tuple_type = { "(" ~ loz_type_term ~ ("," ~ loz_type_term)+ ~ ")" }
 
-function_header = ${ PEEK ~ (WHITESPACE+ ~ match_expression)*}
-function_let_rule = {NEWLINE ~ ( "let" | "#") ~ match_expression ~ "=" ~ expression}
-
-function_conditional_rule = { NEWLINE ~ function_conditional}
-
-function_expression_rule = {NEWLINE* ~ "=" ~ expression}
-
-function_body = {
-    function_header ~
+function_body = _{
     (function_let_rule | function_conditional_rule)*
-    ~ function_expression_rule?
-    ~ NEWLINE+
+        ~ function_expression_rule?
+        ~ NEWLINE+
 }
+    function_let_rule = {NEWLINE ~ ( "let" | "#") ~ match_expression ~ "=" ~ expression}
 
-function_conditional = {
-    "|" ~ expression ~ "=" ~ expression
-}
+    function_conditional_rule = { NEWLINE ~ function_conditional}
+        function_conditional = {
+            "|" ~ expression ~ "=" ~ expression
+        }
+
+    function_expression_rule = {NEWLINE* ~ "=" ~ expression}
+
+
 
 call = {
     identifier ~ function_argument+

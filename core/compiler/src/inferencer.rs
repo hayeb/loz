@@ -161,7 +161,8 @@ pub fn infer(ast: &AST) -> Result<TypedAST, Vec<InferenceError>> {
 
 fn build_function_scheme_cache(function_declarations: &Vec<FunctionDeclaration>) -> HashMap<String, TypeScheme> {
     function_declarations.iter()
-        .map(|d| (d.name.clone(), d.function_type.clone()))
+        .filter(|d| d.function_type.is_some())
+        .map(|d| (d.name.clone(), d.function_type.clone().unwrap()))
         .collect()
 }
 
@@ -393,10 +394,15 @@ impl InferencerState<'_> {
         }
         let rrr = substitute(&subs, &generalized.enclosed_type);
 
-        let subs = map_unify(declaration.location.clone(), unify(&rrr, &declaration.function_type.enclosed_type))?;
+        let declared_type = declaration.function_type.clone().unwrap_or_else(|| TypeScheme {
+            bound_variables: vec![].into_iter().collect(),
+            enclosed_type: self.fresh()
+        });
+
+        let subs = map_unify(declaration.location.clone(), unify(&rrr, &declared_type.enclosed_type))?;
         let t = substitute(&subs, &rrr);
-        if t != declaration.function_type.enclosed_type {
-            Err(vec![InferenceError::from_loc(declaration.location.clone(), InferenceErrorType::UnificationError(declaration.function_type.enclosed_type.clone(), t.clone()))])
+        if t != declared_type.enclosed_type {
+            Err(vec![InferenceError::from_loc(declaration.location.clone(), InferenceErrorType::UnificationError(declared_type.enclosed_type.clone(), t.clone()))])
         } else {
             Ok(HashMap::new())
         }
@@ -2302,11 +2308,11 @@ mod test {
                 ast.function_declarations = vec![FunctionDeclaration {
                     location: test_loc(1),
                     name: "f".to_string(),
-                    function_type: TypeScheme {
+                    function_type: Some(TypeScheme {
                         bound_variables: HashSet::new(),
                         enclosed_type:
                         Type::Function(vec![Type::String, Type::Int], Box::new(Type::Int)),
-                    },
+                    }),
                     function_bodies: vec![],
                 }];
 
@@ -2325,11 +2331,11 @@ mod test {
                 ast.function_declarations = vec![FunctionDeclaration {
                     location: test_loc(1),
                     name: "f".to_string(),
-                    function_type: TypeScheme {
+                    function_type: Some(TypeScheme {
                         bound_variables: HashSet::new(),
                         enclosed_type:
                         Type::Function(vec![Type::String, Type::Int], Box::new(Type::Int)),
-                    },
+                    }),
                     function_bodies: vec![],
                 }];
 
@@ -2349,7 +2355,7 @@ mod test {
                 ast.function_declarations = vec![FunctionDeclaration {
                     location: test_loc(1),
                     name: "f".to_string(),
-                    function_type: TypeScheme {
+                    function_type: Some(TypeScheme {
                         bound_variables: {
                             let mut set = HashSet::new();
                             set.insert("a".to_string());
@@ -2357,7 +2363,7 @@ mod test {
                         },
                         enclosed_type:
                         Type::Function(vec![Type::Variable("a".to_string()), Type::Variable("a".to_string())], Box::new(Type::Variable("a".to_string()))),
-                    },
+                    }),
                     function_bodies: vec![],
                 }];
 
@@ -2376,7 +2382,7 @@ mod test {
                 ast.function_declarations = vec![FunctionDeclaration {
                     location: test_loc(1),
                     name: "f".to_string(),
-                    function_type: TypeScheme {
+                    function_type: Some(TypeScheme {
                         bound_variables: {
                             let mut set = HashSet::new();
                             set.insert("a".to_string());
@@ -2384,7 +2390,7 @@ mod test {
                         },
                         enclosed_type:
                         Type::Function(vec![Type::Variable("a".to_string()), Type::Variable("a".to_string())], Box::new(Type::Variable("a".to_string()))),
-                    },
+                    }),
                     function_bodies: vec![],
                 }];
 
@@ -2403,7 +2409,7 @@ mod test {
                 ast.function_declarations = vec![FunctionDeclaration {
                     location: test_loc(1),
                     name: "f".to_string(),
-                    function_type: TypeScheme {
+                    function_type: Some(TypeScheme {
                         bound_variables: {
                             let mut set = HashSet::new();
                             set.insert("a".to_string());
@@ -2411,7 +2417,7 @@ mod test {
                         },
                         enclosed_type:
                         Type::Function(vec![Type::Variable("a".to_string()), Type::Variable("a".to_string())], Box::new(Type::Variable("a".to_string()))),
-                    },
+                    }),
                     function_bodies: vec![],
                 }];
 
