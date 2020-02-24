@@ -1,0 +1,262 @@
+WHITESPACE = _{ " " | "\t"}
+COMMENT = _{ ("/*" ~ (!"*/" ~ ANY)* ~ "*/") | "//" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
+
+number = @{
+      ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*)
+}
+
+float = @{ ASCII_DIGIT ~ "." ~ ASCII_DIGIT+ }
+
+identifier = @{
+    (LOWERCASE_LETTER | "_") ~ (LETTER | DECIMAL_NUMBER | "_" )*
+}
+
+capital_identifier = @{ UPPERCASE_LETTER ~ (LETTER | DECIMAL_NUMBER | "_")*}
+
+char_literal = @{
+    "'" ~ (CASED_LETTER | TITLECASE_LETTER) ~ "'"
+}
+
+string_literal = ${
+    "\"" ~ string_inner ~ "\""
+}
+
+string_inner = @{
+    string_char*
+}
+
+string_char = {
+    !("\"" | "\\") ~ ANY
+    | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
+    | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
+}
+
+function_definition = {
+    PUSH(identifier) ~ NEWLINE* ~ "::" ~ NEWLINE* ~ loz_top_type ~ NEWLINE+ ~ function_body+
+}
+
+loz_top_type = _{
+    function_type
+    | custom_type
+    | loz_type_term
+}
+
+loz_type_term = _{
+    bool_type
+    | string_type
+    | int_type
+    | char_type
+    | custom_type_single
+    | tuple_type
+    | list_type
+    | type_variable
+    | "(" ~ loz_type_term ~ ")"
+    | "(" ~ function_type ~ ")"
+    | "(" ~ custom_type ~ ")"
+}
+
+type_variable = @{LOWERCASE_LETTER+}
+
+bool_type = { "Bool"}
+string_type = {"String"}
+int_type = {"Int"}
+float_type = { "Float" }
+char_type = {"Char"}
+list_type = { "[" ~ loz_top_type ~ "]"}
+custom_type = { capital_identifier ~ loz_type_term*}
+custom_type_single = {capital_identifier}
+function_type = {
+    (loz_type_term ~ NEWLINE*)* ~ NEWLINE? ~ "->" ~ NEWLINE? ~ (loz_type_term | custom_type)
+}
+
+tuple_type = { "(" ~ loz_type_term ~ ("," ~ loz_type_term)+ ~ ")" }
+
+function_header = ${ PEEK ~ (WHITESPACE+ ~ match_expression)*}
+function_let_rule = {NEWLINE ~ ( "let" | "#") ~ match_expression ~ "=" ~ expression}
+
+function_conditional_rule = { NEWLINE ~ function_conditional}
+
+function_expression_rule = {NEWLINE* ~ "=" ~ expression}
+
+function_body = {
+    function_header ~
+    (function_let_rule | function_conditional_rule)*
+    ~ function_expression_rule?
+    ~ NEWLINE+
+}
+
+function_conditional = {
+    "|" ~ expression ~ "=" ~ expression
+}
+
+call = {
+    identifier ~ function_argument+
+}
+
+function_argument = {
+    simple_term
+    | identifier
+}
+
+simple_term = _{
+    bool_literal
+    | string_literal
+    | char_literal
+    | float
+    | number
+    | subexpr
+    | negation
+    | minus
+    | tuple_literal
+    | list_literal
+    | record_term
+}
+
+minus = @{"-" ~ expression}
+
+term = {
+      simple_term
+    | case_expression
+    | adt_term
+    | call // Function call
+    | identifier // Variable reference
+}
+
+case_expression = {
+    "case" ~ function_argument ~ "of"~ NEWLINE
+        ~ case_expression_rule
+        ~ ("," ~ NEWLINE ~ case_expression_rule)*
+}
+
+case_expression_rule = {
+    match_expression ~ "=>" ~ expression
+}
+
+adt_term = { capital_identifier ~ expression*}
+record_term = {"{" ~ capital_identifier ~ "|" ~ NEWLINE? ~ record_field_term ~ NEWLINE? ~ ("," ~ NEWLINE? ~ record_field_term)* ~ NEWLINE? ~ "}"}
+    record_field_term = {identifier ~ "=" ~ expression}
+
+tuple_literal = !{ "(" ~ NEWLINE* ~ expression ~ NEWLINE* ~ ("," ~ NEWLINE* ~ expression)+ ~ NEWLINE* ~ ")" }
+list_literal = _{ list_empty
+    | list_singleton
+    | list_shorthand
+    | list_longhand
+}
+
+list_empty = {"[]"}
+list_singleton = {"[" ~ NEWLINE* ~ expression ~ NEWLINE* ~ "]"}
+list_shorthand = {"[" ~ NEWLINE* ~ expression ~ NEWLINE* ~ ("," ~ NEWLINE* ~ expression)* ~ NEWLINE* ~ "]"}
+list_longhand = {"[" ~ NEWLINE* ~ expression ~ NEWLINE* ~ ":" ~ NEWLINE* ~ expression ~ NEWLINE* ~ "]"}
+
+bool_literal = { "false" | "true" }
+subexpr = { "(" ~ expression ~ ")" }
+negation = { "!" ~ expression }
+
+expression = {
+    term ~ (operation ~ term)*
+}
+
+match_expression = !{
+    match_term
+}
+
+match_wildcard = { "_" }
+
+match_term = _{
+    list_match
+    | tuple_match
+    | sub_match
+    | adt_match
+    | record_match
+    | identifier
+    | number
+    | char_literal
+    | string_literal
+    | bool_literal
+    | match_wildcard
+}
+
+tuple_match = {
+    "(" ~ match_term ~ ("," ~ match_term)+ ~ ")"
+}
+
+list_match = _{
+    list_match_empty
+    | list_match_singleton
+    | list_match_shorthand
+    | list_match_longhand
+}
+
+sub_match = {"(" ~ match_term ~ ")"}
+adt_match = { capital_identifier |
+    "(" ~ capital_identifier ~ (match_term)* ~ ")" }
+record_match = {"{" ~ capital_identifier ~ "|"  ~ identifier ~ ("," ~ identifier)* ~ "}"}
+
+list_match_empty = { "[]" }
+list_match_singleton = { "[" ~ match_term ~ "]" }
+list_match_shorthand = { "[" ~ match_term ~ ("," ~ match_term)+ ~ "]" }
+list_match_longhand = { "[" ~ match_term ~ ":" ~ match_term ~ "]" }
+
+operation = _{
+    times | divide | modulo
+
+    | add | substract
+    | shift_left | shift_right
+
+    | lesser | leq | greater | greq
+
+    | eq | neq
+
+    | and
+
+    | or
+
+    }
+
+    times = {"*"}
+    divide = {"/"}
+    modulo = {"%"}
+
+    add = {"+"}
+    substract = {"-"}
+
+    shift_left = {"<<"}
+    shift_right = {">>"}
+
+    lesser = {"<"}
+    leq = {"<="}
+    greater = {">"}
+    greq = {">="}
+
+    eq = {"=="}
+    neq = {"!="}
+
+    and = {"&&"}
+    or = {"||"}
+
+main = {"Main" ~ "=" ~ expression }
+
+adt_definition = {
+    "::" ~ capital_identifier ~ adt_type_variables ~ "=" ~ NEWLINE? ~ adt_constructors ~ NEWLINE?
+}
+    adt_type_variables = { identifier* }
+    adt_constructors = {adt_contructor ~ (NEWLINE* ~ "|" ~ adt_contructor)*}
+    adt_contructor = {capital_identifier ~ loz_type_term*}
+
+record_definition = {
+    "::" ~ capital_identifier ~ record_type_variable ~ "=" ~ NEWLINE? ~ "{" ~ NEWLINE? ~ record_field_definitions ~ NEWLINE? ~ "}" ~ NEWLINE?
+}
+    record_type_variable = { identifier* }
+    record_field_definitions = { record_field_definition ~ (NEWLINE? ~ "," ~ NEWLINE? ~ record_field_definition)*}
+    record_field_definition = { identifier ~ "::" ~ loz_type_term* }
+
+type_definition = {
+    adt_definition
+    | record_definition
+}
+
+ast = {
+   SOI ~  NEWLINE* ~ ((function_definition | type_definition) ~ NEWLINE?)* ~ NEWLINE* ~ main ~ NEWLINE* ~ EOI
+}
+
+

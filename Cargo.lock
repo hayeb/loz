@@ -35,6 +35,13 @@ version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
+name = "cli"
+version = "0.1.0"
+dependencies = [
+ "loz_compiler 0.1.0",
+]
+
+[[package]]
 name = "digest"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -69,7 +76,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "loz"
+name = "loz_compiler"
 version = "0.1.0"
 dependencies = [
  "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",

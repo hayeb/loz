@@ -4,7 +4,7 @@ use std::iter;
 
 use crate::inferencer::substitutor::{substitute, substitute_list};
 use crate::inferencer::unifier::{unify, unify_one_of};
-use crate::parser::{ADTConstructor, ADTDefinition, AST, CustomType, Expression, FunctionDeclaration, FunctionRule, Location, MatchExpression, RecordDefinition, Type, TypeScheme, TypeVar};
+use crate::parser::*;
 
 mod unifier;
 mod substitutor;
@@ -122,7 +122,7 @@ impl Iterator for VariableNameStream {
     fn next(&mut self) -> Option<Self::Item> {
         let i = self.n;
         self.n += 1;
-        Some(i.to_string())
+        Some(format!("v{}", i.to_string()))
     }
 }
 
@@ -284,10 +284,6 @@ impl InferencerState<'_> {
         Type::Variable(self.type_variable_iterator.next().unwrap())
     }
 
-    fn fresh_variable(&mut self) -> String {
-        self.type_variable_iterator.next().unwrap()
-    }
-
     fn extend_type_environment(&mut self, with: &HashMap<TypeVar, Type>) {
         self.local_type_context = self.local_type_context.iter()
             .map(|(n, t)| (n.clone(), substitutor::substitute(with, &t)))
@@ -319,18 +315,13 @@ impl InferencerState<'_> {
         Ok((&self).ast.clone())
     }
 
+    fn generalize(&self, t: Type) -> TypeScheme {
+        let free = t.collect_free_type_variables();
+
+        TypeScheme {bound_variables: free, enclosed_type : t}
+    }
+
     fn infer_function_declaration(&mut self, declaration: &FunctionDeclaration) -> Result<HashMap<TypeVar, Type>, Vec<InferenceError>> {
-        let function_type_scheme = &declaration.function_type;
-        let mut instantiated_variables = HashMap::new();
-        let mut type_variable_to_bound_variable = HashMap::new();
-        for ts in &function_type_scheme.bound_variables {
-            let fresh = self.fresh_variable();
-            instantiated_variables.insert(ts.clone(), Type::Variable(fresh.clone()));
-            type_variable_to_bound_variable.insert(fresh.clone(), Type::Variable(ts.clone()));
-        }
-
-        let mut instantiated_function_type = substitute(&instantiated_variables, &function_type_scheme.enclosed_type);
-
         /*
             f :: a a -> a
 
@@ -340,6 +331,7 @@ impl InferencerState<'_> {
             g n [h:t] default = g (n - 1) t default
 
         */
+        let mut function_type = self.fresh();
         for body in (&declaration.function_bodies).into_iter() {
             let mut current_match_types = Vec::new();
             let mut current_return_type = self.fresh();
@@ -355,10 +347,13 @@ impl InferencerState<'_> {
                     FunctionRule::ConditionalRule(_loc, condition, expression) => {
                         let subs = self.infer_expression(&condition, &Type::Bool)?;
                         self.extend_type_environment(&subs);
+                        current_match_types = substitute_list(&subs, &current_match_types);
+                        current_return_type = substitute(&subs, &current_return_type);
 
                         let subs = self.infer_expression(&expression, &current_return_type)?;
                         self.extend_type_environment(&subs);
                         current_return_type = substitute(&subs, &current_return_type);
+                        current_match_types = substitute_list(&subs, &current_match_types);
                     }
                     FunctionRule::ExpressionRule(_loc, expression) => {
                         let subs = self.infer_expression(&expression, &current_return_type)?;
@@ -371,22 +366,40 @@ impl InferencerState<'_> {
                         let fresh = self.fresh();
                         let subs = self.infer_match_expression(&match_expression, &fresh)?;
                         self.extend_type_environment(&subs);
+                        current_match_types = substitute_list(&subs, &current_match_types);
+                        current_return_type = substitute(&subs, &current_return_type);
 
                         let subs = self.infer_expression(&expression, &substitute(&subs, &fresh))?;
                         self.extend_type_environment(&subs);
+                        current_match_types = substitute_list(&subs, &current_match_types);
+                        current_return_type = substitute(&subs, &current_return_type);
                     }
                 }
             }
 
             self.local_type_context.clear();
 
-            let subs = map_unify(body.location.clone(), unify(&Type::Function(current_match_types, Box::new(current_return_type)), &instantiated_function_type))?;
-            instantiated_function_type = substitute(&subs, &instantiated_function_type);
+            let subs = map_unify(body.location.clone(), unify(&Type::Function(current_match_types, Box::new(current_return_type)), &function_type))?;
+            function_type = substitute(&subs, &function_type);
         }
+        println!("Inferred function '{}' type: {}", declaration.name, function_type);
+        let generalized = self.generalize(function_type);
 
-        let derived_type = substitute(&type_variable_to_bound_variable, &instantiated_function_type);
-        if derived_type != function_type_scheme.enclosed_type {
-            Err(vec![InferenceError::from_loc(declaration.location.clone(), InferenceErrorType::UnificationError(derived_type.clone(), function_type_scheme.enclosed_type.clone()))])
+        println!("Generalized type: {}", generalized);
+        println!("Declared type: {}", declaration.function_type);
+
+        let mut subs = HashMap::new();
+        for v in generalized.bound_variables {
+            let fresh = self.fresh();
+            subs.insert(v, fresh);
+        }
+        let rrr = substitute(&subs, &generalized.enclosed_type);
+
+        let subs = map_unify(declaration.location.clone(), unify(&rrr, &declaration.function_type.enclosed_type))?;
+        let t = substitute(&subs, &rrr);
+        println!("Inferred type after unification: {}", t);
+        if t != declaration.function_type.enclosed_type {
+            Err(vec![InferenceError::from_loc(declaration.location.clone(), InferenceErrorType::UnificationError(declaration.function_type.enclosed_type.clone(), t.clone()))])
         } else {
             Ok(HashMap::new())
         }
@@ -401,7 +414,6 @@ impl InferencerState<'_> {
 
             MatchExpression::Identifier(_, name) => {
                 self.local_type_context.insert(name.clone(), expected_type.clone());
-                println!("infer_match_expression - identifier - Record {} with type {:?}", name, expected_type);
                 HashMap::new()
             }
 
@@ -484,10 +496,8 @@ impl InferencerState<'_> {
                 map_unify(loc.clone(), unify(&Type::UserType(adt_definition.name.clone(), concrete_types), expected_type))?
             }
             MatchExpression::ShorthandList(loc, elements) => {
-                println!("infer_match_expression - ShorthandList({:?}) with type {:?}", elements, expected_type);
                 let mut element_type = self.fresh();
                 let mut union_subs = HashMap::new();
-                println!("infer_match_expression - Fresh type: {:?}", element_type);
                 for e in elements {
                     let subs = self.infer_match_expression(e, &element_type)?;
                     self.extend_type_environment(&subs);
@@ -2094,7 +2104,7 @@ mod test {
                 assert!(result.is_ok());
                 let result = result.unwrap();
                 assert!(result.contains_key("a"));
-                assert_eq!(&Type::UserType("TEST".to_string(), vec![Type::Bool, Type::Variable("2".to_string())]), result.get("a").unwrap());
+                assert_eq!(&Type::UserType("TEST".to_string(), vec![Type::Bool, Type::Variable("v2".to_string())]), result.get("a").unwrap());
             }
 
             /*
@@ -2126,7 +2136,7 @@ mod test {
                 assert!(result.is_ok());
                 let result = result.unwrap();
                 assert!(result.contains_key("a"));
-                assert_eq!(&Type::UserType("TEST".to_string(), vec![Type::Variable("1".to_string()), Type::String]), result.get("a").unwrap());
+                assert_eq!(&Type::UserType("TEST".to_string(), vec![Type::Variable("v1".to_string()), Type::String]), result.get("a").unwrap());
             }
 
             /*

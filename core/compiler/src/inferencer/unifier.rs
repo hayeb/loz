@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::inferencer::InferenceErrorType;
-use crate::parser::Type;
+use crate::parser::{Type};
 use crate::inferencer::substitutor::substitute;
 
 pub fn unify(a: &Type, b: &Type) -> Result<HashMap<String, Type>, InferenceErrorType> {

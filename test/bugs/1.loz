@@ -1,5 +1,0 @@
-bug :: [a] -> [a]
-bug [] = []
-bug [x:xs] = [x : bug xs]
-
-Main = bug [1, 2, 3]

@@ -1,14 +1,8 @@
 use std::{fs, env, process};
 
-mod parser;
-mod interpreter;
-mod inferencer;
-
-#[macro_use]
-extern crate pest_derive;
-
-#[macro_use]
-extern crate lazy_static;
+use loz_compiler::parser;
+use loz_compiler::inferencer;
+use loz_compiler::interpreter;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -38,8 +32,8 @@ fn main() {
         process::exit(1);
     }
 
-   let result = interpreter::interpret(&inference_result.unwrap());
-   if let Err(e) = result {
-       eprintln!("Runtime error: {:?}",e)
-   }
+    let result = interpreter::interpret(&inference_result.unwrap());
+    if let Err(e) = result {
+        eprintln!("Runtime error: {:?}",e)
+    }
 }

@@ -1,0 +1,11 @@
+pow3 :: (Int, Int) -> Int
+pow3 bn
+# (b, n) = bn
+| n == 0 = 1
+| n == 1 = b
+= b * pow3 (b, n - 1)
+
+not :: Bool -> Bool
+not b = ! b
+
+Main = pow3 (1, 2)

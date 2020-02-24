@@ -1,0 +1,5 @@
+f :: [a] b -> [a]
+f [] _ = []
+f [x : xs] b = [x : f xs 18]
+
+Main = f [1, 2, 3] "srtr"

@@ -1,0 +1,6 @@
+f :: [a] [b] -> [(a, b)]
+f [] _ = []
+f _ [] = []
+f [a : as] [b : bs] = [(a, b) : f a b]
+
+Main = f ["String", "Strang", "Strung"] [2, 3, 4]
