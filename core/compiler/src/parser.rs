@@ -90,7 +90,11 @@ pub struct TypeScheme {
 
 impl Display for TypeScheme {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(f, "∀{}: {}", self.bound_variables.iter().cloned().collect::<Vec<String>>().join(" "), self.enclosed_type)
+        if self.bound_variables.len() > 0 {
+            write!(f, "∀{}: {}", self.bound_variables.iter().cloned().collect::<Vec<String>>().join(" "), self.enclosed_type)
+        } else {
+            write!(f, "{}", self.enclosed_type)
+        }
     }
 }
 
@@ -336,9 +340,7 @@ lazy_static! {
 
 pub fn parse(file_name: &String, input: &str) -> Result<AST, Error<Rule>> {
     let ast = LOZParser::parse(Rule::ast, input)?.next().unwrap();
-    //println!("Raw AST: {:#?}", ast);
     let line_starts = build_line_start_cache(input);
-    //println!("line starts {:?}", line_starts);
     Ok(to_ast(ast, file_name, &line_starts))
 }
 
@@ -452,14 +454,12 @@ fn to_function_declaration(file_name: &String, pair: Pair<Rule>, line_starts: &V
     let rule = pair.into_inner().next().unwrap();
     match rule.as_rule() {
         Rule::function_definition_no_type => {
-            println!("to_function_declaration no type {:#?}", rule);
             let mut name = "".to_string();
             let mut bodies = vec![];
 
             for pair in rule.into_inner() {
                 match pair.as_rule() {
                     Rule::function_body_no_type_first => {
-                        println!("BLABLA: {:#?}", pair);
                         name = pair.clone().into_inner().next().unwrap().into_inner().next().unwrap().as_str().to_string();
                         bodies.push(to_function_body(file_name, &name, pair, line_starts))
                     }
@@ -610,7 +610,6 @@ fn to_function_type(pair: Pair<Rule>) -> Type {
 }
 
 fn to_function_body(file_name: &String, function_name: &String, pair: Pair<Rule>, line_starts: &Vec<usize>) -> FunctionBody {
-    println!("to_function_body {:#?}", pair);
     let (line, col) = line_col_number(line_starts, pair.as_span().start());
 
     match pair.as_rule() {
@@ -662,7 +661,6 @@ fn to_function_body(file_name: &String, function_name: &String, pair: Pair<Rule>
 }
 
 fn to_function_rule(pair: Pair<Rule>, file_name: &String, function_name: &String, line_starts: &Vec<usize>) -> FunctionRule {
-    println!("to_function_rule {:?}", pair);
     match pair.as_rule() {
         Rule::function_conditional_rule => {
             let pair = pair.into_inner().next().unwrap();
@@ -745,7 +743,6 @@ fn to_type(pair: Pair<Rule>) -> Type {
             Type::UserType(name, vec![])
         }
         Rule::custom_type => {
-            //println!("custom_type {:#?}", pair);
             let mut elements = pair.into_inner();
             let name = elements.next().unwrap().as_str().to_string();
 

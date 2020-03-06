@@ -1,19 +1,5 @@
-map [] _ = []
-map [a:as] f = [f a : map as]
+fac 0  = 1
+fac 1 = 1
+fac n = n * fac (n - 1)
 
-filter [] = []
-filter [a : as] f
-| f a = filter as
-= [a : filter as]
-
-flatten :: [[a]] -> [a]
-flatten [] = []
-flatten [ [] : ll] = flatten [l : ll]
-flatten [ [l : ll] : lll] = [l : flatten [ll : lll]]
-
-main list
-# flattened = flatten list
-# inc = map inc flattened
-= filter is_even inc
-
-Main = main [[1,2, 3], [4, 5 ,6]]
+Main = fac 15

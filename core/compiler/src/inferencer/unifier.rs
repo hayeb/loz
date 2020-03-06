@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::inferencer::InferenceErrorType;
 use crate::parser::{Type};
-use crate::inferencer::substitutor::substitute;
+use crate::inferencer::substitutor::{substitute_type};
 
 pub fn unify(a: &Type, b: &Type) -> Result<HashMap<String, Type>, InferenceErrorType> {
     //println!("unify - {:?} with {:?}", a, b);
@@ -71,7 +71,7 @@ fn unify_types(a_types: &Vec<Type>, b_types: &Vec<Type>) -> Result<HashMap<Strin
     //println!("unifier - unify_types - {:?} with {:?}", a_types, b_types);
     let mut unifiers = HashMap::new();
     for (a_argument_type, b_argument_type) in a_types.iter().zip(b_types.iter()) {
-        let u = unify(&substitute(&unifiers, a_argument_type), &substitute(&unifiers, b_argument_type))?;
+        let u = unify(&substitute_type(&unifiers, a_argument_type), &substitute_type(&unifiers, b_argument_type))?;
         //println!("unifier - unify_types - New subs {:?}", u);
         unifiers.extend(u);
     }
@@ -83,7 +83,7 @@ fn unify_functions(a_arguments: &Vec<Type>, a_result: &Type, b_arguments: &Vec<T
     let mut argument_unifiers = unify_types(a_arguments, b_arguments)?;
     //println!("unify_functions - Argument unifiers {:?}", argument_unifiers);
 
-    let result_unifiers = unify(&substitute(&argument_unifiers, a_result), &substitute(&argument_unifiers, b_result))?;
+    let result_unifiers = unify(&substitute_type(&argument_unifiers, a_result), &substitute_type(&argument_unifiers, b_result))?;
     //println!("unify_functions - Result unifiers {:?}", result_unifiers);
     argument_unifiers.extend(result_unifiers);
     //println!("unify_functions - All unifiers {:?}", argument_unifiers);

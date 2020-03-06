@@ -1,0 +1,5 @@
+flatten []                  = []
+flatten [[] : xxs]          = flatten xxs
+flatten [[x : xs] : xxs]   = [x : flatten [xs : xxs]]
+
+Main = flatten [[1, 2, 3], [4, 5, 6]]

@@ -1,0 +1,6 @@
+// This is accepted, but causes stack overflows..
+f a = g a
+
+g a = f a
+
+Main = f 18

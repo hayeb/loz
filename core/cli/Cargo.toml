@@ -8,3 +8,7 @@ edition = "2018"
 
 [dependencies]
 loz_compiler = {version = "0.1.0", path="../compiler"}
+
+[[bin]]
+name = "cloc"
+path = "src/main.rs"
