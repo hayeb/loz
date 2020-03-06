@@ -14,11 +14,6 @@ fn test_err_files() -> Result<(), io::Error> {
     compile_files("tests/programs/err", |res| res.is_err())
 }
 
-#[test]
-fn test_bug_files() -> Result<(), io::Error> {
-    compile_files("tests/programs/bug", |res| res.is_ok())
-}
-
 fn compile_files(dir: &str, f: impl Fn (Result<TypedAST, Vec<InferenceError>>) -> bool) -> Result<(), io::Error>{
     let r = fs::read_dir(dir)?;
     for entry in r {

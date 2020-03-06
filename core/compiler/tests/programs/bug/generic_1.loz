@@ -1,6 +1,0 @@
-f :: [bla] [blie] -> [(bla, blie)]
-f [] _ = []
-f _ [] = []
-f [a : as] [b : bs] = [(a, b) : f a b]
-
-Main = 18

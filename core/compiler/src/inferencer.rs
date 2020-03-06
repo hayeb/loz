@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Error, Formatter};
 use std::iter;
 
-use crate::inferencer::substitutor::{substitute_list, substitute_type};
+use crate::inferencer::substitutor::{substitute_list, substitute_type, substitute};
 use crate::inferencer::unifier::{unify, unify_one_of};
 use crate::parser::*;
 
@@ -310,8 +310,9 @@ impl InferencerState<'_> {
             // Generalize all declarations in a component
             for d in component {
                 let derived_scheme = (&self.global_type_context).get(&d.name).unwrap();
+                println!("Derived scheme for function '{}': {}", d.name.clone(), derived_scheme);
                 let generalized_scheme = self.generalize(derived_scheme.enclosed_type.clone());
-                println!("Derived scheme for function '{}': {}", d.name.clone(), generalized_scheme);
+                println!("Generalized scheme for function '{}': {}", d.name.clone(), generalized_scheme);
                 self.global_type_context.insert(d.name.clone(), generalized_scheme);
             }
         }
@@ -342,6 +343,7 @@ impl InferencerState<'_> {
     }
 
     fn infer_function_declaration(&mut self, declaration: &FunctionDeclaration) -> Result<HashMap<TypeVar, Type>, Vec<InferenceError>> {
+        println!("Global function before: {}", self.global_type_context.get(&declaration.name).unwrap());
         let mut function_type = self.fresh();
         let mut function_type_location_mutated = declaration.location.clone();
         for body in (&declaration.function_bodies).into_iter() {
@@ -350,7 +352,9 @@ impl InferencerState<'_> {
             for me in &body.match_expressions {
                 let fresh = self.fresh();
                 let subs = self.infer_match_expression(me, &fresh)?;
+                println!("Found type for match expression: {}", substitute_type(&subs, &fresh));
                 self.extend_type_environment(&subs);
+                current_match_types = substitute_list(&subs, &current_match_types);
                 current_match_types.push(substitute_type(&subs, &fresh));
             }
 
@@ -392,8 +396,8 @@ impl InferencerState<'_> {
             self.local_type_context.clear();
 
             let derived_function_type = Type::Function(current_match_types, Box::new(current_return_type));
-            //println!("Derived function type {}", derived_function_type);
-            //println!("Function type {}", function_type);
+            println!("Derived function type {}", derived_function_type);
+            println!("Function type {}", function_type);
 
             match unify(&derived_function_type, &function_type) {
                 Ok(subs) => {
@@ -403,23 +407,33 @@ impl InferencerState<'_> {
                         function_type_location_mutated = body.location.clone();
                     }
                     function_type = new_function_type;
+                    println!("Found new function type: {}", function_type);
+                    println!("Global function type after: {}", self.global_type_context.get(&declaration.name).unwrap());
                 }
                 Err(_) => return Err(vec![InferenceError::from_loc(body.location.clone(), InferenceErrorType::FunctionDerivedTypeMismatch(function_type, derived_function_type.clone(), function_type_location_mutated.clone()))]),
             }
         }
 
         if let Some(declared_scheme) = &declaration.function_type {
-            let derived_scheme = &self.global_type_context.get(&declaration.name).unwrap();
+            let mut derived_scheme = self.global_type_context.get(&declaration.name).unwrap().clone();
+
+            println!("Derived scheme: {}", derived_scheme);
+
+            let subs = map_unify(declaration.location.clone(), unify(&derived_scheme.enclosed_type, &function_type))?;
+            self.extend_type_environment(&subs);
+            derived_scheme = substitute(&subs, &derived_scheme);
+            println!("Subs 1: {:?}", subs);
 
             // 1. Unify derived type with declared type
             let subs = map_unify(declaration.location.clone(), unify(&derived_scheme.enclosed_type, &declared_scheme.enclosed_type))?;
-            //println!("Subs 1: {:?}", subs);
+            self.extend_type_environment(&subs);
+            println!("Subs 2: {:?}", subs);
 
             let substituted_type = substitute_type(&subs, &declared_scheme.enclosed_type);
-            //println!("Declared type with substitutions: {}", substituted_type);
+            println!("Declared type with substitutions: {}", substituted_type);
 
             let declared_substituted_scheme = TypeScheme { bound_variables: declared_scheme.bound_variables.clone(), enclosed_type: substituted_type.clone() };
-            //println!("Declared scheme: {}", declared_substituted_scheme);
+            println!("Declared scheme: {}", declared_substituted_scheme);
 
             if &declared_substituted_scheme != declared_scheme {
                 return Err(vec![InferenceError::from_loc(declaration.location.clone(), InferenceErrorType::FunctionDeclaredTypeMismatch(declared_scheme.enclosed_type.clone(), substituted_type.clone()))]);
@@ -439,6 +453,7 @@ impl InferencerState<'_> {
             MatchExpression::BoolLiteral(loc, _) => map_unify(loc.clone(), unify(&Type::Bool, expected_type))?,
 
             MatchExpression::Identifier(_, name) => {
+                println!("Adding identifier {} to local context with type {}", name, expected_type);
                 self.local_type_context.insert(name.clone(), expected_type.clone());
                 HashMap::new()
             }
@@ -466,14 +481,20 @@ impl InferencerState<'_> {
                 self.extend_type_environment(&head_subs);
 
                 let head_type = substitute_type(&head_subs, &fresh_head);
+                println!("Found head type: {}", head_type);
 
                 let tail_subs = self.infer_match_expression(tail, &Type::List(Box::new(head_type.clone())))?;
                 self.extend_type_environment(&tail_subs);
-                map_unify(loc.clone(), unify(&substitute_type(&tail_subs, &Type::List(Box::new(head_type))), &expected_type))
-                    .map(|mut r| {
-                        r.extend(head_subs);
-                        r.extend(tail_subs);
-                        r
+
+                let tail_type = substitute_type(&tail_subs, &Type::List(Box::new(head_type)));
+                println!("Found tail type: {}", tail_type);
+                map_unify(loc.clone(), unify(&tail_type, &expected_type))
+                    .map(|r| {
+                        let mut nr = HashMap::new();
+                        nr.extend(head_subs);
+                        nr.extend(tail_subs);
+                        nr.extend(r);
+                        nr
                     })?
             }
             MatchExpression::ADT(loc, constructor_name, constructor_arguments) => {
@@ -752,14 +773,19 @@ impl InferencerState<'_> {
                 self.extend_type_environment(&head_subs);
 
                 let head_type = substitute_type(&head_subs, &fresh);
+                println!("Found longhand list literal head type: {}", head_type);
                 let tail_subs = self.infer_expression(&tail, &Type::List(Box::new(head_type.clone())))?;
                 self.extend_type_environment(&tail_subs);
 
-                map_unify(loc.clone(), unify(&Type::List(Box::new(substitute_type(&tail_subs, &head_type.clone()))), expected_type))
-                    .map(|mut r| {
-                        r.extend(head_subs);
-                        r.extend(tail_subs);
-                        r
+                let tail_type = Type::List(Box::new(substitute_type(&tail_subs, &head_type.clone())));
+                println!("Found longhand list literal tail type: {}", tail_type);
+                map_unify(loc.clone(), unify(&tail_type, expected_type))
+                    .map(|r| {
+                        let mut nr = HashMap::new();
+                        nr.extend(head_subs);
+                        nr.extend(tail_subs);
+                        nr.extend(r);
+                        nr
                     })?
             }
             Expression::ADTTypeConstructor(loc, name, arguments) => {
@@ -907,27 +933,43 @@ impl InferencerState<'_> {
                 };
 
                 let instantiated_function_type = self.instantiate(&function_type);
+                println!("Call instantiated function type: {}", instantiated_function_type);
 
                 // f :: v0 v0 -> v0
                 let mut argument_types = Vec::new();
-                let mut argument_locations = Vec::new();
+                let mut arg_subs = HashMap::new();
                 for a in arguments {
                     let fresh = self.fresh();
                     let subs = self.infer_expression(&a, &fresh)?;
+                    println!("Argument subs: {:?}", subs);
                     self.extend_type_environment(&subs);
+                    arg_subs.extend(subs.clone());
+                    argument_types = substitute_list(&subs, &argument_types);
                     argument_types.push(substitute_type(&subs, &fresh));
-                    argument_locations.push(a.locate());
                 }
+
+                println!("Call argument types: {}", argument_types.iter().map(|t| t.to_string()).collect::<Vec<String>>().join(", "));
 
                 // FIXME: This reports the wrong error location. Check if instantiated_function_type
                 //        is a function, then we can report better errors.. Otherwise we report the error
                 //        of unifying the two whole types like now.
                 let fresh_result = self.fresh();
-                let subs = map_unify(loc.clone(), unify(&Type::Function(argument_types, Box::new(fresh_result.clone())), &instantiated_function_type))?;
-                self.extend_type_environment(&subs);
-                let result_type = substitute_type(&subs, &fresh_result.clone());
+                let result_subs = map_unify(loc.clone(), unify(&Type::Function(argument_types, Box::new(fresh_result.clone())), &instantiated_function_type))?;
+                println!("Total subs: {:?}", result_subs);
+                self.extend_type_environment(&result_subs);
+                let result_type = substitute_type(&result_subs, &fresh_result.clone());
 
-                map_unify(loc.clone(), unify(&result_type, &expected_type))?
+                println!("Call expected type: {}", expected_type);
+
+                map_unify(loc.clone(), unify(&result_type, &expected_type))
+                    .map(|s| {
+                        println!("Result type subs: {:?}", s);
+                        let mut ns = HashMap::new();
+                        ns.extend(arg_subs);
+                        ns.extend(result_subs);
+                        ns.extend(s);
+                        ns
+                })?
             }
             Expression::Case(loc, expression, rules) => {
                 let fresh = self.fresh();
