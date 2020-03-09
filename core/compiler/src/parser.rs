@@ -42,7 +42,7 @@ pub struct FunctionBody {
 
 pub type TypeVar = String;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Type {
     Bool,
     Char,

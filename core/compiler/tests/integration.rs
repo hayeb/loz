@@ -23,8 +23,9 @@ fn compile_files(dir: &str, f: impl Fn (Result<TypedAST, Vec<InferenceError>>) -
             continue;
         }
 
+        println!("### Compiling program {}...", path.clone().to_str().unwrap());
         let res = compile_file(path.clone());
-        println!("{}: Result {:?}", path.clone().to_str().unwrap(), res);
+        println!("### {}: Result {:?}", path.clone().to_str().unwrap(), res);
         assert!(f(res))
     }
     Ok(())
