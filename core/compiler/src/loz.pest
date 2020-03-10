@@ -57,16 +57,16 @@ function_definition = {
                 function_body
             }
 
-            function_header_no_type_first = {
-                PUSH(identifier) ~ match_expression*
+            function_header_no_type_first = ${
+                PUSH(identifier) ~ (WHITESPACE+ ~match_expression)*
             }
 
         function_body_no_type_following = {
             function_header_no_type_following ~ function_body_no_type
         }
 
-            function_header_no_type_following = {
-                PEEK ~ match_expression*
+            function_header_no_type_following = ${
+                PEEK ~ (WHITESPACE+ ~ match_expression)*
             }
 
 loz_top_type = _{

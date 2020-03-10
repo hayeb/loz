@@ -24,6 +24,7 @@ fn main() {
     }
 
     let ast = ast.unwrap();
+    println!("Parsed AST: {:#?}", ast);
     let inference_result = inferencer::infer(&ast);
     if let Err(err) = inference_result {
         err.into_iter().for_each(|e| eprintln!("{}", e));

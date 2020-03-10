@@ -1,0 +1,7 @@
+:: R = { t :: Int }
+
+g {R|t} = t
+
+f x = 18 * g x
+
+Main = f {R|t = 9}

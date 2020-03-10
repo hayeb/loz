@@ -12,7 +12,7 @@ use Expression::StringLiteral;
 
 use crate::parser::Expression::*;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Location {
     pub file: String,
     pub function: String,
@@ -269,6 +269,67 @@ impl Expression {
             Or(loc, _, _) => loc.clone(),
         }
     }
+
+    fn expressions_referred_functions(es: &Vec<Expression>) -> HashSet<(String, Location)> {
+        es.iter().flat_map(|e| e.function_references()).collect()
+    }
+
+    pub fn dual_referred_functions(l: &Expression, r: &Expression) -> HashSet<(String, Location)> {
+        let mut lrf = l.function_references();
+        lrf.extend(r.function_references());
+        lrf
+    }
+
+    pub fn function_references(&self) -> HashSet<(String, Location)> {
+        match self {
+            Expression::BoolLiteral(_, _) => HashSet::new(),
+            Expression::StringLiteral(_, _) => HashSet::new(),
+            Expression::CharacterLiteral(_, _) => HashSet::new(),
+            Expression::IntegerLiteral(_, _) => HashSet::new(),
+            Expression::FloatLiteral(_, _) => HashSet::new(),
+            Expression::TupleLiteral(_, expressions) => Expression::expressions_referred_functions(expressions),
+            Expression::EmptyListLiteral(_) => HashSet::new(),
+            Expression::ShorthandListLiteral(_, expressions) => Expression::expressions_referred_functions(expressions),
+            Expression::LonghandListLiteral(_, e1, e2) => Expression::dual_referred_functions(e1, e2),
+            Expression::ADTTypeConstructor(_, _, expressions) => Expression::expressions_referred_functions(expressions),
+            Expression::Record(_, _, expressions) => Expression::expressions_referred_functions(&expressions.into_iter().map(|(_, e)| e.clone()).collect()),
+            Expression::Case(_, e, rules) => {
+                let mut fs: HashSet<(String, Location)> = e.function_references();
+
+                for r in rules {
+                    for fref in &r.result_rule.function_references() {
+                        fs.insert(fref.clone());
+                    }
+                }
+
+                fs
+            }
+            Expression::Call(loc, f, expressions) => {
+                let mut fs = HashSet::new();
+                fs.insert((f.clone(), loc.clone()));
+                fs.extend(Expression::expressions_referred_functions(&expressions));
+                fs
+            }
+            Expression::Variable(_, _) => HashSet::new(),
+            Expression::Negation(_, e) => e.function_references(),
+            Expression::Minus(_, e) => e.function_references(),
+            Expression::Times(_, l, r) => Expression::dual_referred_functions(l, r),
+            Expression::Divide(_, l, r) => Expression::dual_referred_functions(l, r),
+            Expression::Modulo(_, l, r) => Expression::dual_referred_functions(l, r),
+            Expression::Add(_, l, r) => Expression::dual_referred_functions(l, r),
+            Expression::Subtract(_, l, r) => Expression::dual_referred_functions(l, r),
+            Expression::ShiftLeft(_, l, r) => Expression::dual_referred_functions(l, r),
+            Expression::ShiftRight(_, l, r) => Expression::dual_referred_functions(l, r),
+            Expression::Greater(_, l, r) => Expression::dual_referred_functions(l, r),
+            Expression::Greq(_, l, r) => Expression::dual_referred_functions(l, r),
+            Expression::Leq(_, l, r) => Expression::dual_referred_functions(l, r),
+            Expression::Lesser(_, l, r) => Expression::dual_referred_functions(l, r),
+            Expression::Eq(_, l, r) => Expression::dual_referred_functions(l, r),
+            Expression::Neq(_, l, r) => Expression::dual_referred_functions(l, r),
+            Expression::And(_, l, r) => Expression::dual_referred_functions(l, r),
+            Expression::Or(_, l, r) => Expression::dual_referred_functions(l, r),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -473,7 +534,7 @@ fn to_function_declaration(file_name: &String, pair: Pair<Rule>, line_starts: &V
                 location: Location { file: file_name.clone(), function: name.to_string(), line, col },
                 name,
                 function_type: None,
-                function_bodies: bodies
+                function_bodies: bodies,
             }
         }
         Rule::function_definition_with_type => {
@@ -621,7 +682,7 @@ fn to_function_body(file_name: &String, function_name: &String, pair: Pair<Rule>
             for me in match_parent.into_inner() {
                 if let Rule::identifier = me.as_rule() {
                     // When the function declaration has not type, the first of the match expressions is the name of the function.
-                    continue
+                    continue;
                 }
                 match_expressions.push(to_match_expression(me.into_inner().next().unwrap(), file_name, function_name, line_starts));
             }
@@ -637,7 +698,7 @@ fn to_function_body(file_name: &String, function_name: &String, pair: Pair<Rule>
             for me in match_parent.into_inner() {
                 if let Rule::identifier = me.as_rule() {
                     // When the function declaration has not type, the first of the match expressions is the name of the function.
-                    continue
+                    continue;
                 }
                 match_expressions.push(to_match_expression(me.into_inner().next().unwrap(), file_name, function_name, line_starts));
             }

@@ -1,0 +1,6 @@
+:: T = T Int
+g (T i) = i
+
+f x = 18 * g x
+
+Main = f (T 9)
