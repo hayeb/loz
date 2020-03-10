@@ -237,20 +237,27 @@ fn check_function_calls_defined(ast: &AST, defined_functions: &HashSet<String>) 
     let mut errors = Vec::new();
     for d in &ast.function_declarations {
         for b in &d.function_bodies {
+            let mut defined_variables = HashSet::new();
+
+            for me in &b.match_expressions {
+                defined_variables.extend(me.variables());
+            }
             for r in &b.rules {
                 match r {
                     FunctionRule::ConditionalRule(_, cond, result) => {
-                        errors.extend(cond.function_references().into_iter().filter(|(name, _)| !defined_functions.contains(name))
+                        errors.extend(cond.function_references().into_iter().filter(|(name, _)| !defined_functions.contains(name) && !defined_variables.contains(name))
                             .map(|(name, loc)| InferenceError::from_loc(loc, InferenceErrorType::UndefinedFunction(name.clone()))));
-                        errors.extend(result.function_references().into_iter().filter(|(name, _)| !defined_functions.contains(name))
+                        errors.extend(result.function_references().into_iter().filter(|(name, _)| !defined_functions.contains(name) && !defined_variables.contains(name))
                             .map(|(name, loc)| InferenceError::from_loc(loc, InferenceErrorType::UndefinedFunction(name.clone()))));
                     }
                     FunctionRule::ExpressionRule(_, expression) => {
-                        errors.extend(expression.function_references().into_iter().filter(|(name, _)| !defined_functions.contains(name))
+                        errors.extend(expression.function_references().into_iter().filter(|(name, _)| !defined_functions.contains(name) && !defined_variables.contains(name))
                             .map(|(name, loc)| InferenceError::from_loc(loc, InferenceErrorType::UndefinedFunction(name.clone()))));
                     }
-                    FunctionRule::LetRule(_, _, expression) => {
-                        errors.extend(expression.function_references().into_iter().filter(|(name, _)| !defined_functions.contains(name))
+                    FunctionRule::LetRule(_, match_expression, expression) => {
+                        defined_variables.extend(match_expression.variables());
+
+                        errors.extend(expression.function_references().into_iter().filter(|(name, _)| !defined_functions.contains(name) && !defined_variables.contains(name))
                             .map(|(name, loc)| InferenceError::from_loc(loc, InferenceErrorType::UndefinedFunction(name.clone()))));
                     }
                 }
@@ -428,7 +435,8 @@ impl InferencerState<'_> {
                         current_match_types = substitute_list(&subs, &current_match_types);
                         current_return_type = substitute_type(&subs, &current_return_type);
 
-                        let subs = self.infer_expression(&expression, &substitute_type(&subs, &fresh))?;
+                        let rhs_type = substitute_type(&subs, &fresh);
+                        let subs = self.infer_expression(&expression, &rhs_type)?;
                         self.extend_type_environment(&subs);
                         current_match_types = substitute_list(&subs, &current_match_types);
                         current_return_type = substitute_type(&subs, &current_return_type);
@@ -695,7 +703,6 @@ impl InferencerState<'_> {
 
             Expression::Negation(loc, e) => {
                 let subs = self.infer_expression(e, &Type::Bool)?;
-                println!("Negation subs: {:?}", subs);
                 self.extend_type_environment(&subs);
                 map_unify(loc.clone(), unify(&Type::Bool, expected_type))
                     .map(|rs| {
@@ -1023,9 +1030,12 @@ impl InferencerState<'_> {
                     })?
             }
             Expression::Call(loc, name, arguments) => {
-                let function_type = match self.global_type_context.get(name) {
-                    None => return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::UndefinedFunction(name.clone()))]),
-                    Some(ft) => ft.clone(),
+                let function_type = match self.local_type_context.get(name) {
+                    None => match self.global_type_context.get(name) {
+                        Some(t) => t.clone(),
+                        None => return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::UndefinedFunction(name.clone()))])
+                    },
+                    Some(ft) => TypeScheme { bound_variables: HashSet::new(), enclosed_type: ft.clone() },
                 };
 
                 let instantiated_function_type = self.instantiate(&function_type);
@@ -1078,6 +1088,34 @@ impl InferencerState<'_> {
                 }
 
                 map_unify(loc.clone(), unify(&return_type, &expected_type))?
+            }
+            Expression::Lambda(loc, arguments, body) => {
+                let mut argument_types = Vec::new();
+                let mut union_subs = Vec::new();
+                for a in arguments {
+                    let fresh = self.fresh();
+                    let subs = self.infer_match_expression(a, &fresh)?;
+                    self.extend_type_environment(&subs);
+                    let match_type = substitute_type(&subs, &fresh);
+                    union_subs.extend(subs.clone());
+                    argument_types = substitute_list(&subs, &argument_types);
+                    argument_types.push(match_type);
+                }
+
+                let fresh = self.fresh();
+                let subs = self.infer_expression(body, &fresh)?;
+                self.extend_type_environment(&subs);
+                let return_type = substitute_type(&subs, &fresh);
+                argument_types = substitute_list(&subs, &argument_types);
+
+                map_unify(loc.clone(), unify(&Type::Function(argument_types, Box::new(return_type)), &expected_type))
+                    .map(|rs| {
+                        let mut ns = Vec::new();
+                        ns.extend(union_subs);
+                        ns.extend(subs);
+                        ns.extend(rs);
+                        ns
+                    })?
             }
         };
 
@@ -2194,12 +2232,12 @@ mod test {
             use super::*;
 
             /*
-                        Tests the following code:
+                                                Tests the following code:
 
-                        :: Test = A Bool | B Int
+                                                :: Test = A Bool | B Int
 
-                        Is "A true" valid?
-                        */
+                                                Is "A true" valid?
+                                                */
             #[test]
             fn test_infer_adt_1() {
                 let mut ast = test_ast();

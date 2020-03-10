@@ -233,6 +233,8 @@ pub enum Expression {
     Or(Location, Box<Expression>, Box<Expression>),
 
     RecordFieldAccess(Location, Box<Expression>, Box<Expression>),
+
+    Lambda(Location, Vec<MatchExpression>, Box<Expression>),
 }
 
 impl Expression {
@@ -270,6 +272,7 @@ impl Expression {
             And(loc, _, _) => loc.clone(),
             Or(loc, _, _) => loc.clone(),
             RecordFieldAccess(loc, _, _) => loc.clone(),
+            Lambda(loc, _, _) => loc.clone(),
         }
     }
 
@@ -332,6 +335,11 @@ impl Expression {
             Expression::And(_, l, r) => Expression::dual_referred_functions(l, r),
             Expression::Or(_, l, r) => Expression::dual_referred_functions(l, r),
             Expression::RecordFieldAccess(_, l, r ) => Expression::dual_referred_functions(l, r),
+            Expression::Lambda(_, arguments, e) => {
+                let fs = e.function_references();
+                // TODO: Remove introduced identifiers by lambda arguments
+                fs
+            }
         }
     }
 }
@@ -374,6 +382,27 @@ impl MatchExpression {
             MatchExpression::Record(loc, _, _) => loc.clone(),
         }
     }
+
+    pub fn variables(&self) -> HashSet<String> {
+        match self {
+            MatchExpression::IntLiteral(_, _) => HashSet::new(),
+            MatchExpression::CharLiteral(_, _) => HashSet::new(),
+            MatchExpression::StringLiteral(_, _) => HashSet::new(),
+            MatchExpression::BoolLiteral(_, _) => HashSet::new(),
+            MatchExpression::Identifier(_, id) => vec![id.clone()].into_iter().collect(),
+            MatchExpression::Tuple(_, elements) => elements.into_iter().flat_map(|e| e.variables().into_iter()).collect(),
+            MatchExpression::ShorthandList(_, elements) =>  elements.into_iter().flat_map(|e| e.variables().into_iter()).collect(),
+            MatchExpression::LonghandList(_, h, t) => {
+                let mut vars = HashSet::new();
+                vars.extend(h.variables());
+                vars.extend(t.variables());
+                vars
+            },
+            MatchExpression::Wildcard(_) => HashSet::new(),
+            MatchExpression::ADT(_, _, elements) =>  elements.into_iter().flat_map(|e| e.variables().into_iter()).collect(),
+            MatchExpression::Record(_, _, fields) => fields.into_iter().cloned().collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -406,6 +435,7 @@ lazy_static! {
 
 pub fn parse(file_name: &String, input: &str) -> Result<AST, Error<Rule>> {
     let ast = LOZParser::parse(Rule::ast, input)?.next().unwrap();
+    println!("Raw AST: {:#?}", ast);
     let line_starts = build_line_start_cache(input);
     Ok(to_ast(ast, file_name, &line_starts))
 }
@@ -663,6 +693,12 @@ fn to_term(pair: Pair<Rule>, file_name: &String, function_name: &String, line_st
 
             Record(loc_info, record_name, field_expressions)
         }
+        Rule::lambda => {
+            let mut elements = sub.into_inner();
+            let argument_match_expressions : Vec<MatchExpression> = elements.next().unwrap().into_inner().map(|me| to_match_expression(me.into_inner().next().unwrap(), file_name, function_name, line_starts)).collect();
+            let body = to_expression(elements.next().unwrap(), file_name, function_name, line_starts);
+            Lambda(loc_info, argument_match_expressions, Box::new(body))
+        }
 
         r => panic!("Reached term {:#?}", r),
     }
@@ -693,7 +729,9 @@ fn to_function_body(file_name: &String, function_name: &String, pair: Pair<Rule>
                 match_expressions.push(to_match_expression(me.into_inner().next().unwrap(), file_name, function_name, line_starts));
             }
 
-            let function_rules = parents.map(|b| to_function_rule(b.into_inner().next().unwrap(), file_name, function_name, line_starts)).collect();
+            println!("Parents: {:#?}", parents);
+
+            let function_rules = parents.next().unwrap().into_inner().map(|b| to_function_rule(b, file_name, function_name, line_starts)).collect();
             FunctionBody { location: Location { file: file_name.clone(), function: function_name.clone(), line, col }, match_expressions, rules: function_rules }
         }
         Rule::function_body_no_type_following => {

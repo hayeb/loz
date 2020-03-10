@@ -1,0 +1,8 @@
+test :: F -> Int
+test fr
+# ff = fr.f
+= ff 1 1
+
+:: F = { f :: (Int Int -> Int), s :: Int }
+
+Main = test {F|f = \x y. x * y, s = 0}

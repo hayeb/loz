@@ -1,10 +1,15 @@
 # LOZ
 
-A small, simple functional programming language. Loosely based on Clean/Haskell, because I like the syntax. The intention of this project is to get to know Rust, and to finally implement another version of a programming language without getting bogged down in code generation. The compiler is statically typed with support for type inference for let-bindings.
+A small, simple functional programming language. Loosely based on Clean/Haskell, because I like the syntax. 
+The intention of this project is to get to know Rust, and to finally implement another version of a programming language without getting bogged down in code generation.
+For now, there is a simple interpreter that directly executes the compiled Loz code.
+The compiler is statically typed with support for type inference in let-bindings.
 
 Does NOT support laziness and does NOT use graph/term rewriting as basis for evaluation. 
 
 ## TODO
+
+* Rename language?
 
 ### Features
 * Implement defining lambda functions and passing them around

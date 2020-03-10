@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt::{Display, Error, Formatter};
 
 use crate::interpreter::InterpreterError::{DivisionByZero, NoApplicableFunctionBody};
-use crate::parser::{Expression, FunctionBody, FunctionRule, MatchExpression};
+use crate::parser::{Expression, FunctionBody, FunctionRule, MatchExpression, FunctionDeclaration};
 use crate::inferencer::TypedAST;
 
 #[derive(Debug, Clone)]
@@ -59,6 +59,7 @@ pub enum Value {
     List(Vec<Value>),
     ADTValue(String, Vec<Value>),
     RecordValue(HashMap<String, Value>),
+    Lambda(Vec<MatchExpression>, Expression)
 }
 
 impl Display for Value {
@@ -80,6 +81,9 @@ impl Display for Value {
             }
             Value::RecordValue(fields) => {
                 write!(f, "{{{}}}", fields.iter().map(|(name, value)| format!("{} = {}", name, value)).collect::<Vec<String>>().join(", "))
+            }
+            Value::Lambda(args, body) => {
+                write!(f, "Lambda with {} args", args.len())
             }
         }
     }
@@ -242,13 +246,46 @@ fn evaluate(e: &Expression, ast: &TypedAST, state: &mut RunState) -> Result<Valu
             }
             unreachable!()
         },
+        Expression::Lambda(_,args,body) => Ok(Value::Lambda(args.clone(), *body.clone()))
     }
 }
 
 fn eval_function_call(f: &String, args: &Vec<Expression>, state: &mut RunState, ast: &TypedAST) -> Result<Value, InterpreterError> {
-    let declaration = ast.function_name_to_declaration.get(f).unwrap();
+    match ast.function_name_to_declaration.get(f) {
+        Some(d) => eval_declared_function(d, args, state, ast),
+        None => eval_lambda(f, state.retrieve_variable_value(f), args, state, ast)
+    }
+}
 
-    for body in &declaration.function_bodies {
+fn eval_lambda(f: &String, lambda: Value, args: &Vec<Expression>, state: &mut RunState, ast: &TypedAST) -> Result<Value, InterpreterError> {
+    match lambda {
+        Value::Lambda(match_expressions, body) => {
+            let mut body_frame = Frame::new();
+            let mut matches = true;
+            for (match_expression, value) in match_expressions.iter().zip(args.iter()) {
+                match collect_match_variables(match_expression, &evaluate(value, ast, state)?) {
+                    Ok(variables) => body_frame.variables.extend(variables),
+                    Err(InterpreterError::ExpressionDoesNotMatch(_, _)) => {
+                        matches = false;
+                        break;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            if matches {
+                state.frames.push(body_frame);
+                let result = evaluate(&body, ast, state);
+                state.frames.remove(state.frames.len() - 1);
+                return result;
+            }
+        }
+        _ => unreachable!(),
+    }
+    Err(InterpreterError::NoApplicableFunctionBody(f.clone()))
+}
+
+fn eval_declared_function(d: &FunctionDeclaration, args: &Vec<Expression>, state: &mut RunState, ast: &TypedAST) -> Result<Value, InterpreterError> {
+    for body in &d.function_bodies {
         let mut body_frame = Frame::new();
 
         let mut matches = true;
@@ -266,22 +303,20 @@ fn eval_function_call(f: &String, args: &Vec<Expression>, state: &mut RunState, 
         if matches {
             state.frames.push(body_frame);
 
-            let result = eval_function_body(f, &body, state, ast);
+            let result = eval_function_body(&d.name, &body, state, ast);
 
             state.frames.remove(state.frames.len() - 1);
             return result;
         }
     }
-    Err(NoApplicableFunctionBody(declaration.name.clone()))
+    Err(NoApplicableFunctionBody(d.name.clone()))
 }
 
 fn eval_function_body(name: &String, body: &FunctionBody, state: &mut RunState, ast: &TypedAST) -> Result<Value, InterpreterError> {
-    //println!("Evaluating function {:?} in {:?}", name, state.frames.last().unwrap());
 
     for rule in &body.rules {
         match rule {
             FunctionRule::ConditionalRule(_, condition_expression, result_expression) => {
-                //println!("Evaluating {:?} in {:?}", condition_expression, state);
                 if eval_bool(&condition_expression, ast, state)? {
                     return evaluate(&result_expression, ast, state);
                 }
@@ -292,7 +327,6 @@ fn eval_function_body(name: &String, body: &FunctionBody, state: &mut RunState, 
 
             FunctionRule::LetRule(_, match_expression, e) => {
                 let variables = collect_match_variables(match_expression, &evaluate(e, ast, state)?)?;
-
                 state.frames.last_mut().unwrap().variables.extend(variables);
             }
         }
@@ -302,7 +336,6 @@ fn eval_function_body(name: &String, body: &FunctionBody, state: &mut RunState, 
 }
 
 fn collect_match_variables(match_expression: &MatchExpression, evaluated_expression: &Value) -> Result<HashMap<String, Value>, InterpreterError> {
-    //println!("Collecting match variables match_expression '{:?}' value '{:?}'", match_expression, evaluated_expression);
     match (match_expression, evaluated_expression) {
         (MatchExpression::Identifier(_loc_info, identifier), value) => {
             let mut map = HashMap::new();
@@ -353,7 +386,6 @@ fn collect_match_variables(match_expression: &MatchExpression, evaluated_express
             Ok(map)
         }
         (MatchExpression::LonghandList(loc_info, head, tail), Value::List(values)) => {
-            //println!("Matching longhand list: [{:?} : {:?}] with value List({:?})", head, tail, values);
             if values.is_empty() {
                 return Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::LonghandList(loc_info.clone(), head.clone(), tail.clone()), Value::List(values.clone())));
             }

@@ -148,11 +148,16 @@ minus = @{"-" ~ expression}
 
 term = {
       simple_term
+    | lambda
     | case_expression
     | adt_term
     | call // Function call
     | identifier // Variable reference
 }
+
+lambda = { lambda_header ~ expression}
+
+    lambda_header = ${"\\" ~ WHITESPACE* ~ match_expression ~ (WHITESPACE* ~ match_expression)* ~ WHITESPACE* ~ "."}
 
 case_expression = {
     "case" ~ function_argument ~ "of"~ NEWLINE

@@ -40,15 +40,23 @@ pub fn to_components(ast: &AST) -> Vec<Vec<&FunctionDeclaration>> {
 fn declaration_referred_functions(d: &FunctionDeclaration) -> HashSet<(String, Location)> {
     let mut referred = HashSet::new();
 
+    let mut local_variables = HashSet::new();
+
     for b in &d.function_bodies {
+        for me in &b.match_expressions {
+            local_variables.extend(me.variables());
+        }
         for r in &b.rules {
            referred.extend(match r {
                 FunctionRule::ConditionalRule(_, cond, expr) => Expression::dual_referred_functions(cond, expr),
                 FunctionRule::ExpressionRule(_, expr) => expr.function_references(),
-                FunctionRule::LetRule(_, _, expr) => expr.function_references(),
+                FunctionRule::LetRule(_, match_expression, expr) => {
+                    local_variables.extend(match_expression.variables());
+                    expr.function_references()
+                },
             });
         }
     }
 
-    referred
+    referred.into_iter().filter(|(v, l)| !local_variables.contains(v)).collect()
 }
