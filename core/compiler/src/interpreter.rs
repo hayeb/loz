@@ -233,6 +233,15 @@ fn evaluate(e: &Expression, ast: &TypedAST, state: &mut RunState) -> Result<Valu
         Expression::Neq(_, e1, e2) => Ok(Value::Bool(evaluate(e1, ast, state)? != evaluate(e2, ast, state)?)),
         Expression::And(_, e1, e2) => Ok(Value::Bool(eval_bool(e1, ast, state)? && eval_bool(e2, ast, state)?)),
         Expression::Or(_, e1, e2) => Ok(Value::Bool(eval_bool(e1, ast, state)? || eval_bool(e2, ast, state)?)),
+        Expression::RecordFieldAccess(_, record_expression, field_accessor) => {
+            let record_value = evaluate(record_expression, ast, state)?;
+            if let Value::RecordValue(fields) = record_value {
+                if let Expression::Variable(_, field) = &**field_accessor {
+                   return  Ok(fields.get(field).unwrap().clone())
+                }
+            }
+            unreachable!()
+        },
     }
 }
 

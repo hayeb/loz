@@ -56,6 +56,9 @@ pub enum InferenceErrorType {
     UndefinedRecordFields(String, Vec<String>),
     MissingRecordFields(String, Vec<String>),
 
+    ExpectedRecordType(Type),
+    ExpectedRecordFieldAccessor(Type),
+
     UndefinedVariable(String),
 }
 
@@ -109,6 +112,12 @@ impl Display for InferenceError {
             InferenceErrorType::MissingRecordFields(name, missing_fields_values)
             => write!(f, "Fields [{}] are missing a value in record {}", missing_fields_values.join(","), name),
 
+            InferenceErrorType::ExpectedRecordType(got)
+            => write!(f, "Expected record type on LHS of '.', got {}", got),
+
+            InferenceErrorType::ExpectedRecordFieldAccessor(got)
+            => write!(f, "Expected record field accessor on RLHS of '.', got {}", got),
+
             InferenceErrorType::UndefinedVariable(name) => write!(f, "Variable {} is not defined", name)
         }
     }
@@ -146,10 +155,10 @@ struct InferencerState<'a> {
     local_type_context: HashMap<String, Type>,
 }
 
-pub fn infer(ast: &AST) -> Result<TypedAST, Vec<InferenceError>> {
+pub fn infer(ast: &AST, print_types: bool) -> Result<TypedAST, Vec<InferenceError>> {
     let mut infer_state = InferencerState::new(ast)?;
     let components = grapher::to_components(ast);
-    Ok(infer_state.infer(components, &ast.main)?)
+    Ok(infer_state.infer(components, &ast.main, print_types)?)
 }
 
 fn build_function_scheme_cache(function_declarations: &Vec<FunctionDeclaration>) -> HashMap<String, TypeScheme> {
@@ -203,7 +212,7 @@ impl InferencerState<'_> {
         let function_name_to_type = build_function_scheme_cache(&ast.function_declarations);
 
         // 3. Check whether all called functions are defined
-        let errors = check_function_calls_defined(ast, &ast.function_declarations.iter().map(|d|d.name.clone()).collect());
+        let errors = check_function_calls_defined(ast, &ast.function_declarations.iter().map(|d| d.name.clone()).collect());
 
         if errors.len() > 0 {
             return Err(errors);
@@ -235,15 +244,15 @@ fn check_function_calls_defined(ast: &AST, defined_functions: &HashSet<String>) 
                             .map(|(name, loc)| InferenceError::from_loc(loc, InferenceErrorType::UndefinedFunction(name.clone()))));
                         errors.extend(result.function_references().into_iter().filter(|(name, _)| !defined_functions.contains(name))
                             .map(|(name, loc)| InferenceError::from_loc(loc, InferenceErrorType::UndefinedFunction(name.clone()))));
-                    },
+                    }
                     FunctionRule::ExpressionRule(_, expression) => {
                         errors.extend(expression.function_references().into_iter().filter(|(name, _)| !defined_functions.contains(name))
                             .map(|(name, loc)| InferenceError::from_loc(loc, InferenceErrorType::UndefinedFunction(name.clone()))));
-                    },
+                    }
                     FunctionRule::LetRule(_, _, expression) => {
                         errors.extend(expression.function_references().into_iter().filter(|(name, _)| !defined_functions.contains(name))
                             .map(|(name, loc)| InferenceError::from_loc(loc, InferenceErrorType::UndefinedFunction(name.clone()))));
-                    },
+                    }
                 }
             }
         }
@@ -327,7 +336,7 @@ impl InferencerState<'_> {
             .collect();
     }
 
-    fn infer(&mut self, components: Vec<Vec<&FunctionDeclaration>>, main: &Expression) -> Result<TypedAST, Vec<InferenceError>> {
+    fn infer(&mut self, components: Vec<Vec<&FunctionDeclaration>>, main: &Expression, print_inferred_types: bool) -> Result<TypedAST, Vec<InferenceError>> {
         for component in &components {
             // Generate fresh variables for all declarations in a component
             for d in component.iter() {
@@ -345,7 +354,10 @@ impl InferencerState<'_> {
             for d in component {
                 let derived_scheme = (&self.global_type_context).get(&d.name).unwrap();
                 let generalized_scheme = self.generalize(derived_scheme.enclosed_type.clone());
-                println!("Type for function '{}': {}", d.name.clone(), generalized_scheme);
+
+                if print_inferred_types {
+                    println!("Type for function '{}': {}", d.name.clone(), generalized_scheme);
+                }
                 self.global_type_context.insert(d.name.clone(), generalized_scheme);
             }
         }
@@ -691,7 +703,6 @@ impl InferencerState<'_> {
                         ns.extend(subs);
                         ns.extend(rs);
                         ns
-
                     })?
             }
 
@@ -758,6 +769,39 @@ impl InferencerState<'_> {
 
             Expression::Or(loc, l, r)
             => self.infer_binary_expression(loc, l, r, &vec![Type::Bool], "||".to_string(), static_type_combinator(Type::Bool), expected_type)?,
+
+            Expression::RecordFieldAccess(loc, l, r) => {
+                let fresh = self.fresh();
+                let subs_lhs = self.infer_expression(l, &fresh)?;
+                self.extend_type_environment(&subs_lhs);
+
+                let lhs_type = substitute_type(&subs_lhs, &fresh);
+                let (name, arguments) = match lhs_type {
+                    Type::UserType(name, arguments) => (name, arguments),
+                    t => return Err(vec![InferenceError::from_loc(l.locate(), InferenceErrorType::ExpectedRecordType(t))])
+                };
+
+                let record_definition = match self.record_name_to_definition.get(&name) {
+                    Some(record_definition) => record_definition,
+                    None => return Err(vec![])
+                };
+
+                let field = match &**r {
+                    Expression::Variable(loc, field_name) => field_name,
+                    rhs => {
+                        let fresh = self.fresh();
+                        let subs = self.infer_expression(rhs, &fresh)?;
+                        return Err(vec![InferenceError::from_loc(rhs.locate(), InferenceErrorType::ExpectedRecordType(substitute_type(&subs, &fresh)))]);
+                    }
+                };
+
+                let field_type = match record_definition.fields.get(field) {
+                    Some(field_type) => field_type,
+                    None => return Err(vec![InferenceError::from_loc(r.locate(), InferenceErrorType::UndefinedRecordFields(record_definition.name.clone(), vec![field.clone()]))])
+                };
+
+                map_unify(loc.clone(), unify(&field_type, expected_type))?
+            }
 
             Expression::Variable(loc, name) => {
                 let variable_type = match self.local_type_context.get(name) {
@@ -2150,12 +2194,12 @@ mod test {
             use super::*;
 
             /*
-            Tests the following code:
+                        Tests the following code:
 
-            :: Test = A Bool | B Int
+                        :: Test = A Bool | B Int
 
-            Is "A true" valid?
-            */
+                        Is "A true" valid?
+                        */
             #[test]
             fn test_infer_adt_1() {
                 let mut ast = test_ast();

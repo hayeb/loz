@@ -243,6 +243,8 @@ operation = _{
 
     | or
 
+    | record_field_access
+
     }
 
     times = {"*"}
@@ -265,6 +267,8 @@ operation = _{
 
     and = {"&&"}
     or = {"||"}
+
+    record_field_access = {"."}
 
 main = {"Main" ~ "=" ~ expression }
 

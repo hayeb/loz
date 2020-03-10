@@ -7,19 +7,29 @@ Does NOT support laziness and does NOT use graph/term rewriting as basis for eva
 ## TODO
 
 ### Features
+* Implement defining lambda functions and passing them around
+    ```
+    map :: [a] (a -> b) -> [b]
+    map [] _ = []
+    map [b : bs] f = [f b : map bs f]
+  
+    Main = map [1, 2, 3] (\a. a + 1)
+  ```
+* Implement currying
+* Implement record field accessor operator ```.```
 * Implement tail call elimination (in interpreter?)
 * Implement interactive interpreter
     * Implement evaluating expression
     * Implement help
     * Global variables/state?
 * Implement type inference (Hindley-Milner probably)
-    * Can leave out type signatures for functions
+    * ✔ Can leave out type signatures for functions
     * More overloaded operators?
-    * Probaby also included type variables
+    * ✔ Probaby also included type variables
         ```shell script
         find :: [a] a -> Bool
         ```
-* Implement mutual recursion
+* ✔ Implement mutual recursion
     ```
     f :: Int -> Int
     f 0 = 0
@@ -44,6 +54,7 @@ Does NOT support laziness and does NOT use graph/term rewriting as basis for eva
 
 ### Technical improvements
 * Clean-up AST, should speed up parsing
+* Rework ```Main``` start rule, should be a normal function called ```main```
 * I'm using ```clone()``` more than I'd like, due to not bothering with lifetimes
 * Benchmark
 * Probably use different parser
@@ -54,7 +65,7 @@ Does NOT support laziness and does NOT use graph/term rewriting as basis for eva
 ## Usage
 The compiler supports reading code from a single file:
 ```shell script
-$ ./loz.exe test/test.loz
+$ cloz test/test.loz
 > Int(1)
 ```
 

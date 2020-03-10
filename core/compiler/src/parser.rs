@@ -231,6 +231,8 @@ pub enum Expression {
 
     And(Location, Box<Expression>, Box<Expression>),
     Or(Location, Box<Expression>, Box<Expression>),
+
+    RecordFieldAccess(Location, Box<Expression>, Box<Expression>),
 }
 
 impl Expression {
@@ -267,6 +269,7 @@ impl Expression {
             Neq(loc, _, _) => loc.clone(),
             And(loc, _, _) => loc.clone(),
             Or(loc, _, _) => loc.clone(),
+            RecordFieldAccess(loc, _, _) => loc.clone(),
         }
     }
 
@@ -328,6 +331,7 @@ impl Expression {
             Expression::Neq(_, l, r) => Expression::dual_referred_functions(l, r),
             Expression::And(_, l, r) => Expression::dual_referred_functions(l, r),
             Expression::Or(_, l, r) => Expression::dual_referred_functions(l, r),
+            Expression::RecordFieldAccess(_, l, r ) => Expression::dual_referred_functions(l, r),
         }
     }
 }
@@ -393,7 +397,8 @@ lazy_static! {
             Operator::new(Rule::lesser, Left) | Operator::new(Rule::leq, Left) | Operator::new(Rule::greater, Left) | Operator::new(Rule::greq, Left),
             Operator::new(Rule::shift_left, Left) | Operator::new(Rule::shift_right, Left),
             Operator::new(Rule::add, Left) | Operator::new(Rule::substract, Left),
-            Operator::new(Rule::times, Left) | Operator::new(Rule::divide, Left) | Operator::new(Rule::modulo, Left)
+            Operator::new(Rule::times, Left) | Operator::new(Rule::divide, Left) | Operator::new(Rule::modulo, Left),
+            Operator::new(Rule::record_field_access, Left)
         ])
     };
 }
@@ -585,6 +590,7 @@ fn to_expression(expression: Pair<Rule>, file_name: &String, function_name: &Str
 
                 Rule::and => And(loc_info, Box::new(lhs), Box::new(rhs)),
                 Rule::or => Or(loc_info, Box::new(lhs), Box::new(rhs)),
+                Rule::record_field_access => RecordFieldAccess(loc_info, Box::new(lhs), Box::new(rhs)),
                 r => panic!("Prec climber unhandled rule: {:#?}", r)
             }
         },
