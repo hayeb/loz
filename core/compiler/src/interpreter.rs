@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt::{Display, Error, Formatter};
 
 use crate::interpreter::InterpreterError::{DivisionByZero, NoApplicableFunctionBody};
-use crate::parser::{Expression, FunctionBody, FunctionRule, MatchExpression, FunctionDeclaration};
+use crate::{Expression, FunctionBody, FunctionRule, MatchExpression, FunctionDeclaration};
 use crate::inferencer::TypedAST;
 
 #[derive(Debug, Clone)]

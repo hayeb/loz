@@ -4,7 +4,8 @@ use std::iter;
 
 use crate::inferencer::substitutor::{substitute, substitute_list, substitute_type};
 use crate::inferencer::unifier::{unify, unify_one_of};
-use crate::parser::*;
+use crate::{AST, CustomType, ADTConstructor, Location, ADTDefinition, RecordDefinition, FunctionDeclaration, TypeScheme, Expression, CaseRule, MatchExpression, Type, FunctionBody, FunctionRule, TypeVar};
+use crate::Expression::*;
 
 mod unifier;
 mod substitutor;

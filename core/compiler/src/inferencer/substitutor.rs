@@ -1,4 +1,4 @@
-use crate::parser::{Type, TypeScheme, TypeVar};
+use crate::{Type, TypeScheme, TypeVar};
 
 pub fn substitute(substitutions: &Vec<(TypeVar, Type)>, target: &TypeScheme) -> TypeScheme {
     let bound_variables = &target.bound_variables;

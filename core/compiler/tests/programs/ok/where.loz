@@ -1,0 +1,19 @@
+// Calling g here: err
+
+f :: Int Int -> Int
+f 0 0 = 1
+f 0 1 = 2
+f x y = g x y
+where
+    // Calling z here: err
+    g 1 1 = 1
+    g 2 1 = 3
+    g x y = z x y
+    where
+        z 2 2 = 3455
+        z x y = x * x * y * y
+    .
+    // Calling z here: err
+.
+
+Main = f 2 2

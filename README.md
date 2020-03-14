@@ -12,7 +12,7 @@ Does NOT support laziness and does NOT use graph/term rewriting as basis for eva
 * Rename language?
 
 ### Features
-* Implement defining lambda functions and passing them around
+* ✔ Implement defining lambda functions and passing them around
     ```
     map :: [a] (a -> b) -> [b]
     map [] _ = []
@@ -21,7 +21,7 @@ Does NOT support laziness and does NOT use graph/term rewriting as basis for eva
     Main = map [1, 2, 3] (\a. a + 1)
   ```
 * Implement currying
-* Implement record field accessor operator ```.```
+* ✔ Implement record field accessor operator ```.```
 * Implement tail call elimination (in interpreter?)
 * Implement interactive interpreter
     * Implement evaluating expression
@@ -46,7 +46,7 @@ Does NOT support laziness and does NOT use graph/term rewriting as basis for eva
     ```
 * Implement reading code from multiple files
 * Implement simple module system
-    ```shell script
+    ```
     import lib/types.loz
   
     from lib/types.loz import Person

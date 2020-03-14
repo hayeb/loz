@@ -1,5 +1,5 @@
 use crate::inferencer::InferenceErrorType;
-use crate::parser::{Type, TypeVar};
+use crate::{Type, TypeVar};
 use crate::inferencer::substitutor::{substitute_type};
 
 pub fn unify(a: &Type, b: &Type) -> Result<Vec<(TypeVar, Type)>, InferenceErrorType> {
