@@ -1,13 +1,11 @@
 extern crate pest;
 
-use std::collections::{HashMap, HashSet};
-use std::fmt::{Display, Formatter};
-
 use pest::error::Error;
 use pest::iterators::Pair;
 use pest::Parser;
 use pest::prec_climber::*;
-use crate::{AST, CustomType, ADTConstructor, Location, ADTDefinition, RecordDefinition, FunctionDeclaration, TypeScheme, Expression, CaseRule, MatchExpression, Type, FunctionBody, FunctionRule};
+
+use crate::{ADTConstructor, ADTDefinition, AST, CaseRule, CustomType, Expression, FunctionBody, FunctionDeclaration, FunctionRule, Location, MatchExpression, RecordDefinition, Type, TypeScheme};
 use crate::Expression::*;
 
 #[derive(Parser)]

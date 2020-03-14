@@ -4,7 +4,7 @@ extern crate lazy_static;
 extern crate pest_derive;
 extern crate petgraph;
 
-use std::collections::{HashSet, HashMap};
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
 use crate::Expression::*;
@@ -337,7 +337,7 @@ impl Expression {
             Expression::And(_, l, r) => Expression::dual_referred_functions(l, r),
             Expression::Or(_, l, r) => Expression::dual_referred_functions(l, r),
             Expression::RecordFieldAccess(_, l, r) => Expression::dual_referred_functions(l, r),
-            Expression::Lambda(_, arguments, e) => {
+            Expression::Lambda(_, _, e) => {
                 let fs = e.function_references();
                 // TODO: Remove introduced identifiers by lambda arguments
                 fs

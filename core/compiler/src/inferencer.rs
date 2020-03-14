@@ -2,10 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Error, Formatter};
 use std::iter;
 
+use crate::{ADTDefinition, AST, CustomType, Expression, FunctionDeclaration, FunctionRule, Location, MatchExpression, RecordDefinition, Type, TypeScheme, TypeVar};
 use crate::inferencer::substitutor::{substitute, substitute_list, substitute_type};
 use crate::inferencer::unifier::{unify, unify_one_of};
-use crate::{AST, CustomType, ADTConstructor, Location, ADTDefinition, RecordDefinition, FunctionDeclaration, TypeScheme, Expression, CaseRule, MatchExpression, Type, FunctionBody, FunctionRule, TypeVar};
-use crate::Expression::*;
 
 mod unifier;
 mod substitutor;
@@ -784,7 +783,7 @@ impl InferencerState<'_> {
                 self.extend_type_environment(&subs_lhs);
 
                 let lhs_type = substitute_type(&subs_lhs, &fresh);
-                let (name, arguments) = match lhs_type {
+                let (name, _arguments) = match lhs_type {
                     Type::UserType(name, arguments) => (name, arguments),
                     t => return Err(vec![InferenceError::from_loc(l.locate(), InferenceErrorType::ExpectedRecordType(t))])
                 };
@@ -795,7 +794,7 @@ impl InferencerState<'_> {
                 };
 
                 let field = match &**r {
-                    Expression::Variable(loc, field_name) => field_name,
+                    Expression::Variable(_, field_name) => field_name,
                     rhs => {
                         let fresh = self.fresh();
                         let subs = self.infer_expression(rhs, &fresh)?;
@@ -2231,14 +2230,15 @@ mod test {
         #[cfg(test)]
         mod adt {
             use super::*;
+            use crate::ADTConstructor;
 
             /*
-                                                Tests the following code:
+                                                            Tests the following code:
 
-                                                :: Test = A Bool | B Int
+                                                            :: Test = A Bool | B Int
 
-                                                Is "A true" valid?
-                                                */
+                                                            Is "A true" valid?
+                                                            */
             #[test]
             fn test_infer_adt_1() {
                 let mut ast = test_ast();

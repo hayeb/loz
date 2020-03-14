@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Error, Formatter};
 
-use crate::interpreter::InterpreterError::{DivisionByZero, NoApplicableFunctionBody};
-use crate::{Expression, FunctionBody, FunctionRule, MatchExpression, FunctionDeclaration};
+use crate::{Expression, FunctionBody, FunctionDeclaration, FunctionRule, MatchExpression};
 use crate::inferencer::TypedAST;
+use crate::interpreter::InterpreterError::{DivisionByZero, NoApplicableFunctionBody};
 
 #[derive(Debug, Clone)]
 struct RunState {
@@ -59,7 +59,7 @@ pub enum Value {
     List(Vec<Value>),
     ADTValue(String, Vec<Value>),
     RecordValue(HashMap<String, Value>),
-    Lambda(Vec<MatchExpression>, Expression)
+    Lambda(Vec<MatchExpression>, Expression),
 }
 
 impl Display for Value {
@@ -82,7 +82,7 @@ impl Display for Value {
             Value::RecordValue(fields) => {
                 write!(f, "{{{}}}", fields.iter().map(|(name, value)| format!("{} = {}", name, value)).collect::<Vec<String>>().join(", "))
             }
-            Value::Lambda(args, body) => {
+            Value::Lambda(args, _) => {
                 write!(f, "Lambda with {} args", args.len())
             }
         }
@@ -241,12 +241,12 @@ fn evaluate(e: &Expression, ast: &TypedAST, state: &mut RunState) -> Result<Valu
             let record_value = evaluate(record_expression, ast, state)?;
             if let Value::RecordValue(fields) = record_value {
                 if let Expression::Variable(_, field) = &**field_accessor {
-                   return  Ok(fields.get(field).unwrap().clone())
+                    return Ok(fields.get(field).unwrap().clone());
                 }
             }
             unreachable!()
-        },
-        Expression::Lambda(_,args,body) => Ok(Value::Lambda(args.clone(), *body.clone()))
+        }
+        Expression::Lambda(_, args, body) => Ok(Value::Lambda(args.clone(), *body.clone()))
     }
 }
 
@@ -313,7 +313,6 @@ fn eval_declared_function(d: &FunctionDeclaration, args: &Vec<Expression>, state
 }
 
 fn eval_function_body(name: &String, body: &FunctionBody, state: &mut RunState, ast: &TypedAST) -> Result<Value, InterpreterError> {
-
     for rule in &body.rules {
         match rule {
             FunctionRule::ConditionalRule(_, condition_expression, result_expression) => {
@@ -407,7 +406,7 @@ fn collect_match_variables(match_expression: &MatchExpression, evaluated_express
             }
             Ok(variables)
         }
-        (MatchExpression::Record(_loc_info, _name , fields), Value::RecordValue(field_to_value)) => {
+        (MatchExpression::Record(_loc_info, _name, fields), Value::RecordValue(field_to_value)) => {
             Ok(fields.iter().map(|field| (field.clone(), field_to_value.get(field).unwrap().clone())).collect())
         }
         (MatchExpression::Wildcard(_loc_info), _type) => Ok(HashMap::new()),

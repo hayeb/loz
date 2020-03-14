@@ -1,6 +1,6 @@
-use crate::inferencer::InferenceErrorType;
 use crate::{Type, TypeVar};
-use crate::inferencer::substitutor::{substitute_type};
+use crate::inferencer::InferenceErrorType;
+use crate::inferencer::substitutor::substitute_type;
 
 pub fn unify(a: &Type, b: &Type) -> Result<Vec<(TypeVar, Type)>, InferenceErrorType> {
     match (a, b) {
@@ -81,7 +81,7 @@ fn unify_functions(a_arguments: &Vec<Type>, a_result: &Type, b_arguments: &Vec<T
 
     let mut subs = Vec::new();
     let mut a_result_type = a_result.clone();
-    let mut b_result_type= b_result.clone();
+    let mut b_result_type = b_result.clone();
     for (a_argument_type, b_argument_type) in a_arguments.iter().zip(b_arguments.iter()) {
         let new_subs = unify(&substitute_type(&subs, a_argument_type), &substitute_type(&subs, b_argument_type))
             .map_err(|_| InferenceErrorType::UnificationError(Type::Function(a_arguments.clone(), Box::new(a_result.clone())), Type::Function(b_arguments.clone(), Box::new(b_result.clone()))))?;

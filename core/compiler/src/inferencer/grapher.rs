@@ -1,4 +1,4 @@
-use std::collections::{HashSet, HashMap};
+use std::collections::{HashMap, HashSet};
 
 use petgraph::Graph;
 
@@ -25,15 +25,15 @@ pub fn to_components(ast: &AST) -> Vec<Vec<&FunctionDeclaration>> {
 
     let sccs = petgraph::algo::kosaraju_scc(&graph);
 
-    let function_name_to_declaration : HashMap<String, &FunctionDeclaration> = ast.function_declarations.iter()
+    let function_name_to_declaration: HashMap<String, &FunctionDeclaration> = ast.function_declarations.iter()
         .map(|d| (d.name.clone(), d))
         .collect();
 
     sccs.iter()
         .map(|scc|
-                scc.iter()
-                    .map(|n| *function_name_to_declaration.get(index_to_name.get(n).unwrap().clone()).unwrap())
-                    .collect())
+            scc.iter()
+                .map(|n| *function_name_to_declaration.get(index_to_name.get(n).unwrap().clone()).unwrap())
+                .collect())
         .collect()
 }
 
@@ -47,16 +47,16 @@ fn declaration_referred_functions(d: &FunctionDeclaration) -> HashSet<(String, L
             local_variables.extend(me.variables());
         }
         for r in &b.rules {
-           referred.extend(match r {
+            referred.extend(match r {
                 FunctionRule::ConditionalRule(_, cond, expr) => Expression::dual_referred_functions(cond, expr),
                 FunctionRule::ExpressionRule(_, expr) => expr.function_references(),
                 FunctionRule::LetRule(_, match_expression, expr) => {
                     local_variables.extend(match_expression.variables());
                     expr.function_references()
-                },
+                }
             });
         }
     }
 
-    referred.into_iter().filter(|(v, l)| !local_variables.contains(v)).collect()
+    referred.into_iter().filter(|(v, _)| !local_variables.contains(v)).collect()
 }

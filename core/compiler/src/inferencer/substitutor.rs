@@ -19,16 +19,16 @@ fn apply_substitution(v: &TypeVar, t: &Type, target: &Type) -> Type {
         Type::UserType(name, argument_types)
         => Type::UserType(name.clone(), argument_types.into_iter().map(|t| apply_substitution(v, t, target)).collect()),
 
-        Type::Tuple(element_types) => Type::Tuple(element_types.into_iter().map(|target| apply_substitution(v, t,target)).collect()),
+        Type::Tuple(element_types) => Type::Tuple(element_types.into_iter().map(|target| apply_substitution(v, t, target)).collect()),
         Type::List(element_type) => Type::List(Box::new(apply_substitution(v, t, element_type.clone().as_ref()))),
         Type::Variable(name) if name == v => t.clone(),
         Type::Variable(ref name) => Type::Variable(name.clone()),
 
         Type::Function(from_types, to_type)
         => Type::Function(from_types.into_iter()
-                .map(|ft| apply_substitution(v, t, ft))
-                .collect(),
-              Box::new(apply_substitution(v, t, to_type)))
+                              .map(|ft| apply_substitution(v, t, ft))
+                              .collect(),
+                          Box::new(apply_substitution(v, t, to_type)))
     }
 }
 
@@ -38,7 +38,6 @@ pub fn substitute_type(substitutions: &Vec<(TypeVar, Type)>, target: &Type) -> T
         result_type = apply_substitution(&v, &t, &result_type);
     }
     result_type
-
 }
 
 pub fn substitute_list(substitutions: &Vec<(TypeVar, Type)>, targets: &Vec<Type>) -> Vec<Type> {
