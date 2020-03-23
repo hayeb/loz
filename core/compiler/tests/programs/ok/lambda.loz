@@ -6,4 +6,4 @@ foldr :: (a b -> b) b [a] -> b
 foldr f start [] = start
 foldr f start [x:xs] = f x (foldr f start xs)
 
-Main = foldr (\x xs. x + xs) 0 [1, 2, 3, 4, 5]
+main = foldr (\x xs. x + xs) 0 [1, 2, 3, 4, 5]

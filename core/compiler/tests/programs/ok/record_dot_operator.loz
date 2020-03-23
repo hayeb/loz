@@ -1,6 +1,6 @@
 :: R = { a :: Int }
 :: S = { r :: R }
 
-build n = {S|r = {R| a = n}}
+build n = {S| r = {R| a = n}}
 
-Main = (build 18) . r . a + 18 * (build 2).r.a
+main = (build 18) . r . a + 18 * (build 2).r.a

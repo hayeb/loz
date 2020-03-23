@@ -3,4 +3,4 @@ f [] b = b
 f _ [] = []
 f a b = a
 
-Main = f [1] ['c']
+main = f [1] ['c']

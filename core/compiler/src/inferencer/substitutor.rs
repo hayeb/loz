@@ -17,7 +17,7 @@ fn apply_substitution(v: &TypeVar, t: &Type, target: &Type) -> Type {
         Type::Float => Type::Float,
 
         Type::UserType(name, argument_types)
-        => Type::UserType(name.clone(), argument_types.into_iter().map(|t| apply_substitution(v, t, target)).collect()),
+        => Type::UserType(name.clone(), argument_types.into_iter().map(|target| apply_substitution(v, t, target)).collect()),
 
         Type::Tuple(element_types) => Type::Tuple(element_types.into_iter().map(|target| apply_substitution(v, t, target)).collect()),
         Type::List(element_type) => Type::List(Box::new(apply_substitution(v, t, element_type.clone().as_ref()))),

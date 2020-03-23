@@ -1,5 +1,7 @@
 extern crate pest;
 
+use std::collections::HashMap;
+
 use pest::error::Error;
 use pest::iterators::Pair;
 use pest::Parser;
@@ -7,6 +9,9 @@ use pest::prec_climber::*;
 
 use crate::{ADTConstructor, ADTDefinition, AST, CaseRule, CustomType, Expression, FunctionBody, FunctionDeclaration, FunctionRule, Location, MatchExpression, RecordDefinition, Type, TypeScheme};
 use crate::Expression::*;
+use crate::parser::ParseError::PestError;
+use self::pest::iterators::Pairs;
+use std::fmt::{Display, Formatter};
 
 #[derive(Parser)]
 #[grammar = "loz.pest"]
@@ -28,12 +33,28 @@ lazy_static! {
     };
 }
 
+#[derive(Clone, Debug)]
+pub enum ParseError {
+    PestError(Error<Rule>),
 
-pub fn parse(file_name: &String, input: &str) -> Result<AST, Error<Rule>> {
-    let ast = LOZParser::parse(Rule::ast, input)?.next().unwrap();
+    FunctionTypeWithoutBody(String, Location),
+}
+
+impl Display for ParseError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        match self {
+            PestError(pe) => write!(f, "{}", pe),
+            ParseError::FunctionTypeWithoutBody(name, loc) => write!(f, "Found type for function {}, but no bodies were found", name),
+        }
+    }
+}
+
+
+pub fn parse(file_name: &String, input: &str) -> Result<AST, ParseError> {
+    let ast = LOZParser::parse(Rule::ast, input).map_err(|e| PestError(e))?.next().unwrap();
     println!("Raw AST: {:#?}", ast);
     let line_starts = build_line_start_cache(input);
-    Ok(to_ast(ast, file_name, &line_starts))
+    to_ast(ast, file_name, &line_starts)
 }
 
 fn build_line_start_cache(input: &str) -> Vec<usize> {
@@ -71,32 +92,85 @@ fn line_col_number(line_starts: &Vec<usize>, pos: usize) -> (usize, usize) {
     (previous_index + 1, pos - previous_start + 1)
 }
 
-fn to_ast(pair: Pair<Rule>, file_name: &String, line_starts: &Vec<usize>) -> AST {
+fn contract_function_declarations(mut function_bodies: HashMap<String, Vec<FunctionBody>>, function_types: HashMap<String, (Location, TypeScheme)>) -> Result<Vec<FunctionDeclaration>, ParseError> {
+    let mut function_declarations = Vec::new();
+    for (function_name, (location, function_scheme)) in function_types {
+        match function_bodies.remove(&function_name) {
+            None => return Err(ParseError::FunctionTypeWithoutBody(function_name.clone(), location)),
+            Some(bodies) => {
+                function_declarations.push(FunctionDeclaration {
+                    location,
+                    name: function_name.clone(),
+                    function_type: Some(function_scheme),
+                    function_bodies: bodies,
+                })
+            }
+        }
+    }
+
+    // Add the remaining functions that do not have a defined type.
+    for (function_name, bodies) in function_bodies {
+        function_declarations.push(FunctionDeclaration {
+            location: bodies.get(0).unwrap().location.clone(),
+            name: function_name.clone(),
+            function_type: None,
+            function_bodies: bodies
+        });
+    }
+
+    Ok(function_declarations)
+}
+
+fn to_ast(pair: Pair<Rule>, file_name: &String, line_starts: &Vec<usize>) -> Result<AST, ParseError> {
     match pair.as_rule() {
         Rule::ast => {
-            let mut rules = pair.into_inner().peekable();
-            let mut decls = Vec::new();
-            let mut type_declarations = Vec::new();
-
-            while let Some(pair) = rules.next() {
-                match pair.as_rule() {
-                    Rule::type_definition => {
-                        let def = to_type_definition(pair, file_name, line_starts);
-                        type_declarations.push(def);
-                    }
-                    Rule::function_definition => {
-                        let fd = to_function_declaration(file_name, pair, line_starts);
-                        decls.push(fd);
-                    }
-                    Rule::main => return AST { function_declarations: decls, type_declarations, main: to_expression(pair.into_inner().next().unwrap(), file_name, &"StartRule".to_string(), line_starts) },
-                    Rule::EOI => continue,
-                    r => unreachable!("Unhandled top-level rule: {:?}", r),
-                }
-            }
-            unreachable!()
+            let (type_declarations, function_declarations) = to_declaration_block_elements(pair.into_inner(), file_name, line_starts)?;
+            return Ok(AST {
+                function_declarations,
+                type_declarations
+            })
         }
         _ => unreachable!()
     }
+}
+
+fn to_declaration_block_elements(pairs: Pairs<Rule>, file_name: &String, line_starts: &Vec<usize>) -> Result<(Vec<CustomType>, Vec<FunctionDeclaration>), ParseError> {
+    let mut function_types = HashMap::new();
+    let mut function_bodies = HashMap::new();
+
+    let mut type_declarations = Vec::new();
+
+    for pair in pairs {
+        match pair.as_rule() {
+            Rule::type_definition => {
+                let def = to_type_definition(pair, file_name, line_starts);
+                type_declarations.push(def);
+            }
+            Rule::function_body => {
+                let fb = to_function_body(file_name, pair, line_starts)?;
+                match function_bodies.get_mut(&fb.name) {
+                    None => {
+                        function_bodies.insert(fb.name.clone(), vec![fb]);
+                    }
+                    Some(bodies) => bodies.push(fb),
+                };
+            }
+            Rule::function_type_definition => {
+                let (line, col) = line_col_number(line_starts, pair.as_span().start());
+                let mut elements = pair.into_inner();
+                let function_name = elements.next().unwrap().as_str().to_string();
+                let function_type = to_type(elements.next().unwrap());
+                function_types.insert(function_name.clone(), (Location {
+                    file: file_name.clone(),
+                    function: function_name.clone(),
+                    line,
+                    col
+                }, TypeScheme {bound_variables: function_type.clone().collect_free_type_variables(), enclosed_type: function_type}));
+            }
+            _ => continue,
+        }
+    }
+    Ok((type_declarations, contract_function_declarations(function_bodies, function_types)?))
 }
 
 fn to_type_definition(pair: Pair<Rule>, file_name: &String, line_starts: &Vec<usize>) -> CustomType {
@@ -141,46 +215,46 @@ fn to_type_definition(pair: Pair<Rule>, file_name: &String, line_starts: &Vec<us
     }
 }
 
-fn to_function_declaration(file_name: &String, pair: Pair<Rule>, line_starts: &Vec<usize>) -> FunctionDeclaration {
+fn to_function_body(file_name: &String, pair: Pair<Rule>, line_starts: &Vec<usize>) -> Result<FunctionBody, ParseError> {
     let (line, col) = line_col_number(line_starts, pair.as_span().start());
-    let rule = pair.into_inner().next().unwrap();
-    match rule.as_rule() {
-        Rule::function_definition_no_type => {
-            let mut name = "".to_string();
-            let mut bodies = vec![];
 
-            for pair in rule.into_inner() {
-                match pair.as_rule() {
-                    Rule::function_body_no_type_first => {
-                        name = pair.clone().into_inner().next().unwrap().into_inner().next().unwrap().as_str().to_string();
-                        bodies.push(to_function_body(file_name, &name, pair, line_starts))
-                    }
-                    Rule::function_body_no_type_following => {
-                        bodies.push(to_function_body(file_name, &name, pair, line_starts))
-                    }
-                    _ => unreachable!()
-                }
-            }
-            FunctionDeclaration {
-                location: Location { file: file_name.clone(), function: name.to_string(), line, col },
-                name,
-                function_type: None,
-                function_bodies: bodies,
-            }
-        }
-        Rule::function_definition_with_type => {
-            let mut inner_rules = rule.into_inner();
-            let name = inner_rules.next().unwrap().as_str();
-            let function_type = to_function_type(inner_rules.next().unwrap());
-            FunctionDeclaration {
-                location: Location { file: file_name.clone(), function: name.to_string(), line, col },
-                name: name.to_string(),
-                function_type: Some(TypeScheme { bound_variables: function_type.clone().collect_free_type_variables(), enclosed_type: function_type.clone() }),
-                function_bodies: inner_rules.map(|b| to_function_body(file_name, &name.to_string(), b, line_starts)).collect(),
-            }
-        }
-        _ => unreachable!()
+    let mut parents = pair.into_inner();
+    let mut function_header_elements = parents.next().unwrap().into_inner();
+    let function_name = function_header_elements.next().unwrap().as_str().to_string();
+
+    let mut match_expressions = Vec::new();
+    for r in function_header_elements {
+        match_expressions.push(to_match_expression(r.into_inner().next().unwrap(), file_name, &function_name, line_starts));
     }
+
+    let mut rules = Vec::new();
+    let mut local_function_declarations = Vec::new();
+    let mut local_types = Vec::new();
+    for r in parents {
+        match r.as_rule() {
+            Rule::local_function_definitions => {
+                let (type_declarations,function_declarations) = to_declaration_block_elements(r.into_inner(), file_name, line_starts)?;
+                local_function_declarations = function_declarations;
+                local_types = type_declarations;
+
+            }
+            _ => rules.push(to_function_rule(r, file_name, &function_name, line_starts)),
+        }
+    }
+
+    let location = Location {
+        file: file_name.clone(),
+        function: function_name.clone(),
+        line,
+        col,
+    };
+    Ok(FunctionBody {
+        name: function_name.clone(),
+        location: location.clone(),
+        match_expressions,
+        rules,
+        local_function_declarations,
+    })
 }
 
 fn to_expression(expression: Pair<Rule>, file_name: &String, function_name: &String, line_starts: &Vec<usize>) -> Expression {
@@ -199,21 +273,16 @@ fn to_expression(expression: Pair<Rule>, file_name: &String, function_name: &Str
                 Rule::times => Times(loc_info, Box::new(lhs), Box::new(rhs)),
                 Rule::divide => Divide(loc_info, Box::new(lhs), Box::new(rhs)),
                 Rule::modulo => Modulo(loc_info, Box::new(lhs), Box::new(rhs)),
-
                 Rule::add => Add(loc_info, Box::new(lhs), Box::new(rhs)),
                 Rule::substract => Subtract(loc_info, Box::new(lhs), Box::new(rhs)),
-
                 Rule::shift_left => ShiftLeft(loc_info, Box::new(lhs), Box::new(rhs)),
                 Rule::shift_right => ShiftRight(loc_info, Box::new(lhs), Box::new(rhs)),
-
                 Rule::lesser => Lesser(loc_info, Box::new(lhs), Box::new(rhs)),
                 Rule::leq => Leq(loc_info, Box::new(lhs), Box::new(rhs)),
                 Rule::greater => Greater(loc_info, Box::new(lhs), Box::new(rhs)),
                 Rule::greq => Greq(loc_info, Box::new(lhs), Box::new(rhs)),
-
                 Rule::eq => Eq(loc_info, Box::new(lhs), Box::new(rhs)),
                 Rule::neq => Neq(loc_info, Box::new(lhs), Box::new(rhs)),
-
                 Rule::and => And(loc_info, Box::new(lhs), Box::new(rhs)),
                 Rule::or => Or(loc_info, Box::new(lhs), Box::new(rhs)),
                 Rule::record_field_access => RecordFieldAccess(loc_info, Box::new(lhs), Box::new(rhs)),
@@ -244,7 +313,6 @@ fn to_term(pair: Pair<Rule>, file_name: &String, function_name: &String, line_st
         Rule::negation => Negation(loc_info, Box::new(to_expression(sub.into_inner().next().unwrap(), file_name, function_name, line_starts))),
         Rule::minus => Minus(loc_info, Box::new(to_expression(sub.into_inner().next().unwrap(), file_name, function_name, line_starts))),
         Rule::tuple_literal => TupleLiteral(loc_info, sub.into_inner().map(|te| to_expression(te, file_name, function_name, line_starts)).collect()),
-
         Rule::list_empty => EmptyListLiteral(loc_info),
         Rule::list_singleton => ShorthandListLiteral(loc_info, vec![to_expression(sub.into_inner().nth(0).unwrap(), file_name, function_name, line_starts)]),
         Rule::list_shorthand => ShorthandListLiteral(loc_info, sub.into_inner().map(|te| to_expression(te, file_name, function_name, line_starts)).collect()),
@@ -300,67 +368,6 @@ fn to_term(pair: Pair<Rule>, file_name: &String, function_name: &String, line_st
     }
 }
 
-fn to_function_type(pair: Pair<Rule>) -> Type {
-    let type_elements = pair.into_inner().peekable();
-
-    let types: Vec<Type> = type_elements.map(|e| to_type(e)).collect();
-    let (to, from) = types.split_last().unwrap();
-    Type::Function(from.to_vec(), Box::new(to.clone()))
-}
-
-fn to_function_body(file_name: &String, function_name: &String, pair: Pair<Rule>, line_starts: &Vec<usize>) -> FunctionBody {
-    let (line, col) = line_col_number(line_starts, pair.as_span().start());
-
-    match pair.as_rule() {
-        Rule::function_body_no_type_first => {
-            let mut parents = pair.into_inner();
-            let match_parent = parents.next().unwrap();
-
-            let mut match_expressions = Vec::new();
-            for me in match_parent.into_inner() {
-                if let Rule::identifier = me.as_rule() {
-                    // When the function declaration has not type, the first of the match expressions is the name of the function.
-                    continue;
-                }
-                match_expressions.push(to_match_expression(me.into_inner().next().unwrap(), file_name, function_name, line_starts));
-            }
-
-            println!("Parents: {:#?}", parents);
-
-            let function_rules = parents.next().unwrap().into_inner().map(|b| to_function_rule(b, file_name, function_name, line_starts)).collect();
-            FunctionBody { location: Location { file: file_name.clone(), function: function_name.clone(), line, col }, match_expressions, rules: function_rules, local_function_declarations: Vec::new() }
-        }
-        Rule::function_body_no_type_following => {
-            let mut parents = pair.into_inner();
-            let match_parent = parents.next().unwrap();
-
-            let mut match_expressions = Vec::new();
-            for me in match_parent.into_inner() {
-                if let Rule::identifier = me.as_rule() {
-                    // When the function declaration has not type, the first of the match expressions is the name of the function.
-                    continue;
-                }
-                match_expressions.push(to_match_expression(me.into_inner().next().unwrap(), file_name, function_name, line_starts));
-            }
-
-            let function_rules = parents.map(|b| to_function_rule(b.into_inner().next().unwrap(), file_name, function_name, line_starts)).collect();
-            FunctionBody { location: Location { file: file_name.clone(), function: function_name.clone(), line, col }, match_expressions, rules: function_rules, local_function_declarations: Vec::new() }
-        }
-        Rule::function_body_with_type => {
-            let mut parents = pair.into_inner();
-            let match_parent = parents.next().unwrap();
-
-            let mut match_expressions = Vec::new();
-            for me in match_parent.into_inner() {
-                match_expressions.push(to_match_expression(me.into_inner().next().unwrap(), file_name, function_name, line_starts));
-            }
-            let function_rules = parents.map(|b| to_function_rule(b, file_name, function_name, line_starts)).collect();
-            FunctionBody { location: Location { file: file_name.clone(), function: function_name.clone(), line, col }, match_expressions, rules: function_rules, local_function_declarations: Vec::new() }
-        }
-        r => unreachable!("to_function_body {:?}", r)
-    }
-}
-
 fn to_function_rule(pair: Pair<Rule>, file_name: &String, function_name: &String, line_starts: &Vec<usize>) -> FunctionRule {
     match pair.as_rule() {
         Rule::function_conditional_rule => {
@@ -409,7 +416,6 @@ fn to_match_expression(match_expression: Pair<Rule>, file_name: &String, functio
         Rule::char_literal => MatchExpression::CharLiteral(loc_info, match_expression.as_str().to_string().chars().nth(1).unwrap()),
         Rule::string_literal => MatchExpression::StringLiteral(loc_info, match_expression.into_inner().next().unwrap().as_str().to_string()),
         Rule::bool_literal => MatchExpression::BoolLiteral(loc_info, match_expression.as_str().parse::<bool>().unwrap()),
-
         Rule::adt_match => {
             let mut elements = match_expression.into_inner();
             let alternative_name = elements.next().unwrap().as_str().to_string();
@@ -433,6 +439,7 @@ fn to_type(pair: Pair<Rule>) -> Type {
         Rule::string_type => Type::String,
         Rule::int_type => Type::Int,
         Rule::char_type => Type::Char,
+        Rule::float_type => Type::Float,
         Rule::tuple_type => {
             Type::Tuple(pair.into_inner().map(|r| to_type(r)).collect())
         }

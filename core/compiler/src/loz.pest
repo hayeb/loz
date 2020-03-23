@@ -31,48 +31,45 @@ string_char = {
     | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
 }
 
-function_definition = {
-        function_definition_with_type
-    |   function_definition_no_type
+// f a b c
+function_header = ${ identifier ~ (WHITESPACE+ ~match_expression)* }
+
+// f a b c = a
+//  ...
+// where
+//  ...
+// .
+function_body = {
+        function_header
+    ~   function_rules_body
+    ~   local_function_definitions?
 }
 
-    function_definition_with_type = {
-        (PUSH(identifier) ~ NEWLINE* ~ "::" ~ NEWLINE* ~ loz_top_type ~ NEWLINE+ ~ function_body_with_type+)
-    }
-        function_body_with_type = {
-            function_header_with_type ~ function_body
-        }
-            function_header_with_type = ${ PEEK ~ (WHITESPACE+ ~ match_expression)*}
+// | a == "Hello" = c
+// # d = g a b c
+// = d
+function_rules_body = _{
+        (function_let_rule | function_conditional_rule)*
+    ~   function_expression_rule?
+}
+    function_let_rule = {NEWLINE ~ ( "let" | "#") ~ match_expression ~ "=" ~ expression}
 
-    function_definition_no_type = {
-        function_body_no_type_first
-        ~ function_body_no_type_following*
-    }
-
-        function_body_no_type_first = {
-            function_header_no_type_first ~ function_body_no_type
+    function_conditional_rule = { NEWLINE ~ function_conditional }
+        function_conditional = {
+            "|" ~ expression ~ "=" ~ expression
         }
 
-            function_body_no_type = {
-                function_body
-            }
+    function_expression_rule = { NEWLINE* ~ "=" ~ expression }
 
-            function_header_no_type_first = ${
-                PUSH(identifier) ~ (WHITESPACE+ ~match_expression)*
-            }
+    local_function_definitions = {NEWLINE+ ~ "where" ~ NEWLINE+ ~ ((function_type_definition | function_body | type_definition) ~ NEWLINE*)* ~ "."}
 
-        function_body_no_type_following = {
-            function_header_no_type_following ~ function_body_no_type
-        }
-
-            function_header_no_type_following = ${
-                PEEK ~ (WHITESPACE+ ~ match_expression)*
-            }
+// f :: Int Char -> Int
+function_type_definition = { identifier ~ "::" ~ loz_top_type  ~ NEWLINE+ }
 
 loz_top_type = _{
     function_type
-    | custom_type
     | loz_type_term
+    | custom_type
 }
 
 loz_type_term = _{
@@ -80,7 +77,7 @@ loz_type_term = _{
     | string_type
     | int_type
     | char_type
-    | custom_type_single
+    | float_type
     | tuple_type
     | list_type
     | type_variable
@@ -100,26 +97,10 @@ list_type = { "[" ~ loz_top_type ~ "]"}
 custom_type = { capital_identifier ~ loz_type_term*}
 custom_type_single = {capital_identifier}
 function_type = {
-    (loz_type_term ~ NEWLINE*)* ~ NEWLINE? ~ "->" ~ NEWLINE? ~ (loz_type_term | custom_type)
+    ((loz_type_term | custom_type_single )~ NEWLINE*)+ ~ NEWLINE? ~ "->" ~ NEWLINE? ~ (loz_top_type | custom_type | custom_type_single)
 }
 
 tuple_type = { "(" ~ loz_type_term ~ ("," ~ loz_type_term)+ ~ ")" }
-
-function_body = _{
-    (function_let_rule | function_conditional_rule)*
-        ~ function_expression_rule?
-        ~ NEWLINE+
-}
-    function_let_rule = {NEWLINE ~ ( "let" | "#") ~ match_expression ~ "=" ~ expression}
-
-    function_conditional_rule = { NEWLINE ~ function_conditional}
-        function_conditional = {
-            "|" ~ expression ~ "=" ~ expression
-        }
-
-    function_expression_rule = {NEWLINE* ~ "=" ~ expression}
-
-
 
 call = {
     identifier ~ function_argument+
@@ -273,9 +254,7 @@ operation = _{
     and = {"&&"}
     or = {"||"}
 
-    record_field_access = {"."}
-
-main = {"Main" ~ "=" ~ expression }
+    record_field_access = { "." }
 
 adt_definition = {
     "::" ~ capital_identifier ~ adt_type_variables ~ "=" ~ NEWLINE? ~ adt_constructors ~ NEWLINE?
@@ -289,7 +268,7 @@ record_definition = {
 }
     record_type_variable = { identifier* }
     record_field_definitions = { record_field_definition ~ (NEWLINE? ~ "," ~ NEWLINE? ~ record_field_definition)*}
-    record_field_definition = { identifier ~ "::" ~ loz_type_term* }
+    record_field_definition = { identifier ~ "::" ~ loz_top_type }
 
 type_definition = {
     adt_definition
@@ -297,7 +276,7 @@ type_definition = {
 }
 
 ast = {
-   SOI ~  NEWLINE* ~ ((function_definition | type_definition) ~ NEWLINE?)* ~ NEWLINE* ~ main ~ NEWLINE* ~ EOI
+   SOI ~  NEWLINE* ~ ((function_type_definition | function_body | type_definition) ~ NEWLINE*)* ~ NEWLINE* ~ EOI
 }
 
 

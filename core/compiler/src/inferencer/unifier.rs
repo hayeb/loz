@@ -75,9 +75,8 @@ fn unify_types(a_types: &Vec<Type>, b_types: &Vec<Type>) -> Result<Vec<(TypeVar,
 
 fn unify_functions(a_arguments: &Vec<Type>, a_result: &Type, b_arguments: &Vec<Type>, b_result: &Type) -> Result<Vec<(TypeVar, Type)>, InferenceErrorType> {
     if a_arguments.len() != b_arguments.len() {
-        return Err(InferenceErrorType::WrongNumberOfTypes(a_arguments.len(), b_arguments.len()));
+        return Err(InferenceErrorType::UnificationError(Type::Function(a_arguments.clone(), Box::new(a_result.clone())), Type::Function(b_arguments.clone(), Box::new(b_result.clone()))));
     }
-
 
     let mut subs = Vec::new();
     let mut a_result_type = a_result.clone();

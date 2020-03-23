@@ -1,7 +1,7 @@
 use std::{fs, io};
 use loz_compiler::parser;
 use loz_compiler::inferencer;
-use loz_compiler::inferencer::{TypedAST, InferenceError};
+use loz_compiler::inferencer::{TypedAST, InferenceError, InferencerOptions};
 use std::path::PathBuf;
 
 #[test]
@@ -37,5 +37,5 @@ fn compile_file(path: PathBuf) -> Result<TypedAST, Vec<InferenceError>>  {
     // For now, assume parsing succeeds..
     let ast = parser::parse(&path.to_str().unwrap().to_string(), &file_contents).unwrap();
 
-    inferencer::infer(&ast, false)
+    inferencer::infer(&ast, InferencerOptions { print_types: false})
 }

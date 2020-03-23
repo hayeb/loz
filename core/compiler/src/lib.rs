@@ -36,6 +36,7 @@ pub enum FunctionRule {
 
 #[derive(Debug, Clone)]
 pub struct FunctionBody {
+    pub name: String,
     pub location: Location,
     pub match_expressions: Vec<MatchExpression>,
     pub rules: Vec<FunctionRule>,
@@ -51,6 +52,8 @@ pub enum Type {
     String,
     Int,
     Float,
+
+    // :: A b c d = A a | B b | C c
     UserType(String, Vec<Type>),
     Tuple(Vec<Type>),
     List(Box<Type>),
@@ -60,98 +63,10 @@ pub enum Type {
     Function(Vec<Type>, Box<Type>),
 }
 
-impl Display for Type {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
-        match self {
-            Type::Bool => write!(f, "Bool"),
-            Type::Char => write!(f, "Char"),
-            Type::String => write!(f, "String"),
-            Type::Int => write!(f, "Int"),
-            Type::Float => write!(f, "Float"),
-            Type::UserType(t, type_arguments) if type_arguments.len() == 0 => write!(f, "{}", t),
-            Type::UserType(t, type_arguments) => write!(f, "{} {}", t, type_arguments.into_iter().map(|e| e.to_string()).collect::<Vec<String>>().join(" ")),
-            Type::Variable(name) => write!(f, "{}", name),
-            Type::Tuple(elements) => {
-                write!(f, "({})", elements.into_iter().map(|e| e.to_string()).collect::<Vec<String>>().join(", "))
-            }
-            Type::List(e) => {
-                write!(f, "[{}]", e)
-            }
-            Type::Function(from, to) => {
-                write!(f, "{} -> {}", from.iter().map(|t| t.to_string()).collect::<Vec<String>>().join(" "), to.to_string())
-            }
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeScheme {
     pub bound_variables: HashSet<String>,
     pub enclosed_type: Type,
-}
-
-impl Display for TypeScheme {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
-        if self.bound_variables.len() > 0 {
-            write!(f, "∀{}: {}", self.bound_variables.iter().cloned().collect::<Vec<String>>().join(" "), self.enclosed_type)
-        } else {
-            write!(f, "{}", self.enclosed_type)
-        }
-    }
-}
-
-impl Type {
-    /*
-    f :: a a a Int -> a
-
-    map :: (a -> b) [a] -> [b]
-
-    foldr :: [a] a (a a -> a) -> a
-
-
-    */
-    pub fn collect_free_type_variables(&self) -> HashSet<String> {
-        match self {
-            Type::Bool => HashSet::new(),
-            Type::Char => HashSet::new(),
-            Type::String => HashSet::new(),
-            Type::Int => HashSet::new(),
-            Type::Float => HashSet::new(),
-            Type::UserType(_, argument_types) => {
-                let mut variables = HashSet::new();
-                for t in argument_types {
-                    for v in t.collect_free_type_variables() {
-                        variables.insert(v);
-                    }
-                }
-                variables
-            }
-            Type::Tuple(element_types) => {
-                let mut variables = HashSet::new();
-                for t in element_types {
-                    for v in t.collect_free_type_variables() {
-                        variables.insert(v);
-                    }
-                }
-                variables
-            }
-            Type::List(t) => t.collect_free_type_variables(),
-            Type::Variable(tv) => vec![tv.clone()].into_iter().collect(),
-            Type::Function(from, to) => {
-                let mut variables = HashSet::new();
-                for t in from {
-                    for v in t.collect_free_type_variables() {
-                        variables.insert(v);
-                    }
-                }
-                for v in to.collect_free_type_variables() {
-                    variables.insert(v);
-                }
-
-                variables
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -237,6 +152,140 @@ pub enum Expression {
     RecordFieldAccess(Location, Box<Expression>, Box<Expression>),
 
     Lambda(Location, Vec<MatchExpression>, Box<Expression>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CaseRule {
+    pub loc_info: Location,
+    pub case_rule: MatchExpression,
+    pub result_rule: Expression,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MatchExpression {
+    IntLiteral(Location, isize),
+    CharLiteral(Location, char),
+    StringLiteral(Location, String),
+    BoolLiteral(Location, bool),
+    Identifier(Location, String),
+    Tuple(Location, Vec<MatchExpression>),
+    ShorthandList(Location, Vec<MatchExpression>),
+    LonghandList(Location, Box<MatchExpression>, Box<MatchExpression>),
+    Wildcard(Location),
+    ADT(Location, String, Vec<MatchExpression>),
+    Record(Location, String, Vec<String>),
+}
+
+#[derive(Debug, Clone)]
+pub struct AST {
+    pub function_declarations: Vec<FunctionDeclaration>,
+    pub type_declarations: Vec<CustomType>
+}
+
+impl Display for Type {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            Type::Bool => write!(f, "Bool"),
+            Type::Char => write!(f, "Char"),
+            Type::String => write!(f, "String"),
+            Type::Int => write!(f, "Int"),
+            Type::Float => write!(f, "Float"),
+            Type::UserType(t, type_arguments) if type_arguments.len() == 0 => write!(f, "{}", t),
+            Type::UserType(t, type_arguments) => write!(f, "{} {}", t, type_arguments.into_iter().map(|e| e.to_string()).collect::<Vec<String>>().join(" ")),
+            Type::Variable(name) => write!(f, "{}", name),
+            Type::Tuple(elements) => {
+                write!(f, "({})", elements.into_iter().map(|e| e.to_string()).collect::<Vec<String>>().join(", "))
+            }
+            Type::List(e) => {
+                write!(f, "[{}]", e)
+            }
+            Type::Function(from, to) => {
+                write!(f, "{} -> {}", from.iter().map(|t| t.to_string()).collect::<Vec<String>>().join(" "), to.to_string())
+            }
+        }
+    }
+}
+
+impl Display for TypeScheme {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        if self.bound_variables.len() > 0 {
+            write!(f, "∀{}: {}", self.bound_variables.iter().cloned().collect::<Vec<String>>().join(" "), self.enclosed_type)
+        } else {
+            write!(f, "{}", self.enclosed_type)
+        }
+    }
+}
+
+impl Type {
+
+    pub fn collect_free_type_variables(&self) -> HashSet<String> {
+        match self {
+            Type::Bool => HashSet::new(),
+            Type::Char => HashSet::new(),
+            Type::String => HashSet::new(),
+            Type::Int => HashSet::new(),
+            Type::Float => HashSet::new(),
+            Type::UserType(_, argument_types) => {
+                let mut variables = HashSet::new();
+                for t in argument_types {
+                    for v in t.collect_free_type_variables() {
+                        variables.insert(v);
+                    }
+                }
+                variables
+            }
+            Type::Tuple(element_types) => {
+                let mut variables = HashSet::new();
+                for t in element_types {
+                    for v in t.collect_free_type_variables() {
+                        variables.insert(v);
+                    }
+                }
+                variables
+            }
+            Type::List(t) => t.collect_free_type_variables(),
+            Type::Variable(tv) => vec![tv.clone()].into_iter().collect(),
+            Type::Function(from, to) => {
+                let mut variables = HashSet::new();
+                for t in from {
+                    for v in t.collect_free_type_variables() {
+                        variables.insert(v);
+                    }
+                }
+                for v in to.collect_free_type_variables() {
+                    variables.insert(v);
+                }
+
+                variables
+            }
+        }
+    }
+
+    pub fn referenced_custom_types(&self) -> HashSet<String> {
+        match self {
+            Type::Bool => HashSet::new(),
+            Type::Char => HashSet::new(),
+            Type::String => HashSet::new(),
+            Type::Int => HashSet::new(),
+            Type::Float => HashSet::new(),
+            Type::UserType(name, arguments) => {
+                let mut types : HashSet<String> = HashSet::new();
+                types.insert(name.clone());
+                for a in arguments {
+                    types.extend(a.referenced_custom_types());
+                }
+                types
+            },
+            Type::Tuple(elements) => elements.iter().flat_map(|e| e.referenced_custom_types().into_iter()).collect(),
+            Type::List(list_type) => list_type.referenced_custom_types(),
+            Type::Variable(_) => HashSet::new(),
+            Type::Function(from_types, to_type) => {
+                let mut types: HashSet<String> = from_types.iter().flat_map(|t| t.referenced_custom_types().into_iter()).collect();
+                types.extend(to_type.referenced_custom_types());
+                types
+            },
+        }
+    }
 }
 
 impl Expression {
@@ -346,28 +395,6 @@ impl Expression {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct CaseRule {
-    pub loc_info: Location,
-    pub case_rule: MatchExpression,
-    pub result_rule: Expression,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum MatchExpression {
-    IntLiteral(Location, isize),
-    CharLiteral(Location, char),
-    StringLiteral(Location, String),
-    BoolLiteral(Location, bool),
-    Identifier(Location, String),
-    Tuple(Location, Vec<MatchExpression>),
-    ShorthandList(Location, Vec<MatchExpression>),
-    LonghandList(Location, Box<MatchExpression>, Box<MatchExpression>),
-    Wildcard(Location),
-    ADT(Location, String, Vec<MatchExpression>),
-    Record(Location, String, Vec<String>),
-}
-
 impl MatchExpression {
     pub fn locate(&self) -> Location {
         match self {
@@ -405,12 +432,5 @@ impl MatchExpression {
             MatchExpression::Record(_, _, fields) => fields.into_iter().cloned().collect(),
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct AST {
-    pub function_declarations: Vec<FunctionDeclaration>,
-    pub type_declarations: Vec<CustomType>,
-    pub main: Expression,
 }
 

@@ -1,8 +1,10 @@
 // Calling g here: err
-
-f :: Int Int -> Int
-f 0 0 = 1
+f 0 0 = bla 0
+where
+    bla z = 1
+.
 f 0 1 = 2
+
 f x y = g x y
 where
     // Calling z here: err
@@ -11,9 +13,17 @@ where
     g x y = z x y
     where
         z 2 2 = 3455
-        z x y = x * x * y * y
     .
     // Calling z here: err
+
+    g x y = g 1 1
 .
 
-Main = f 2 2
+g :: Int Int -> Int
+g x y = gg x y
+where
+    gg w z = 0
+.
+
+main :: Int
+main = f 2 2

@@ -1,0 +1,6 @@
+:: R1 = { y :: Int }
+
+m :: R1 -> Int
+m {R1|y} = y
+
+main = 18

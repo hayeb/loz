@@ -4,19 +4,19 @@ use petgraph::Graph;
 
 use crate::{AST, Expression, FunctionDeclaration, FunctionRule, Location};
 
-pub fn to_components(ast: &AST) -> Vec<Vec<&FunctionDeclaration>> {
+pub fn to_components(declarations: &Vec<FunctionDeclaration>) -> Vec<Vec<&FunctionDeclaration>> {
     let mut name_to_index = HashMap::new();
     let mut index_to_name = HashMap::new();
 
     let mut graph = Graph::<String, ()>::new();
 
-    for d in &ast.function_declarations {
+    for d in declarations {
         let node = graph.add_node(d.name.clone());
         name_to_index.insert(&d.name, node.clone());
         index_to_name.insert(node.clone(), &d.name);
     }
 
-    for f in &ast.function_declarations {
+    for f in declarations {
         let referred = declaration_referred_functions(f);
         for (name, _) in referred {
             graph.add_edge(name_to_index.get(&f.name).unwrap().clone(), name_to_index.get(&name).unwrap().clone(), ());
@@ -25,7 +25,7 @@ pub fn to_components(ast: &AST) -> Vec<Vec<&FunctionDeclaration>> {
 
     let sccs = petgraph::algo::kosaraju_scc(&graph);
 
-    let function_name_to_declaration: HashMap<String, &FunctionDeclaration> = ast.function_declarations.iter()
+    let function_name_to_declaration: HashMap<String, &FunctionDeclaration> = declarations.iter()
         .map(|d| (d.name.clone(), d))
         .collect();
 
@@ -45,6 +45,9 @@ fn declaration_referred_functions(d: &FunctionDeclaration) -> HashSet<(String, L
     for b in &d.function_bodies {
         for me in &b.match_expressions {
             local_variables.extend(me.variables());
+        }
+        for d in &b.local_function_declarations {
+            local_variables.insert(d.name.clone());
         }
         for r in &b.rules {
             referred.extend(match r {

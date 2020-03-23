@@ -3,6 +3,7 @@ use std::{env, fs, process};
 use clap::{App, Arg};
 
 use loz_compiler::inferencer;
+use loz_compiler::inferencer::InferencerOptions;
 use loz_compiler::interpreter;
 use loz_compiler::parser;
 
@@ -48,7 +49,7 @@ fn main() {
     if matches.is_present("print_ast") {
         println!("Parsed AST: {:#?}", ast);
     }
-    let inference_result = inferencer::infer(&ast, matches.is_present("print_inferred_types"));
+    let inference_result = inferencer::infer(&ast, InferencerOptions { print_types: matches.is_present("print_inferred_types") });
     if let Err(err) = inference_result {
         err.into_iter().for_each(|e| eprintln!("{}", e));
         process::exit(1);

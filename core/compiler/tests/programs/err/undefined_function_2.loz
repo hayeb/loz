@@ -1,0 +1,8 @@
+// Local definitions in another function are not accessible.
+f a b c = g x y
+
+h a b c = x * y * z
+where
+    g x y = x + y
+
+main = f 3 4 5

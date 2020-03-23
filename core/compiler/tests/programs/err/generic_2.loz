@@ -2,4 +2,4 @@ f :: [a] -> [b]
 f [] = []
 f [a:as] = [a : f as]
 
-Main = f [18]
+main = f [18]

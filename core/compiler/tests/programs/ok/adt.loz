@@ -3,4 +3,4 @@ g (T i) = i
 
 f x = 18 * g x
 
-Main = f (T 9)
+main = f (T 9)

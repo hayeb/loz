@@ -99,8 +99,8 @@ pub enum InterpreterError {
 }
 
 pub fn interpret(ast: &TypedAST) -> Result<(), InterpreterError> {
-    let result = evaluate(&ast.main, ast, &mut RunState::new())?;
-    println!("{}", result);
+    //let result = evaluate(&ast.main, ast, &mut RunState::new())?;
+    //println!("{}", result);
     Ok(())
 }
 

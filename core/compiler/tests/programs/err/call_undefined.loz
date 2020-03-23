@@ -2,4 +2,4 @@ f x y = h x y
 
 g x y = x * y
 
-Main = f 18 9
+main = f 18 9

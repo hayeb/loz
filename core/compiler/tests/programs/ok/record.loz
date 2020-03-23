@@ -4,4 +4,4 @@ g {R|t} = t
 
 f x = 18 * g x
 
-Main = f {R|t = 9}
+main = f {R|t = 9}

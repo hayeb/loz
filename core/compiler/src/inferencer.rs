@@ -37,6 +37,7 @@ pub enum InferenceErrorType {
     UnboundTypeVariable(String),
     WrongNumberOfTypes(usize, usize),
     UndefinedFunction(String),
+    UndefinedType(String),
 
     FunctionDeclaredTypeMismatch(Type, Type),
 
@@ -67,7 +68,6 @@ pub struct TypedAST {
     pub function_name_to_declaration: HashMap<String, FunctionDeclaration>,
     pub adt_type_constructor_to_type: HashMap<String, ADTDefinition>,
     pub record_name_to_definition: HashMap<String, RecordDefinition>,
-    pub main: Expression,
 }
 
 #[derive(Debug)]
@@ -92,6 +92,7 @@ impl Display for InferenceError {
 
             InferenceErrorType::FunctionMultiplyDefined(name, location) => write!(f, "Function {} already defined, encountered earlier at {}", name, location),
             InferenceErrorType::UndefinedFunction(name) => write!(f, "Function {} undefined", name),
+            InferenceErrorType::UndefinedType(name) => write!(f, "Type {} undefined", name),
 
             InferenceErrorType::TypeMultiplyDefined(name, location) => write!(f, "Type {} already defined, encountered earlier at {}", name, location),
             InferenceErrorType::TypeConstructorMultiplyDefined(constructor_name, defined_in_type, defined_in_location) => write!(f, "Type constructor {} already defined in type {} at {}", constructor_name, defined_in_type, defined_in_location),
@@ -144,21 +145,26 @@ impl Iterator for VariableNameStream {
     }
 }
 
-struct InferencerState<'a> {
-    main: &'a Expression,
+struct InferencerState{
     adt_type_constructor_to_type: HashMap<String, ADTDefinition>,
     record_name_to_definition: HashMap<String, RecordDefinition>,
     type_variable_iterator: Box<dyn Iterator<Item=String>>,
 
     global_type_context: HashMap<String, TypeScheme>,
 
-    local_type_context: HashMap<String, Type>,
+    local_type_context: Vec<HashMap<String, Type>>,
+
+    options: InferencerOptions,
 }
 
-pub fn infer(ast: &AST, print_types: bool) -> Result<TypedAST, Vec<InferenceError>> {
-    let mut infer_state = InferencerState::new(ast)?;
-    let components = grapher::to_components(ast);
-    Ok(infer_state.infer(components, &ast.main, print_types)?)
+pub struct InferencerOptions {
+    pub print_types: bool,
+}
+
+pub fn infer(ast: &AST, options: InferencerOptions) -> Result<TypedAST, Vec<InferenceError>> {
+    let mut infer_state = InferencerState::new(ast, options)?;
+    let components = grapher::to_components(&ast.function_declarations);
+    Ok(infer_state.infer(components)?)
 }
 
 fn build_function_scheme_cache(function_declarations: &Vec<FunctionDeclaration>) -> HashMap<String, TypeScheme> {
@@ -199,49 +205,92 @@ fn build_record_cache(type_declarations: &Vec<CustomType>) -> HashMap<String, Re
         .collect()
 }
 
-
-impl InferencerState<'_> {
-    fn new(ast: &AST) -> Result<InferencerState, Vec<InferenceError>> {
+impl InferencerState {
+    fn new(ast: &AST, options: InferencerOptions) -> Result<InferencerState, Vec<InferenceError>> {
         // 1. Check whether all functions are uniquely defined.
-        let type_errors = check_unique_definitions(ast);
-        if type_errors.len() > 0 {
-            return Err(type_errors);
-        }
-
+        check_unique_definitions(ast)?;
         // 2. Register all functions which have a type.
         let function_name_to_type = build_function_scheme_cache(&ast.function_declarations);
 
         // 3. Check whether all called functions are defined
-        let errors = check_function_calls_defined(ast, &ast.function_declarations.iter().map(|d| d.name.clone()).collect());
-
-        if errors.len() > 0 {
-            return Err(errors);
-        }
+        check_function_calls_defined(&ast.function_declarations, &ast.function_declarations.iter().map(|d| d.name.clone()).collect())?;
 
         // 4. Register all user-defined types.
         let adt_type_constructor_to_type = build_adt_cache(&ast.type_declarations);
         let record_name_to_definition = build_record_cache(&ast.type_declarations);
 
+        // 5. Check whether al referred types are defined
+        let defined_type_names = ast.type_declarations.iter()
+            .map(|td| match td {
+                CustomType::ADT(_, def) => def.name.clone(),
+                CustomType::Record(_, def) => def.name.clone(),
+            })
+            .collect();
+        check_type_references_defined(&ast.function_declarations, &defined_type_names)?;
+
         return Ok(InferencerState {
-            main: &ast.main,
             adt_type_constructor_to_type,
             record_name_to_definition,
             type_variable_iterator: Box::new(VariableNameStream { n: 1 }),
             global_type_context: function_name_to_type,
-            local_type_context: HashMap::new(),
+            local_type_context: vec![HashMap::new()],
+            options
         });
     }
 }
 
-fn check_function_calls_defined(ast: &AST, defined_functions: &HashSet<String>) -> Vec<InferenceError> {
+fn check_type_references_defined(function_declarations: &Vec<FunctionDeclaration>, defined_types: &HashSet<String>) -> Result<(), Vec<InferenceError>> {
     let mut errors = Vec::new();
-    for d in &ast.function_declarations {
+    for d in function_declarations {
+        if let Some(function_type) = &d.function_type {
+            let referenced_types = function_type.enclosed_type.referenced_custom_types();
+            for undefined in referenced_types.difference(defined_types) {
+                errors.push(InferenceError::from_loc(d.location.clone(), InferenceErrorType::UndefinedType(undefined.clone())));
+            }
+        }
+
+        for b in &d.function_bodies {
+            // TODO: Support locally defined types.
+            let locally_defined_types = defined_types;
+            let lfd_errors = check_type_references_defined(&b.local_function_declarations, locally_defined_types);
+            if let Err(lfd_errors) = lfd_errors {
+                errors.extend(lfd_errors);
+            }
+        }
+    }
+
+    if errors.len() > 0 {
+        return Err(errors)
+    }
+    Ok(())
+
+}
+
+fn check_function_calls_defined(declarations: &Vec<FunctionDeclaration>, defined_functions: &HashSet<String>) -> Result<(), Vec<InferenceError>> {
+    let mut errors = Vec::new();
+    for d in declarations {
         for b in &d.function_bodies {
             let mut defined_variables = HashSet::new();
 
             for me in &b.match_expressions {
                 defined_variables.extend(me.variables());
             }
+
+            let mut local_defined_functions = HashSet::new();
+
+            for d in &b.local_function_declarations {
+                defined_variables.insert(d.name.clone());
+                local_defined_functions.insert(d.name.clone());
+            }
+
+            for f in defined_functions {
+                local_defined_functions.insert(f.clone());
+            }
+
+            if let Err(errs) = check_function_calls_defined(&b.local_function_declarations, &local_defined_functions) {
+                errors.extend(errs);
+            }
+
             for r in &b.rules {
                 match r {
                     FunctionRule::ConditionalRule(_, cond, result) => {
@@ -264,10 +313,13 @@ fn check_function_calls_defined(ast: &AST, defined_functions: &HashSet<String>) 
             }
         }
     }
-    errors
+    if errors.len() > 0 {
+        return Err(errors)
+    }
+    Ok(())
 }
 
-fn check_unique_definitions(ast: &AST) -> Vec<InferenceError> {
+fn check_unique_definitions(ast: &AST) -> Result<(), Vec<InferenceError>> {
     let mut type_errors = Vec::new();
 
     // 1. Ensure there are no functions multiply defined
@@ -321,21 +373,47 @@ fn check_unique_definitions(ast: &AST) -> Vec<InferenceError> {
             }
         }
     }
-    type_errors
+
+
+    if type_errors.len() > 0 {
+        return Err(type_errors)
+    }
+    Ok(())
 }
 
 fn map_unify(loc: Location, r: Result<Vec<(TypeVar, Type)>, InferenceErrorType>) -> Result<Vec<(TypeVar, Type)>, Vec<InferenceError>> {
     r.map_err(|e| vec![InferenceError::from_loc(loc.clone(), e)])
 }
 
-impl InferencerState<'_> {
+impl InferencerState {
     fn fresh(&mut self) -> Type {
         Type::Variable(self.type_variable_iterator.next().unwrap())
     }
 
+    fn add_local_type(&mut self, name: String, t: Type) {
+        self.local_type_context.last_mut().unwrap().insert(name, t);
+    }
+
+    fn get_local_type(&self, name: &String) -> Option<Type> {
+        for context in self.local_type_context.iter().rev() {
+            if context.contains_key(name) {
+                return context.get(name).cloned()
+            }
+        }
+        None
+    }
+
+    fn push_local_context(&mut self) {
+        self.local_type_context.push(HashMap::new());
+    }
+
+    fn pop_local_context(&mut self) {
+        self.local_type_context.pop();
+    }
+
     fn extend_type_environment(&mut self, with: &Vec<(TypeVar, Type)>) {
         self.local_type_context = self.local_type_context.iter()
-            .map(|(n, t)| (n.clone(), substitutor::substitute_type(with, &t)))
+            .map(|context| context.iter().map(|(n, t)| (n.clone(), substitutor::substitute_type(with, &t))).collect())
             .collect();
 
         self.global_type_context = self.global_type_context.iter()
@@ -343,12 +421,22 @@ impl InferencerState<'_> {
             .collect();
     }
 
-    fn infer(&mut self, components: Vec<Vec<&FunctionDeclaration>>, main: &Expression, print_inferred_types: bool) -> Result<TypedAST, Vec<InferenceError>> {
-        for component in &components {
+    fn infer(&mut self, components: Vec<Vec<&FunctionDeclaration>>) -> Result<TypedAST, Vec<InferenceError>> {
+        self.infer_connected_components(&components)?;
+
+        Ok(TypedAST {
+            function_name_to_declaration: components.into_iter().flat_map(|c| c.into_iter()).map(|d| (d.name.clone(), d.clone().clone())).collect(),
+            adt_type_constructor_to_type: self.adt_type_constructor_to_type.clone(),
+            record_name_to_definition: self.record_name_to_definition.clone()
+        })
+    }
+
+    fn infer_connected_components(&mut self, components: &Vec<Vec<&FunctionDeclaration>>) -> Result<(), Vec<InferenceError>> {
+        for component in components {
             // Generate fresh variables for all declarations in a component
             for d in component.iter() {
                 let fresh = self.fresh();
-                self.global_type_context.insert(d.name.clone(), TypeScheme { bound_variables: HashSet::new(), enclosed_type: fresh });
+                    self.global_type_context.insert(d.name.clone(), TypeScheme { bound_variables: HashSet::new(), enclosed_type: fresh });
             }
 
             // Infer every declaration
@@ -358,26 +446,18 @@ impl InferencerState<'_> {
             }
 
             // Generalize all declarations in a component
+
             for d in component {
                 let derived_scheme = (&self.global_type_context).get(&d.name).unwrap();
                 let generalized_scheme = self.generalize(derived_scheme.enclosed_type.clone());
 
-                if print_inferred_types {
+                if self.options.print_types {
                     println!("Type for function '{}': {}", d.name.clone(), generalized_scheme);
                 }
                 self.global_type_context.insert(d.name.clone(), generalized_scheme);
             }
         }
-
-        let fresh = self.fresh();
-        self.infer_expression(main, &fresh)?;
-
-        Ok(TypedAST {
-            function_name_to_declaration: components.into_iter().flat_map(|c| c.into_iter()).map(|d| (d.name.clone(), d.clone().clone())).collect(),
-            adt_type_constructor_to_type: self.adt_type_constructor_to_type.clone(),
-            record_name_to_definition: self.record_name_to_definition.clone(),
-            main: self.main.clone(),
-        })
+        Ok(())
     }
 
     fn instantiate(&mut self, t: &TypeScheme) -> Type {
@@ -398,6 +478,10 @@ impl InferencerState<'_> {
         let mut function_type = self.fresh();
         let mut function_type_location_mutated = declaration.location.clone();
         for body in (&declaration.function_bodies).into_iter() {
+
+            self.push_local_context();
+
+            // Infer all arguments. This introduces new variables in the local type context.
             let mut current_match_types = Vec::new();
             let mut current_return_type = self.fresh();
             for me in &body.match_expressions {
@@ -407,6 +491,9 @@ impl InferencerState<'_> {
                 current_match_types = substitute_list(&subs, &current_match_types);
                 current_match_types.push(substitute_type(&subs, &fresh));
             }
+
+            let components = grapher::to_components(&body.local_function_declarations);
+            self.infer_connected_components(&components)?;
 
             for r in &body.rules {
                 match r {
@@ -444,9 +531,9 @@ impl InferencerState<'_> {
                 }
             }
 
-            self.local_type_context.clear();
+            self.pop_local_context();
 
-            let derived_function_type = Type::Function(current_match_types, Box::new(current_return_type));
+            let derived_function_type = if current_match_types.len() > 0 { Type::Function(current_match_types, Box::new(current_return_type))} else {current_return_type};
 
             match unify(&derived_function_type, &function_type) {
                 Ok(subs) => {
@@ -471,10 +558,10 @@ impl InferencerState<'_> {
 
             let subs = map_unify(declaration.location.clone(), unify(&derived_scheme.enclosed_type, &declared_scheme.enclosed_type))?;
             self.extend_type_environment(&subs);
+
             let substituted_type = substitute_type(&subs, &declared_scheme.enclosed_type);
 
             let declared_substituted_scheme = TypeScheme { bound_variables: substituted_type.clone().collect_free_type_variables(), enclosed_type: substituted_type.clone() };
-
             if &declared_substituted_scheme != declared_scheme {
                 return Err(vec![InferenceError::from_loc(declaration.location.clone(), InferenceErrorType::FunctionDeclaredTypeMismatch(declared_scheme.enclosed_type.clone(), substituted_type.clone()))]);
             }
@@ -492,7 +579,7 @@ impl InferencerState<'_> {
             MatchExpression::BoolLiteral(loc, _) => map_unify(loc.clone(), unify(&Type::Bool, expected_type))?,
 
             MatchExpression::Identifier(_, name) => {
-                self.local_type_context.insert(name.clone(), expected_type.clone());
+                self.add_local_type(name.clone(), expected_type.clone());
                 Vec::new()
             }
 
@@ -639,7 +726,7 @@ impl InferencerState<'_> {
                 // For every field used in the match expression, add a variable with the discovered type.
                 let mut field_to_type = HashMap::new();
                 for (field_name, field_type) in instantiated_field_types {
-                    self.local_type_context.insert(field_name.clone(), substitute_type(&subs, &field_type));
+                    self.add_local_type(field_name.clone(), substitute_type(&subs, &field_type));
                     field_to_type.insert(field_name.clone(), substitute_type(&subs, &field_type));
                 }
                 subs
@@ -811,12 +898,12 @@ impl InferencerState<'_> {
             }
 
             Expression::Variable(loc, name) => {
-                let variable_type = match self.local_type_context.get(name) {
+                let variable_type = match self.get_local_type(name) {
                     None => return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::UndefinedVariable(name.clone()))]),
                     Some(vtype) => vtype,
                 };
 
-                map_unify(loc.clone(), unify(variable_type, expected_type))?
+                map_unify(loc.clone(), unify(&variable_type, expected_type))?
             }
 
             Expression::TupleLiteral(loc, elements) => {
@@ -1030,12 +1117,12 @@ impl InferencerState<'_> {
                     })?
             }
             Expression::Call(loc, name, arguments) => {
-                let function_type = match self.local_type_context.get(name) {
+                let function_type = match self.get_local_type(name) {
                     None => match self.global_type_context.get(name) {
                         Some(t) => t.clone(),
                         None => return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::UndefinedFunction(name.clone()))])
                     },
-                    Some(ft) => TypeScheme { bound_variables: HashSet::new(), enclosed_type: ft.clone() },
+                    Some(ft) => TypeScheme { bound_variables: HashSet::new(), enclosed_type: ft },
                 };
 
                 let instantiated_function_type = self.instantiate(&function_type);
@@ -1120,1812 +1207,6 @@ impl InferencerState<'_> {
         };
 
         Ok(res)
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[cfg(test)]
-    mod expression {
-        use super::*;
-
-        #[cfg(test)]
-        mod simple {
-            use super::*;
-
-            #[test]
-            fn test_infer_bool() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_expression(&Expression::BoolLiteral(test_loc(1), true), &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok())
-            }
-
-            #[test]
-            fn test_infer_char() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_expression(&Expression::CharacterLiteral(test_loc(1), 'c'), &Type::Char);
-                println!("{:#?}", result);
-                assert!(result.is_ok())
-            }
-
-            #[test]
-            fn test_infer_int() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_expression(&Expression::IntegerLiteral(test_loc(1), 123), &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_ok())
-            }
-
-            #[test]
-            fn test_infer_string() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_expression(&Expression::StringLiteral(test_loc(1), "123".to_string()), &Type::String);
-                println!("{:#?}", result);
-                assert!(result.is_ok())
-            }
-
-            #[test]
-            fn test_infer_float() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_expression(&Expression::FloatLiteral(test_loc(1), 11.23), &Type::Float);
-                println!("{:#?}", result);
-                assert!(result.is_ok())
-            }
-        }
-
-        #[cfg(test)]
-        mod negation {
-            use super::*;
-
-            #[test]
-            fn test_infer_negation_1() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_expression(&Expression::Negation(test_loc(1), Box::new(Expression::BoolLiteral(test_loc(2), true))), &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok())
-            }
-
-            #[test]
-            fn test_infer_negation_2() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                state.local_type_context.insert("a".to_string(), Type::Variable("y0".to_string()));
-                let result = state.infer_expression(&Expression::Negation(test_loc(1), Box::new(Expression::Variable(test_loc(2), "a".to_string()))), &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-                assert_eq!(&Type::Bool, state.local_type_context.get("a").unwrap())
-            }
-        }
-
-        #[cfg(test)]
-        mod minus {
-            use super::*;
-
-            #[test]
-            fn test_infer_minus_int() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_expression(&Expression::Minus(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1))), &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_minus_float() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_expression(&Expression::Minus(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1))), &Type::Float);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_minus_error() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_expression(&Expression::Minus(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1))), &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-        }
-
-        #[cfg(test)]
-        mod times {
-            use super::*;
-
-            #[test]
-            fn test_infer_times_int() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Times(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_times_int_err() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Times(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Float);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_times_float() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Times(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::FloatLiteral(test_loc(3), 2.2)));
-                let result = state.infer_expression(&e, &Type::Float);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_times_float_err() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Times(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::FloatLiteral(test_loc(3), 2.2)));
-                let result = state.infer_expression(&e, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_times_variable() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                state.local_type_context.insert("a".to_string(), Type::Float);
-                state.local_type_context.insert("b".to_string(), Type::Float);
-
-                let e = Expression::Times(test_loc(1), Box::new(Expression::Variable(test_loc(2), "a".to_string())), Box::new(Expression::Variable(test_loc(3), "b".to_string())));
-                let result = state.infer_expression(&e, &Type::Float);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-        }
-
-        #[cfg(test)]
-        mod divide {
-            use super::*;
-
-            #[test]
-            fn test_infer_divide_int() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Divide(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_divide_int_err() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Divide(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Float);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_divide_float() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Divide(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::FloatLiteral(test_loc(3), 2.2)));
-                let result = state.infer_expression(&e, &Type::Float);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_divide_float_err() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Divide(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::FloatLiteral(test_loc(3), 2.2)));
-                let result = state.infer_expression(&e, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_divide_variable() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                state.local_type_context.insert("a".to_string(), Type::Float);
-                state.local_type_context.insert("b".to_string(), Type::Float);
-
-                let e = Expression::Divide(test_loc(1), Box::new(Expression::Variable(test_loc(2), "a".to_string())), Box::new(Expression::Variable(test_loc(3), "b".to_string())));
-                let result = state.infer_expression(&e, &Type::Float);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-        }
-
-        #[cfg(test)]
-        mod modulo {
-            use super::*;
-
-            #[test]
-            fn test_infer_modulo_int() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Modulo(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_add_modulo_err() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Modulo(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Float);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_modulo_float() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Modulo(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::FloatLiteral(test_loc(3), 2.2)));
-                let result = state.infer_expression(&e, &Type::Float);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_modulo_float_err() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Modulo(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::FloatLiteral(test_loc(3), 2.2)));
-                let result = state.infer_expression(&e, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_modulo_variable() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                state.local_type_context.insert("a".to_string(), Type::Float);
-                state.local_type_context.insert("b".to_string(), Type::Float);
-
-                let e = Expression::Modulo(test_loc(1), Box::new(Expression::Variable(test_loc(2), "a".to_string())), Box::new(Expression::Variable(test_loc(3), "b".to_string())));
-                let result = state.infer_expression(&e, &Type::Float);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-        }
-
-        #[cfg(test)]
-        mod add {
-            use super::*;
-
-            #[test]
-            fn test_infer_add_int() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Add(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_add_err() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Add(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Float);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_add_float() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Add(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::FloatLiteral(test_loc(3), 2.2)));
-                let result = state.infer_expression(&e, &Type::Float);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_add_float_err() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Add(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::FloatLiteral(test_loc(3), 2.2)));
-                let result = state.infer_expression(&e, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_add_variable() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                state.local_type_context.insert("a".to_string(), Type::Float);
-                state.local_type_context.insert("b".to_string(), Type::Float);
-
-                let e = Expression::Modulo(test_loc(1), Box::new(Expression::Variable(test_loc(2), "a".to_string())), Box::new(Expression::Variable(test_loc(3), "b".to_string())));
-                let result = state.infer_expression(&e, &Type::Float);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-        }
-
-        #[cfg(test)]
-        mod subtract {
-            use super::*;
-
-            #[test]
-            fn test_infer_subtract_int() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Subtract(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_subtract_err() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Subtract(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Float);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_subtract_float() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Subtract(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::FloatLiteral(test_loc(3), 2.2)));
-                let result = state.infer_expression(&e, &Type::Float);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_subtract_float_err() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Subtract(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::FloatLiteral(test_loc(3), 2.2)));
-                let result = state.infer_expression(&e, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_subtract_variable() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                state.local_type_context.insert("a".to_string(), Type::Float);
-                state.local_type_context.insert("b".to_string(), Type::Float);
-
-                let e = Expression::Subtract(test_loc(1), Box::new(Expression::Variable(test_loc(2), "a".to_string())), Box::new(Expression::Variable(test_loc(3), "b".to_string())));
-                let result = state.infer_expression(&e, &Type::Float);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-        }
-
-        #[cfg(test)]
-        mod shift_left {
-            use super::*;
-
-            #[test]
-            fn test_infer_shift_left_int() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::ShiftLeft(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_shift_left_int_err() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::ShiftLeft(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Float);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_shift_left_variable() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                state.local_type_context.insert("a".to_string(), Type::Int);
-                state.local_type_context.insert("b".to_string(), Type::Int);
-
-                let e = Expression::ShiftLeft(test_loc(1), Box::new(Expression::Variable(test_loc(2), "a".to_string())), Box::new(Expression::Variable(test_loc(3), "b".to_string())));
-                let result = state.infer_expression(&e, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-        }
-
-        #[cfg(test)]
-        mod shift_right {
-            use super::*;
-
-            #[test]
-            fn test_infer_shift_right_int() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::ShiftRight(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_shift_right_int_err() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::ShiftRight(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Float);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_shift_right_variable() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                state.local_type_context.insert("a".to_string(), Type::Int);
-                state.local_type_context.insert("b".to_string(), Type::Int);
-
-                let e = Expression::ShiftRight(test_loc(1), Box::new(Expression::Variable(test_loc(2), "a".to_string())), Box::new(Expression::Variable(test_loc(3), "b".to_string())));
-                let result = state.infer_expression(&e, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-        }
-
-        #[cfg(test)]
-        mod greater {
-            use super::*;
-
-            #[test]
-            fn test_infer_greater_int() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Greater(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_greater_float() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Greater(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::FloatLiteral(test_loc(3), 2.1)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_greater_err_operands() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Greater(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_greater_err_result() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Greater(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_greater_variable() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                state.local_type_context.insert("a".to_string(), Type::Int);
-                state.local_type_context.insert("b".to_string(), Type::Int);
-
-                let e = Expression::Greater(test_loc(1), Box::new(Expression::Variable(test_loc(2), "a".to_string())), Box::new(Expression::Variable(test_loc(3), "b".to_string())));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-        }
-
-        #[cfg(test)]
-        mod greater_or_equal {
-            use super::*;
-
-            #[test]
-            fn test_infer_greater_or_equal_int() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Greq(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_greater_or_equal_float() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Greq(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::FloatLiteral(test_loc(3), 2.1)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_greater_or_equal_err_operands() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Greq(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_greater_or_equal_err_result() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Greq(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_greater_or_equal_variable() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                state.local_type_context.insert("a".to_string(), Type::Int);
-                state.local_type_context.insert("b".to_string(), Type::Int);
-
-                let e = Expression::Greq(test_loc(1), Box::new(Expression::Variable(test_loc(2), "a".to_string())), Box::new(Expression::Variable(test_loc(3), "b".to_string())));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-        }
-
-        #[cfg(test)]
-        mod lesser_or_equal {
-            use super::*;
-
-            #[test]
-            fn test_infer_lesser_or_equal_int() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Leq(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_lesser_or_equal_float() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Leq(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::FloatLiteral(test_loc(3), 2.1)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_lesser_or_equal_err_operands() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Leq(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_lesser_or_equal_err_result() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Leq(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_lesser_or_equal_variable() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                state.local_type_context.insert("a".to_string(), Type::Int);
-                state.local_type_context.insert("b".to_string(), Type::Int);
-
-                let e = Expression::Leq(test_loc(1), Box::new(Expression::Variable(test_loc(2), "a".to_string())), Box::new(Expression::Variable(test_loc(3), "b".to_string())));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-        }
-
-        #[cfg(test)]
-        mod lesser {
-            use super::*;
-
-            #[test]
-            fn test_infer_lesser_int() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Lesser(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_lesser_float() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Lesser(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::FloatLiteral(test_loc(3), 2.1)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_lesser_err_operands() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Lesser(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_lesser_err_result() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Lesser(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_lesser_variable() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                state.local_type_context.insert("a".to_string(), Type::Int);
-                state.local_type_context.insert("b".to_string(), Type::Int);
-
-                let e = Expression::Lesser(test_loc(1), Box::new(Expression::Variable(test_loc(2), "a".to_string())), Box::new(Expression::Variable(test_loc(3), "b".to_string())));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-        }
-
-        #[cfg(test)]
-        mod eq {
-            use super::*;
-
-            #[test]
-            fn test_infer_eq_int() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Eq(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_eq_bool() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Eq(test_loc(1), Box::new(Expression::BoolLiteral(test_loc(2), true)), Box::new(Expression::BoolLiteral(test_loc(3), false)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_eq_char() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Eq(test_loc(1), Box::new(Expression::CharacterLiteral(test_loc(2), 'c')), Box::new(Expression::CharacterLiteral(test_loc(3), 'b')));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_eq_float() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Eq(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::FloatLiteral(test_loc(3), 2.1)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_eq_string() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Eq(test_loc(1), Box::new(Expression::StringLiteral(test_loc(2), "bla".to_string())), Box::new(Expression::StringLiteral(test_loc(3), "blie".to_string())));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_eq_err() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Eq(test_loc(1), Box::new(Expression::StringLiteral(test_loc(2), "bla".to_string())), Box::new(Expression::BoolLiteral(test_loc(3), true)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-        }
-
-        #[cfg(test)]
-        mod neq {
-            use super::*;
-
-            #[test]
-            fn test_infer_neq_int() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Eq(test_loc(1), Box::new(Expression::IntegerLiteral(test_loc(2), 1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_neq_bool() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Eq(test_loc(1), Box::new(Expression::BoolLiteral(test_loc(2), true)), Box::new(Expression::BoolLiteral(test_loc(3), false)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_neq_char() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Neq(test_loc(1), Box::new(Expression::CharacterLiteral(test_loc(2), 'c')), Box::new(Expression::CharacterLiteral(test_loc(3), 'b')));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_neq_float() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Neq(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::FloatLiteral(test_loc(3), 2.1)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_neq_string() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Neq(test_loc(1), Box::new(Expression::StringLiteral(test_loc(2), "bla".to_string())), Box::new(Expression::StringLiteral(test_loc(3), "blie".to_string())));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_neq_err() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Neq(test_loc(1), Box::new(Expression::StringLiteral(test_loc(2), "bla".to_string())), Box::new(Expression::BoolLiteral(test_loc(3), true)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-        }
-
-        #[cfg(test)]
-        mod and {
-            use super::*;
-
-            #[test]
-            fn test_infer_and() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::And(test_loc(1), Box::new(Expression::BoolLiteral(test_loc(2), true)), Box::new(Expression::BoolLiteral(test_loc(3), false)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_and_err_operands() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::And(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_and_err_result() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::And(test_loc(1), Box::new(Expression::BoolLiteral(test_loc(2), true)), Box::new(Expression::BoolLiteral(test_loc(3), false)));
-                let result = state.infer_expression(&e, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_and_variable() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                state.local_type_context.insert("a".to_string(), Type::Bool);
-                state.local_type_context.insert("b".to_string(), Type::Bool);
-
-                let e = Expression::And(test_loc(1), Box::new(Expression::Variable(test_loc(2), "a".to_string())), Box::new(Expression::Variable(test_loc(3), "b".to_string())));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-        }
-
-        #[cfg(test)]
-        mod or {
-            use super::*;
-
-            #[test]
-            fn test_infer_or() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Or(test_loc(1), Box::new(Expression::BoolLiteral(test_loc(2), true)), Box::new(Expression::BoolLiteral(test_loc(3), false)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_or_err_operands() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Or(test_loc(1), Box::new(Expression::FloatLiteral(test_loc(2), 1.1)), Box::new(Expression::IntegerLiteral(test_loc(3), 2)));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_or_err_result() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                let e = Expression::Or(test_loc(1), Box::new(Expression::BoolLiteral(test_loc(2), true)), Box::new(Expression::BoolLiteral(test_loc(3), false)));
-                let result = state.infer_expression(&e, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_or_variable() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-
-                state.local_type_context.insert("a".to_string(), Type::Bool);
-                state.local_type_context.insert("b".to_string(), Type::Bool);
-
-                let e = Expression::Or(test_loc(1), Box::new(Expression::Variable(test_loc(2), "a".to_string())), Box::new(Expression::Variable(test_loc(3), "b".to_string())));
-                let result = state.infer_expression(&e, &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-        }
-
-        #[cfg(test)]
-        mod tuple {
-            use super::*;
-
-            #[test]
-            fn test_infer_tuple_1() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let expression = Expression::TupleLiteral(test_loc(1), vec![Expression::IntegerLiteral(test_loc(2), 123), Expression::BoolLiteral(test_loc(3), true)]);
-
-                let result = state.infer_expression(&expression, &Type::Variable("a".to_string()));
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_tuple_2() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let expression = Expression::TupleLiteral(test_loc(1), vec![Expression::IntegerLiteral(test_loc(2), 123), Expression::BoolLiteral(test_loc(3), true)]);
-                let etype = Type::Tuple(vec![Type::Variable("a".to_string()), Type::Variable("b".to_string())]);
-
-                let result = state.infer_expression(&expression, &etype);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-                let map = &result.unwrap();
-            }
-        }
-
-        #[cfg(test)]
-        mod list {
-            use super::*;
-
-            #[test]
-            fn test_infer_list_1() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let expression = Expression::EmptyListLiteral(test_loc(1));
-                let etype = Type::List(Box::new(Type::Int));
-
-                let result = state.infer_expression(&expression, &etype);
-                println!("{:#?}", result);
-                assert!(result.is_ok())
-            }
-
-            #[test]
-            fn test_infer_list_2() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let expression = Expression::ShorthandListLiteral(test_loc(1), vec![Expression::BoolLiteral(test_loc(2), true)]);
-                let etype = Type::List(Box::new(Type::Bool));
-
-                let result = state.infer_expression(&expression, &etype);
-                println!("{:#?}", result);
-                assert!(result.is_ok())
-            }
-
-            #[test]
-            fn test_infer_list_3() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let expression = Expression::ShorthandListLiteral(test_loc(1), vec![Expression::BoolLiteral(test_loc(2), true)]);
-                let etype = Type::List(Box::new(Type::Variable("a".to_string())));
-
-                let result = state.infer_expression(&expression, &etype);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_list_4() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let expression = Expression::ShorthandListLiteral(test_loc(1), vec![Expression::BoolLiteral(test_loc(2), true)]);
-                let etype = Type::Variable("a".to_string());
-
-                let result = state.infer_expression(&expression, &etype);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_list_5() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let expression = Expression::LonghandListLiteral(test_loc(1), Box::new(Expression::BoolLiteral(test_loc(2), true)), Box::new(Expression::EmptyListLiteral(test_loc(3))));
-                let etype = Type::Variable("a".to_string());
-
-                let result = state.infer_expression(&expression, &etype);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-        }
-
-        #[cfg(test)]
-        mod adt {
-            use super::*;
-            use crate::ADTConstructor;
-
-            /*
-                                                            Tests the following code:
-
-                                                            :: Test = A Bool | B Int
-
-                                                            Is "A true" valid?
-                                                            */
-            #[test]
-            fn test_infer_adt_1() {
-                let mut ast = test_ast();
-                ast.type_declarations = vec![CustomType::ADT(test_loc(1), ADTDefinition {
-                    name: "TEST".to_string(),
-                    type_variables: vec![],
-                    constructors: vec![
-                        ("A".to_string(), ADTConstructor { name: "A".to_string(), elements: vec![Type::Bool] }),
-                        ("B".to_string(), ADTConstructor { name: "B".to_string(), elements: vec![Type::Int] })
-                    ].into_iter().collect(),
-                })];
-
-
-                let mut state = test_state(&ast);
-                let expression = Expression::ADTTypeConstructor(test_loc(1), "A".to_string(), vec![Expression::BoolLiteral(test_loc(2), true)]);
-                let etype = Type::Variable("a".to_string());
-
-                let result = state.infer_expression(&expression, &etype);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-                let result = result.unwrap();
-            }
-
-            /*
-            Tests the following code:
-
-            :: Test a b = A a | B b
-
-            Is "A true" valid?
-            */
-            #[test]
-            fn test_infer_adt_2_bool() {
-                let mut ast = test_ast();
-                ast.type_declarations = vec![CustomType::ADT(test_loc(1), ADTDefinition {
-                    name: "TEST".to_string(),
-                    type_variables: vec!["a".to_string(), "b".to_string()],
-                    constructors: vec![
-                        ("A".to_string(), ADTConstructor { name: "A".to_string(), elements: vec![Type::Variable("a".to_string())] }),
-                        ("B".to_string(), ADTConstructor { name: "B".to_string(), elements: vec![Type::Variable("b".to_string())] })
-                    ].into_iter().collect(),
-                })];
-
-
-                let mut state = test_state(&ast);
-                let expression = Expression::ADTTypeConstructor(test_loc(2), "A".to_string(), vec![Expression::BoolLiteral(test_loc(3), true)]);
-                let etype = Type::Variable("a".to_string());
-
-                let result = state.infer_expression(&expression, &etype);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-                let result = result.unwrap();
-                assert_eq!(&("a".to_string(), Type::UserType("TEST".to_string(), vec![Type::Bool, Type::Variable("v2".to_string())])), result.get(2).unwrap());
-            }
-
-            /*
-            Tests the following code:
-
-            :: Test a b = A a | B b
-
-            Is "B "test"" valid?
-            */
-            #[test]
-            fn test_infer_adt_2_string() {
-                let mut ast = test_ast();
-                ast.type_declarations = vec![CustomType::ADT(test_loc(1), ADTDefinition {
-                    name: "TEST".to_string(),
-                    type_variables: vec!["a".to_string(), "b".to_string()],
-                    constructors: vec![
-                        ("A".to_string(), ADTConstructor { name: "A".to_string(), elements: vec![Type::Variable("a".to_string())] }),
-                        ("B".to_string(), ADTConstructor { name: "B".to_string(), elements: vec![Type::Variable("b".to_string())] })
-                    ].into_iter().collect(),
-                })];
-
-
-                let mut state = test_state(&ast);
-                let expression = Expression::ADTTypeConstructor(test_loc(2), "B".to_string(), vec![Expression::StringLiteral(test_loc(3), "test".to_string())]);
-                let etype = Type::Variable("a".to_string());
-
-                let result = state.infer_expression(&expression, &etype);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-                let result = result.unwrap();
-                assert_eq!(&("a".to_string(), Type::UserType("TEST".to_string(), vec![Type::Variable("v1".to_string()), Type::String])), result.get(2).unwrap());
-            }
-
-            /*
-            Tests the following code:
-
-            :: Test a b = A Int a | B String b
-
-            Is A "test" [] valid? => NO!
-            */
-            #[test]
-            fn test_infer_adt_3() {
-                let mut ast = test_ast();
-                ast.type_declarations = vec![CustomType::ADT(test_loc(1), ADTDefinition {
-                    name: "TEST".to_string(),
-                    type_variables: vec!["a".to_string(), "b".to_string()],
-                    constructors: vec![
-                        ("A".to_string(), ADTConstructor { name: "A".to_string(), elements: vec![Type::Int, Type::Variable("a".to_string())] }),
-                        ("B".to_string(), ADTConstructor { name: "B".to_string(), elements: vec![Type::String, Type::Variable("b".to_string())] })
-                    ].into_iter().collect(),
-                })];
-
-
-                let mut state = test_state(&ast);
-                let expression = Expression::ADTTypeConstructor(test_loc(2), "A".to_string(), vec![Expression::StringLiteral(test_loc(3), "test".to_string()), Expression::EmptyListLiteral(test_loc(4))]);
-                let etype = Type::Variable("a".to_string());
-
-                let result = state.infer_expression(&expression, &etype);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-        }
-
-        #[cfg(test)]
-        mod record {
-            use super::*;
-
-            #[test]
-            fn test_infer_record_missing_fields() {
-                let mut ast = test_ast();
-                ast.type_declarations = vec![CustomType::Record(test_loc(1), RecordDefinition {
-                    name: "A".to_string(),
-                    type_variables: vec![],
-                    fields: vec![
-                        ("a".to_string(), Type::Int),
-                        ("b".to_string(), Type::String)
-                    ].into_iter().collect(),
-                })];
-
-                let mut state = test_state(&ast);
-                println!("State: {:#?}", state.record_name_to_definition);
-                let expression = Expression::Record(test_loc(2), "A".to_string(), vec![("a".to_string(), Expression::StringLiteral(test_loc(3), "test".to_string()))]);
-                let etype = Type::Variable("a".to_string());
-
-                let result = state.infer_expression(&expression, &etype);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_record_missing_undefined_fields() {
-                let mut ast = test_ast();
-                ast.type_declarations = vec![CustomType::Record(test_loc(1), RecordDefinition {
-                    name: "A".to_string(),
-                    type_variables: vec![],
-                    fields: vec![
-                        ("a".to_string(), Type::Int),
-                        ("b".to_string(), Type::String)
-                    ].into_iter().collect(),
-                })];
-
-                let mut state = test_state(&ast);
-                let expression = Expression::Record(test_loc(2), "A".to_string(), vec![
-                    ("aaa".to_string(), Expression::StringLiteral(test_loc(3), "test".to_string())),
-                    ("a".to_string(), Expression::IntegerLiteral(test_loc(4), 1)),
-                    ("b".to_string(), Expression::StringLiteral(test_loc(4), "test".to_string()))
-                ]);
-                let etype = Type::Variable("a".to_string());
-
-                let result = state.infer_expression(&expression, &etype);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_record_simple() {
-                let mut ast = test_ast();
-                ast.type_declarations = vec![CustomType::Record(test_loc(1), RecordDefinition {
-                    name: "A".to_string(),
-                    type_variables: vec![],
-                    fields: vec![
-                        ("a".to_string(), Type::Int),
-                        ("b".to_string(), Type::String)
-                    ].into_iter().collect(),
-                })];
-
-                let mut state = test_state(&ast);
-                let expression = Expression::Record(test_loc(2), "A".to_string(), vec![
-                    ("a".to_string(), Expression::IntegerLiteral(test_loc(3), 1)),
-                    ("b".to_string(), Expression::StringLiteral(test_loc(4), "test".to_string()))
-                ]);
-                let etype = Type::Variable("a".to_string());
-
-                let result = state.infer_expression(&expression, &etype);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_record_variable() {
-                let mut ast = test_ast();
-                ast.type_declarations = vec![CustomType::Record(test_loc(1), RecordDefinition {
-                    name: "A".to_string(),
-                    type_variables: vec!["a".to_string()],
-                    fields: vec![
-                        ("a".to_string(), Type::Variable("a".to_string())),
-                        ("b".to_string(), Type::String)
-                    ].into_iter().collect(),
-                })];
-
-                let mut state = test_state(&ast);
-                let expression = Expression::Record(test_loc(2), "A".to_string(), vec![
-                    ("a".to_string(), Expression::IntegerLiteral(test_loc(3), 1)),
-                    ("b".to_string(), Expression::StringLiteral(test_loc(4), "test".to_string()))
-                ]);
-                let etype = Type::Variable("y0".to_string());
-
-                let result = state.infer_expression(&expression, &etype);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_record_variable_err() {
-                let mut ast = test_ast();
-                ast.type_declarations = vec![CustomType::Record(test_loc(1), RecordDefinition {
-                    name: "A".to_string(),
-                    type_variables: vec!["a".to_string()],
-                    fields: vec![
-                        ("a".to_string(), Type::Variable("a".to_string())),
-                        ("b".to_string(), Type::String)
-                    ].into_iter().collect(),
-                })];
-
-                let mut state = test_state(&ast);
-                let expression = Expression::Record(test_loc(2), "A".to_string(), vec![
-                    ("a".to_string(), Expression::IntegerLiteral(test_loc(3), 1)),
-                    ("b".to_string(), Expression::CharacterLiteral(test_loc(4), 'c'))
-                ]);
-                let etype = Type::Variable("y0".to_string());
-
-                let result = state.infer_expression(&expression, &etype);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-        }
-
-        #[cfg(test)]
-        mod call {
-            use std::collections::HashSet;
-
-            use super::*;
-
-            #[test]
-            fn test_infer_call_simple() {
-                let mut ast = test_ast();
-                ast.function_declarations = vec![FunctionDeclaration {
-                    location: test_loc(1),
-                    name: "f".to_string(),
-                    function_type: Some(TypeScheme {
-                        bound_variables: HashSet::new(),
-                        enclosed_type:
-                        Type::Function(vec![Type::String, Type::Int], Box::new(Type::Int)),
-                    }),
-                    function_bodies: vec![],
-                }];
-
-                let mut state = test_state(&ast);
-                let expression = Expression::Call(test_loc(2), "f".to_string(),
-                                                  vec![Expression::StringLiteral(test_loc(3), "Hello".to_string()), Expression::IntegerLiteral(test_loc(4), 15)]);
-
-                let result = state.infer_expression(&expression, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_call_simple_err() {
-                let mut ast = test_ast();
-                ast.function_declarations = vec![FunctionDeclaration {
-                    location: test_loc(1),
-                    name: "f".to_string(),
-                    function_type: Some(TypeScheme {
-                        bound_variables: HashSet::new(),
-                        enclosed_type:
-                        Type::Function(vec![Type::String, Type::Int], Box::new(Type::Int)),
-                    }),
-                    function_bodies: vec![],
-                }];
-
-                let mut state = test_state(&ast);
-                let expression = Expression::Call(test_loc(2), "f".to_string(),
-                                                  vec![Expression::IntegerLiteral(test_loc(3), 15), Expression::StringLiteral(test_loc(4), "Hello".to_string())]);
-                let etype = Type::Variable("a".to_string());
-
-                let result = state.infer_expression(&expression, &etype);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_call_variable() {
-                let mut ast = test_ast();
-                ast.function_declarations = vec![FunctionDeclaration {
-                    location: test_loc(1),
-                    name: "f".to_string(),
-                    function_type: Some(TypeScheme {
-                        bound_variables: {
-                            let mut set = HashSet::new();
-                            set.insert("a".to_string());
-                            set
-                        },
-                        enclosed_type:
-                        Type::Function(vec![Type::Variable("a".to_string()), Type::Variable("a".to_string())], Box::new(Type::Variable("a".to_string()))),
-                    }),
-                    function_bodies: vec![],
-                }];
-
-                let mut state = test_state(&ast);
-                let expression = Expression::Call(test_loc(2), "f".to_string(),
-                                                  vec![Expression::IntegerLiteral(test_loc(3), 15), Expression::IntegerLiteral(test_loc(4), 12)]);
-
-                let result = state.infer_expression(&expression, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_call_variable_err() {
-                let mut ast = test_ast();
-                ast.function_declarations = vec![FunctionDeclaration {
-                    location: test_loc(1),
-                    name: "f".to_string(),
-                    function_type: Some(TypeScheme {
-                        bound_variables: {
-                            let mut set = HashSet::new();
-                            set.insert("a".to_string());
-                            set
-                        },
-                        enclosed_type:
-                        Type::Function(vec![Type::Variable("a".to_string()), Type::Variable("a".to_string())], Box::new(Type::Variable("a".to_string()))),
-                    }),
-                    function_bodies: vec![],
-                }];
-
-                let mut state = test_state(&ast);
-                let expression = Expression::Call(test_loc(2), "f".to_string(),
-                                                  vec![Expression::IntegerLiteral(test_loc(3), 15), Expression::BoolLiteral(test_loc(4), true)]);
-
-                let result = state.infer_expression(&expression, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_call_variables_err() {
-                let mut ast = test_ast();
-                ast.function_declarations = vec![FunctionDeclaration {
-                    location: test_loc(1),
-                    name: "f".to_string(),
-                    function_type: Some(TypeScheme {
-                        bound_variables: {
-                            let mut set = HashSet::new();
-                            set.insert("a".to_string());
-                            set
-                        },
-                        enclosed_type:
-                        Type::Function(vec![Type::Variable("a".to_string()), Type::Variable("a".to_string())], Box::new(Type::Variable("a".to_string()))),
-                    }),
-                    function_bodies: vec![],
-                }];
-
-                let mut state = test_state(&ast);
-                let expression = Expression::Call(test_loc(2), "f".to_string(),
-                                                  vec![Expression::IntegerLiteral(test_loc(3), 15), Expression::BoolLiteral(test_loc(4), true)]);
-
-                let result = state.infer_expression(&expression, &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-        }
-    }
-
-    #[cfg(test)]
-    mod match_expression {
-        use super::*;
-
-        #[cfg(test)]
-        mod simple {
-            use super::*;
-
-            #[test]
-            fn test_match_int() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_match_expression(&MatchExpression::IntLiteral(test_loc(1), 18), &Type::Int);
-                println!("{:#?}", result);
-                assert!(result.is_ok())
-            }
-
-            #[test]
-            fn test_match_char() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_match_expression(&MatchExpression::CharLiteral(test_loc(1), 'c'), &Type::Char);
-                println!("{:#?}", result);
-                assert!(result.is_ok())
-            }
-
-            #[test]
-            fn test_match_string() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_match_expression(&MatchExpression::StringLiteral(test_loc(1), "hello".to_string()), &Type::String);
-                println!("{:#?}", result);
-                assert!(result.is_ok())
-            }
-
-            #[test]
-            fn test_match_bool() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_match_expression(&MatchExpression::BoolLiteral(test_loc(1), true), &Type::Bool);
-                println!("{:#?}", result);
-                assert!(result.is_ok())
-            }
-
-            #[test]
-            fn test_match_identifier() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_match_expression(&MatchExpression::Identifier(test_loc(1), "a".to_string()), &Type::Bool);
-                println!("{:#?}", result);
-                println!("{:#?}", state.local_type_context);
-                assert!(result.is_ok())
-            }
-        }
-
-        #[cfg(test)]
-        mod tuple {
-            use super::*;
-
-            #[test]
-            fn test_infer_match_tuple_simple() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_match_expression(&MatchExpression::Tuple(test_loc(1), vec![
-                    MatchExpression::IntLiteral(test_loc(2), 18),
-                    MatchExpression::BoolLiteral(test_loc(3), true)
-                ]), &Type::Tuple(vec![Type::Int, Type::Bool]));
-
-                println!("{:#?}", result);
-                assert!(result.is_ok())
-            }
-
-            #[test]
-            fn test_infer_match_tuple_simple_err() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_match_expression(&MatchExpression::Tuple(test_loc(1), vec![
-                    MatchExpression::IntLiteral(test_loc(2), 18),
-                    MatchExpression::IntLiteral(test_loc(3), 19)
-                ]), &Type::Tuple(vec![Type::Int, Type::Bool]));
-
-                println!("{:#?}", result);
-                assert!(result.is_err())
-            }
-
-            #[test]
-            fn test_infer_match_tuple_variable() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_match_expression(&MatchExpression::Tuple(test_loc(1), vec![
-                    MatchExpression::IntLiteral(test_loc(2), 18),
-                    MatchExpression::IntLiteral(test_loc(3), 19)
-                ]), &Type::Variable("a".to_string()));
-
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-
-                let result = result.unwrap();
-                assert_eq!(result.get(0).unwrap(), &("a".to_string(), Type::Tuple(vec![Type::Int, Type::Int])));
-            }
-        }
-
-        #[cfg(test)]
-        mod shorthand_list {
-            use super::*;
-
-            #[test]
-            fn test_infer_match_list_simple() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_match_expression(&MatchExpression::ShorthandList(test_loc(1), vec![
-                    MatchExpression::IntLiteral(test_loc(2), 18),
-                    MatchExpression::IntLiteral(test_loc(3), 19)
-                ]), &Type::List(Box::new(Type::Int)));
-
-                println!("{:#?}", result);
-                assert!(result.is_ok())
-            }
-
-            #[test]
-            fn test_infer_match_list_simple_err() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_match_expression(&MatchExpression::ShorthandList(test_loc(1), vec![
-                    MatchExpression::IntLiteral(test_loc(2), 18),
-                    MatchExpression::BoolLiteral(test_loc(3), true)
-                ]), &Type::List(Box::new(Type::Int)));
-
-                println!("{:#?}", result);
-                assert!(result.is_err())
-            }
-
-            #[test]
-            fn test_infer_match_list_simple_err_return() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_match_expression(&MatchExpression::ShorthandList(test_loc(1), vec![
-                    MatchExpression::IntLiteral(test_loc(2), 18),
-                    MatchExpression::IntLiteral(test_loc(3), 19)
-                ]), &Type::List(Box::new(Type::Bool)));
-
-                println!("{:#?}", result);
-                assert!(result.is_err())
-            }
-        }
-
-        #[cfg(test)]
-        mod longhand_list {
-            use super::*;
-
-            #[test]
-            fn test_infer_match_list_simple() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_match_expression(
-                    &MatchExpression::LonghandList(test_loc(1),
-                                                   Box::new(MatchExpression::IntLiteral(test_loc(2), 18)),
-                                                   Box::new(MatchExpression::LonghandList(test_loc(3),
-                                                                                          Box::new(MatchExpression::IntLiteral(test_loc(4), 19)),
-                                                                                          Box::new(MatchExpression::ShorthandList(test_loc(5), vec![]))))),
-                    &Type::List(Box::new(Type::Int)));
-
-                println!("{:#?}", result);
-                assert!(result.is_ok())
-            }
-
-            #[test]
-            fn test_infer_match_list_simple_err() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_match_expression(
-                    &MatchExpression::LonghandList(test_loc(1),
-                                                   Box::new(MatchExpression::IntLiteral(test_loc(2), 18)),
-                                                   Box::new(MatchExpression::LonghandList(test_loc(3),
-                                                                                          Box::new(MatchExpression::BoolLiteral(test_loc(4), true)),
-                                                                                          Box::new(MatchExpression::ShorthandList(test_loc(5), vec![]))))),
-                    &Type::List(Box::new(Type::Int)));
-
-                println!("{:#?}", result);
-                assert!(result.is_err())
-            }
-
-            #[test]
-            fn test_infer_match_list_simple_err_return() {
-                let ast = test_ast();
-                let mut state = test_state(&ast);
-                let result = state.infer_match_expression(
-                    &MatchExpression::LonghandList(test_loc(1),
-                                                   Box::new(MatchExpression::IntLiteral(test_loc(2), 18)),
-                                                   Box::new(MatchExpression::LonghandList(test_loc(3),
-                                                                                          Box::new(MatchExpression::IntLiteral(test_loc(4), 19)),
-                                                                                          Box::new(MatchExpression::ShorthandList(test_loc(5), vec![]))))),
-                    &Type::List(Box::new(Type::Bool)));
-
-                println!("{:#?}", result);
-                assert!(result.is_err())
-            }
-        }
-
-        #[cfg(test)]
-        mod adt {
-            use super::*;
-
-            #[test]
-            fn test_infer_record_missing_fields() {
-                let mut ast = test_ast();
-                ast.type_declarations = vec![CustomType::Record(test_loc(1), RecordDefinition {
-                    name: "A".to_string(),
-                    type_variables: vec![],
-                    fields: vec![
-                        ("a".to_string(), Type::Int),
-                        ("b".to_string(), Type::String)
-                    ].into_iter().collect(),
-                })];
-
-                let mut state = test_state(&ast);
-                println!("State: {:#?}", state.record_name_to_definition);
-                let expression = Expression::Record(test_loc(2), "A".to_string(), vec![("a".to_string(), Expression::StringLiteral(test_loc(3), "test".to_string()))]);
-                let etype = Type::Variable("a".to_string());
-
-                let result = state.infer_expression(&expression, &etype);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-        }
-
-        #[cfg(test)]
-        mod record {
-            use super::*;
-
-            #[test]
-            fn test_infer_record_undefined_field() {
-                let mut ast = test_ast();
-                ast.type_declarations = vec![CustomType::Record(test_loc(1), RecordDefinition {
-                    name: "A".to_string(),
-                    type_variables: vec![],
-                    fields: vec![].into_iter().collect(),
-                })];
-
-                let mut state = test_state(&ast);
-                let expression = MatchExpression::Record(test_loc(2), "A".to_string(), vec!["a".to_string()]);
-                let etype = Type::Variable("a".to_string());
-
-                let result = state.infer_match_expression(&expression, &etype);
-                println!("{:#?}", result);
-                assert!(result.is_err());
-            }
-
-            #[test]
-            fn test_infer_record_simple() {
-                let mut ast = test_ast();
-                ast.type_declarations = vec![CustomType::Record(test_loc(1), RecordDefinition {
-                    name: "A".to_string(),
-                    type_variables: vec![],
-                    fields: vec![("a".to_string(), Type::Int)].into_iter().collect(),
-                })];
-
-                let mut state = test_state(&ast);
-                let expression = MatchExpression::Record(test_loc(2), "A".to_string(), vec!["a".to_string()]);
-                let etype = Type::Variable("a".to_string());
-
-                let result = state.infer_match_expression(&expression, &etype);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-
-            #[test]
-            fn test_infer_record_variable() {
-                let mut ast = test_ast();
-                ast.type_declarations = vec![CustomType::Record(test_loc(1), RecordDefinition {
-                    name: "A".to_string(),
-                    type_variables: vec!["c".to_string()],
-                    fields: vec![("a".to_string(), Type::Variable("c".to_string()))].into_iter().collect(),
-                })];
-
-                let mut state = test_state(&ast);
-                let expression = MatchExpression::Record(test_loc(2), "A".to_string(), vec!["a".to_string()]);
-                let etype = Type::Variable("a".to_string());
-
-                let result = state.infer_match_expression(&expression, &etype);
-                println!("{:#?}", result);
-                assert!(result.is_ok());
-            }
-        }
-    }
-
-    fn test_state(ast: &AST) -> InferencerState {
-        InferencerState {
-            main: &ast.main,
-            adt_type_constructor_to_type: build_adt_cache(&ast.type_declarations),
-            record_name_to_definition: build_record_cache(&ast.type_declarations),
-            type_variable_iterator: Box::new(VariableNameStream { n: 1 }),
-            global_type_context: build_function_scheme_cache(&ast.function_declarations),
-            local_type_context: HashMap::new(),
-        }
-    }
-
-    fn test_loc(n: usize) -> Location {
-        Location {
-            file: "TEST".to_string(),
-            function: "TEST".to_string(),
-            line: n,
-            col: n,
-        }
-    }
-
-    fn test_ast() -> AST {
-        AST {
-            function_declarations: vec![],
-            type_declarations: vec![],
-            main: Expression::IntegerLiteral(test_loc(0), 1),
-        }
     }
 }
 

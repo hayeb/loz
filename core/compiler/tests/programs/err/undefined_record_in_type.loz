@@ -1,0 +1,4 @@
+f :: R -> Int
+f {R|x} = x
+
+main = {R|x = 18}
