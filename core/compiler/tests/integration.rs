@@ -37,5 +37,5 @@ fn compile_file(path: PathBuf) -> Result<TypedAST, Vec<InferenceError>>  {
     // For now, assume parsing succeeds..
     let ast = parser::parse(&path.to_str().unwrap().to_string(), &file_contents).unwrap();
 
-    inferencer::infer(&ast, InferencerOptions { print_types: false})
+    inferencer::infer(&ast, path.to_str().unwrap().to_string(), InferencerOptions { print_types: false, is_main_module: true})
 }

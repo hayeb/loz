@@ -1,0 +1,4 @@
+flip :: (a, b) -> (b, a)
+flip (a, b) = (b, a)
+
+main = flip (1, 'c')

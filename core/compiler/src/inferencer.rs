@@ -61,6 +61,8 @@ pub enum InferenceErrorType {
     ExpectedRecordFieldAccessor(Type),
 
     UndefinedVariable(String),
+
+    MissingMainFunction,
 }
 
 #[derive(Debug)]
@@ -119,13 +121,19 @@ impl Display for InferenceError {
             InferenceErrorType::ExpectedRecordFieldAccessor(got)
             => write!(f, "Expected record field accessor on RLHS of '.', got {}", got),
 
-            InferenceErrorType::UndefinedVariable(name) => write!(f, "Variable {} is not defined", name)
+            InferenceErrorType::UndefinedVariable(name) => write!(f, "Variable {} is not defined", name),
+
+            InferenceErrorType::MissingMainFunction => write!(f, "Missing main function")
         }
     }
 }
 
 fn write_error_context(f: &mut Formatter<'_>, context: &ErrorContext) -> Result<(), Error> {
-    write!(f, "{}::{}@[{}:{}]: ", context.file, context.function, context.line, context.col)
+    if context.function.is_empty() {
+        write!(f, "{}@[{}:{}]: ", context.file, context.line, context.col)
+    } else {
+        write!(f, "{}::{}@[{}:{}]: ", context.file, context.function, context.line, context.col)
+    }
 }
 
 #[derive(Debug)]
@@ -159,12 +167,13 @@ struct InferencerState{
 
 pub struct InferencerOptions {
     pub print_types: bool,
+    pub is_main_module: bool,
 }
 
-pub fn infer(ast: &AST, options: InferencerOptions) -> Result<TypedAST, Vec<InferenceError>> {
+pub fn infer(ast: &AST, file_name: String, options: InferencerOptions) -> Result<TypedAST, Vec<InferenceError>> {
     let mut infer_state = InferencerState::new(ast, options)?;
     let components = grapher::to_components(&ast.function_declarations);
-    Ok(infer_state.infer(components)?)
+    Ok(infer_state.infer(file_name, components)?)
 }
 
 fn build_function_scheme_cache(function_declarations: &Vec<FunctionDeclaration>) -> HashMap<String, TypeScheme> {
@@ -421,8 +430,19 @@ impl InferencerState {
             .collect();
     }
 
-    fn infer(&mut self, components: Vec<Vec<&FunctionDeclaration>>) -> Result<TypedAST, Vec<InferenceError>> {
+    fn infer(&mut self, file_name: String, components: Vec<Vec<&FunctionDeclaration>>) -> Result<TypedAST, Vec<InferenceError>> {
         self.infer_connected_components(&components)?;
+
+        if self.options.is_main_module {
+            if let None = self.global_type_context.get("main") {
+                return Err(vec![InferenceError::from_loc(Location {
+                    file: file_name,
+                    function: "".to_string(),
+                    line: 1,
+                    col: 1
+                }, InferenceErrorType::MissingMainFunction)])
+            }
+        }
 
         Ok(TypedAST {
             function_name_to_declaration: components.into_iter().flat_map(|c| c.into_iter()).map(|d| (d.name.clone(), d.clone().clone())).collect(),
