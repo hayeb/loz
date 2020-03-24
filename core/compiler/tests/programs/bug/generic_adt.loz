@@ -1,0 +1,12 @@
+:: Maybe a = Nothing | Just a
+
+find :: [a] a -> Maybe Int
+find haystack needle = find_ haystack needle 0
+where
+    find_ [] _ _ = Nothing
+    find_ [a : as] needle index
+    | a == needle = Just index
+    = find_ as needle (index + 1)
+.
+
+main = find [1, 2, 3, 4] 3

@@ -59,7 +59,7 @@ Does NOT support laziness and does NOT use graph/term rewriting as basis for eva
 
 ### Technical improvements
 * Clean-up AST, should speed up parsing
-* Rework ```Main``` start rule, should be a normal function called ```main```
+* ✔ Rework ```Main``` start rule, should be a normal function called ```main```
 * I'm using ```clone()``` more than I'd like, due to not bothering with lifetimes
 * Benchmark
 * Probably use different parser
