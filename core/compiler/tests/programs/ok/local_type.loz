@@ -1,0 +1,12 @@
+f x = g x
+where
+    :: G = G Int
+
+    g x = h (G x)
+
+    h (G x) = x * 18
+
+
+
+main = f 9
+.

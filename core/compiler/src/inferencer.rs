@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Error, Formatter};
 use std::iter;
 
-use crate::{ADTDefinition, AST, CustomType, Expression, FunctionDeclaration, FunctionRule, Location, MatchExpression, RecordDefinition, Type, TypeScheme, TypeVar};
+use crate::{ADTDefinition, AST, CustomType, Expression, FunctionDefinition, FunctionRule, Location, MatchExpression, RecordDefinition, Type, TypeScheme, TypeVar};
 use crate::inferencer::substitutor::{substitute, substitute_list, substitute_type};
 use crate::inferencer::unifier::{unify, unify_one_of};
 
@@ -67,7 +67,7 @@ pub enum InferenceErrorType {
 
 #[derive(Debug)]
 pub struct TypedAST {
-    pub function_name_to_declaration: HashMap<String, FunctionDeclaration>,
+    pub function_name_to_declaration: HashMap<String, FunctionDefinition>,
     pub adt_type_constructor_to_type: HashMap<String, ADTDefinition>,
     pub record_name_to_definition: HashMap<String, RecordDefinition>,
 }
@@ -153,21 +153,22 @@ impl Iterator for VariableNameStream {
     }
 }
 
-struct InferencerState{
-    adt_type_constructor_to_type: HashMap<String, ADTDefinition>,
-    record_name_to_definition: HashMap<String, RecordDefinition>,
-    type_variable_iterator: Box<dyn Iterator<Item=String>>,
-
-    global_type_context: HashMap<String, TypeScheme>,
-
-    local_type_context: Vec<HashMap<String, Type>>,
-
-    options: InferencerOptions,
-}
-
 pub struct InferencerOptions {
     pub print_types: bool,
     pub is_main_module: bool,
+}
+
+struct InferencerState {
+    type_variable_iterator: Box<dyn Iterator<Item=String>>,
+    options: InferencerOptions,
+
+    frames: Vec<InferencerFrame>,
+}
+
+struct InferencerFrame {
+    adt_type_constructor_to_type: HashMap<String, ADTDefinition>,
+    record_name_to_definition: HashMap<String, RecordDefinition>,
+    type_scheme_context: HashMap<String, TypeScheme>
 }
 
 pub fn infer(ast: &AST, file_name: String, options: InferencerOptions) -> Result<TypedAST, Vec<InferenceError>> {
@@ -176,7 +177,7 @@ pub fn infer(ast: &AST, file_name: String, options: InferencerOptions) -> Result
     Ok(infer_state.infer(file_name, components)?)
 }
 
-fn build_function_scheme_cache(function_declarations: &Vec<FunctionDeclaration>) -> HashMap<String, TypeScheme> {
+fn build_function_scheme_cache(function_declarations: &Vec<FunctionDefinition>) -> HashMap<String, TypeScheme> {
     function_declarations.iter()
         .filter(|d| d.function_type.is_some())
         .map(|d| (d.name.clone(), d.function_type.clone().unwrap()))
@@ -218,6 +219,7 @@ impl InferencerState {
     fn new(ast: &AST, options: InferencerOptions) -> Result<InferencerState, Vec<InferenceError>> {
         // 1. Check whether all functions are uniquely defined.
         check_unique_definitions(ast)?;
+
         // 2. Register all functions which have a type.
         let function_name_to_type = build_function_scheme_cache(&ast.function_declarations);
 
@@ -238,17 +240,18 @@ impl InferencerState {
         check_type_references_defined(&ast.function_declarations, &defined_type_names)?;
 
         return Ok(InferencerState {
-            adt_type_constructor_to_type,
-            record_name_to_definition,
+            options,
             type_variable_iterator: Box::new(VariableNameStream { n: 1 }),
-            global_type_context: function_name_to_type,
-            local_type_context: vec![HashMap::new()],
-            options
+            frames: vec![InferencerFrame {
+                adt_type_constructor_to_type,
+                record_name_to_definition,
+                type_scheme_context: function_name_to_type,
+            }],
         });
     }
 }
 
-fn check_type_references_defined(function_declarations: &Vec<FunctionDeclaration>, defined_types: &HashSet<String>) -> Result<(), Vec<InferenceError>> {
+fn check_type_references_defined(function_declarations: &Vec<FunctionDefinition>, defined_types: &HashSet<String>) -> Result<(), Vec<InferenceError>> {
     let mut errors = Vec::new();
     for d in function_declarations {
         if let Some(function_type) = &d.function_type {
@@ -259,9 +262,13 @@ fn check_type_references_defined(function_declarations: &Vec<FunctionDeclaration
         }
 
         for b in &d.function_bodies {
-            // TODO: Support locally defined types.
-            let locally_defined_types = defined_types;
-            let lfd_errors = check_type_references_defined(&b.local_function_declarations, locally_defined_types);
+            let mut local_type_definitions: HashSet<String> = (&b.local_type_definitions).iter().map(|ltd| match ltd {
+                CustomType::ADT(_, def) => def.name.clone(),
+                CustomType::Record(_, def) => def.name.clone(),
+            }).collect();
+            local_type_definitions.extend(defined_types.clone());
+
+            let lfd_errors = check_type_references_defined(&b.local_function_definitions, &local_type_definitions);
             if let Err(lfd_errors) = lfd_errors {
                 errors.extend(lfd_errors);
             }
@@ -269,13 +276,12 @@ fn check_type_references_defined(function_declarations: &Vec<FunctionDeclaration
     }
 
     if errors.len() > 0 {
-        return Err(errors)
+        return Err(errors);
     }
     Ok(())
-
 }
 
-fn check_function_calls_defined(declarations: &Vec<FunctionDeclaration>, defined_functions: &HashSet<String>) -> Result<(), Vec<InferenceError>> {
+fn check_function_calls_defined(declarations: &Vec<FunctionDefinition>, defined_functions: &HashSet<String>) -> Result<(), Vec<InferenceError>> {
     let mut errors = Vec::new();
     for d in declarations {
         for b in &d.function_bodies {
@@ -287,7 +293,7 @@ fn check_function_calls_defined(declarations: &Vec<FunctionDeclaration>, defined
 
             let mut local_defined_functions = HashSet::new();
 
-            for d in &b.local_function_declarations {
+            for d in &b.local_function_definitions {
                 defined_variables.insert(d.name.clone());
                 local_defined_functions.insert(d.name.clone());
             }
@@ -296,7 +302,7 @@ fn check_function_calls_defined(declarations: &Vec<FunctionDeclaration>, defined
                 local_defined_functions.insert(f.clone());
             }
 
-            if let Err(errs) = check_function_calls_defined(&b.local_function_declarations, &local_defined_functions) {
+            if let Err(errs) = check_function_calls_defined(&b.local_function_definitions, &local_defined_functions) {
                 errors.extend(errs);
             }
 
@@ -323,7 +329,7 @@ fn check_function_calls_defined(declarations: &Vec<FunctionDeclaration>, defined
         }
     }
     if errors.len() > 0 {
-        return Err(errors)
+        return Err(errors);
     }
     Ok(())
 }
@@ -385,7 +391,7 @@ fn check_unique_definitions(ast: &AST) -> Result<(), Vec<InferenceError>> {
 
 
     if type_errors.len() > 0 {
-        return Err(type_errors)
+        return Err(type_errors);
     }
     Ok(())
 }
@@ -399,64 +405,107 @@ impl InferencerState {
         Type::Variable(self.type_variable_iterator.next().unwrap())
     }
 
-    fn add_local_type(&mut self, name: String, t: Type) {
-        self.local_type_context.last_mut().unwrap().insert(name, t);
+    fn add_type(&mut self, name: String, t: Type) {
+        self.add_type_scheme(name,  TypeScheme { bound_variables: HashSet::new(), enclosed_type: t});
     }
 
-    fn get_local_type(&self, name: &String) -> Option<Type> {
-        for context in self.local_type_context.iter().rev() {
-            if context.contains_key(name) {
-                return context.get(name).cloned()
+    fn get_type(&self, name: &str) -> Option<Type> {
+        self.get_type_scheme(name).map(|ts| ts.enclosed_type)
+    }
+
+    fn add_type_scheme(&mut self, name: String, ts: TypeScheme) {
+        self.frames.last_mut().unwrap().type_scheme_context.insert(name, ts);
+    }
+
+    fn get_type_scheme(&self, name: &str) -> Option<TypeScheme> {
+        for frame in self.frames.iter().rev() {
+            if frame.type_scheme_context.contains_key(name) {
+                return frame.type_scheme_context.get(name).cloned();
             }
         }
         None
     }
 
-    fn push_local_context(&mut self) {
-        self.local_type_context.push(HashMap::new());
+    fn get_adt_definition_by_constructor_name(&self, name: &str) -> Option<&ADTDefinition> {
+        for frame in self.frames.iter().rev() {
+            if let Some(def) = frame.adt_type_constructor_to_type.get(name) {
+                return Some(def)
+            }
+        }
+        None
     }
 
-    fn pop_local_context(&mut self) {
-        self.local_type_context.pop();
+    fn get_record_definition_by_name(&self, name: &str) -> Option<&RecordDefinition> {
+        for frame in self.frames.iter().rev() {
+            if let Some(def) = frame.record_name_to_definition.get(name) {
+                return Some(def)
+            }
+        }
+        None
+    }
+
+    fn add_type_definition(&mut self, type_definition: CustomType) {
+        match type_definition {
+            CustomType::ADT(_, def) => {
+                for (name, _) in &def.constructors {
+                    self.frames.last_mut().unwrap().adt_type_constructor_to_type.insert(name.clone(), def.clone());
+                };
+
+            },
+            CustomType::Record(_, def) => {
+                self.frames.last_mut().unwrap().record_name_to_definition.insert(def.name.clone(), def.clone());
+            }
+        };
+    }
+
+
+    fn push_frame(&mut self) {
+        self.frames.push(InferencerFrame {
+            adt_type_constructor_to_type: HashMap::new(),
+            record_name_to_definition: HashMap::new(),
+            type_scheme_context: HashMap::new(),
+        });
+    }
+
+    fn pop_frame(&mut self) {
+        self.frames.pop();
     }
 
     fn extend_type_environment(&mut self, with: &Vec<(TypeVar, Type)>) {
-        self.local_type_context = self.local_type_context.iter()
-            .map(|context| context.iter().map(|(n, t)| (n.clone(), substitutor::substitute_type(with, &t))).collect())
-            .collect();
-
-        self.global_type_context = self.global_type_context.iter()
-            .map(|(n, t)| (n.clone(), substitutor::substitute(with, &t)))
-            .collect();
+        for frame in self.frames.iter_mut() {
+            frame.type_scheme_context = frame.type_scheme_context.iter()
+                .map(|(n, t)| (n.clone(), substitutor::substitute(with, &t)))
+                .collect() ;
+        }
     }
 
-    fn infer(&mut self, file_name: String, components: Vec<Vec<&FunctionDeclaration>>) -> Result<TypedAST, Vec<InferenceError>> {
+    fn infer(&mut self, file_name: String, components: Vec<Vec<&FunctionDefinition>>) -> Result<TypedAST, Vec<InferenceError>> {
         self.infer_connected_components(&components)?;
 
         if self.options.is_main_module {
-            if let None = self.global_type_context.get("main") {
+            if let None = self.get_type_scheme("main") {
                 return Err(vec![InferenceError::from_loc(Location {
                     file: file_name,
                     function: "".to_string(),
                     line: 1,
-                    col: 1
-                }, InferenceErrorType::MissingMainFunction)])
+                    col: 1,
+                }, InferenceErrorType::MissingMainFunction)]);
             }
         }
 
         Ok(TypedAST {
             function_name_to_declaration: components.into_iter().flat_map(|c| c.into_iter()).map(|d| (d.name.clone(), d.clone().clone())).collect(),
-            adt_type_constructor_to_type: self.adt_type_constructor_to_type.clone(),
-            record_name_to_definition: self.record_name_to_definition.clone()
+            adt_type_constructor_to_type: self.frames.first().unwrap().adt_type_constructor_to_type.clone(),
+            record_name_to_definition: self.frames.first().unwrap().record_name_to_definition.clone(),
         })
     }
 
-    fn infer_connected_components(&mut self, components: &Vec<Vec<&FunctionDeclaration>>) -> Result<(), Vec<InferenceError>> {
+    fn infer_connected_components(&mut self, components: &Vec<Vec<&FunctionDefinition>>) -> Result<(), Vec<InferenceError>> {
         for component in components {
             // Generate fresh variables for all declarations in a component
             for d in component.iter() {
                 let fresh = self.fresh();
-                    self.global_type_context.insert(d.name.clone(), TypeScheme { bound_variables: HashSet::new(), enclosed_type: fresh });
+                self.add_type(d.name.clone(), fresh);
             }
 
             // Infer every declaration
@@ -468,13 +517,13 @@ impl InferencerState {
             // Generalize all declarations in a component
 
             for d in component {
-                let derived_scheme = (&self.global_type_context).get(&d.name).unwrap();
+                let derived_scheme = self.get_type_scheme(&d.name).unwrap();
                 let generalized_scheme = self.generalize(derived_scheme.enclosed_type.clone());
 
                 if self.options.print_types {
                     println!("Type for function '{}': {}", d.name.clone(), generalized_scheme);
                 }
-                self.global_type_context.insert(d.name.clone(), generalized_scheme);
+                self.add_type_scheme(d.name.clone(), generalized_scheme);
             }
         }
         Ok(())
@@ -494,12 +543,14 @@ impl InferencerState {
         TypeScheme { bound_variables: free, enclosed_type: t }
     }
 
-    fn infer_function_declaration(&mut self, declaration: &FunctionDeclaration) -> Result<Vec<(TypeVar, Type)>, Vec<InferenceError>> {
+    fn infer_function_declaration(&mut self, declaration: &FunctionDefinition) -> Result<Vec<(TypeVar, Type)>, Vec<InferenceError>> {
         let mut function_type = self.fresh();
         let mut function_type_location_mutated = declaration.location.clone();
-        for body in (&declaration.function_bodies).into_iter() {
 
-            self.push_local_context();
+        self.push_frame();
+
+        for body in (&declaration.function_bodies).into_iter() {
+            self.push_frame();
 
             // Infer all arguments. This introduces new variables in the local type context.
             let mut current_match_types = Vec::new();
@@ -512,7 +563,11 @@ impl InferencerState {
                 current_match_types.push(substitute_type(&subs, &fresh));
             }
 
-            let components = grapher::to_components(&body.local_function_declarations);
+            for ltd in &body.local_type_definitions {
+                self.add_type_definition(ltd.clone())
+            }
+
+            let components = grapher::to_components(&body.local_function_definitions);
             self.infer_connected_components(&components)?;
 
             for r in &body.rules {
@@ -551,9 +606,9 @@ impl InferencerState {
                 }
             }
 
-            self.pop_local_context();
+            self.pop_frame();
 
-            let derived_function_type = if current_match_types.len() > 0 { Type::Function(current_match_types, Box::new(current_return_type))} else {current_return_type};
+            let derived_function_type = if current_match_types.len() > 0 { Type::Function(current_match_types, Box::new(current_return_type)) } else { current_return_type };
 
             match unify(&derived_function_type, &function_type) {
                 Ok(subs) => {
@@ -568,7 +623,9 @@ impl InferencerState {
             }
         }
 
-        let mut derived_scheme = self.global_type_context.get(&declaration.name).unwrap().clone();
+        let mut derived_scheme = self.get_type_scheme(&declaration.name).unwrap().clone();
+
+        self.pop_frame();
 
         let subs = map_unify(declaration.location.clone(), unify(&derived_scheme.enclosed_type, &function_type))?;
         self.extend_type_environment(&subs);
@@ -599,7 +656,7 @@ impl InferencerState {
             MatchExpression::BoolLiteral(loc, _) => map_unify(loc.clone(), unify(&Type::Bool, expected_type))?,
 
             MatchExpression::Identifier(_, name) => {
-                self.add_local_type(name.clone(), expected_type.clone());
+                self.add_type(name.clone(), expected_type.clone());
                 Vec::new()
             }
 
@@ -641,7 +698,7 @@ impl InferencerState {
                     })?
             }
             MatchExpression::ADT(loc, constructor_name, constructor_arguments) => {
-                let adt_definition = match self.adt_type_constructor_to_type.get(constructor_name) {
+                let adt_definition = match self.get_adt_definition_by_constructor_name(constructor_name) {
                     Some(d) => d.clone(),
                     None => return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::UndefinedTypeConstructor(constructor_name.clone()))]),
                 };
@@ -705,7 +762,7 @@ impl InferencerState {
 
             MatchExpression::Wildcard(_loc) => Vec::new(),
             MatchExpression::Record(loc, name, fields) => {
-                let record_definition = match self.record_name_to_definition.get(name) {
+                let record_definition = match self.get_record_definition_by_name(name) {
                     Some(d) => d.clone(),
                     None => return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::UndefinedRecord(name.clone()))]),
                 };
@@ -746,7 +803,7 @@ impl InferencerState {
                 // For every field used in the match expression, add a variable with the discovered type.
                 let mut field_to_type = HashMap::new();
                 for (field_name, field_type) in instantiated_field_types {
-                    self.add_local_type(field_name.clone(), substitute_type(&subs, &field_type));
+                    self.add_type(field_name.clone(), substitute_type(&subs, &field_type));
                     field_to_type.insert(field_name.clone(), substitute_type(&subs, &field_type));
                 }
                 subs
@@ -895,7 +952,7 @@ impl InferencerState {
                     t => return Err(vec![InferenceError::from_loc(l.locate(), InferenceErrorType::ExpectedRecordType(t))])
                 };
 
-                let record_definition = match self.record_name_to_definition.get(&name) {
+                let record_definition = match self.get_record_definition_by_name(&name) {
                     Some(record_definition) => record_definition,
                     None => return Err(vec![])
                 };
@@ -918,7 +975,7 @@ impl InferencerState {
             }
 
             Expression::Variable(loc, name) => {
-                let variable_type = match self.get_local_type(name) {
+                let variable_type = match self.get_type(name) {
                     None => return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::UndefinedVariable(name.clone()))]),
                     Some(vtype) => vtype,
                 };
@@ -982,7 +1039,7 @@ impl InferencerState {
                     })?
             }
             Expression::ADTTypeConstructor(loc, name, arguments) => {
-                let adt_definition = match self.adt_type_constructor_to_type.get(name) {
+                let adt_definition = match self.get_adt_definition_by_constructor_name(name) {
                     Some(d) => d.clone(),
                     None => return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::UndefinedTypeConstructor(name.clone()))]),
                 };
@@ -1060,7 +1117,7 @@ impl InferencerState {
                     })?
             }
             Expression::Record(loc, name, fields) => {
-                let record_definition = match self.record_name_to_definition.get(name) {
+                let record_definition = match self.get_record_definition_by_name(name) {
                     Some(d) => d.clone(),
                     None => return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::UndefinedRecord(name.clone()))]),
                 };
@@ -1137,11 +1194,8 @@ impl InferencerState {
                     })?
             }
             Expression::Call(loc, name, arguments) => {
-                let function_type = match self.get_local_type(name) {
-                    None => match self.global_type_context.get(name) {
-                        Some(t) => t.clone(),
-                        None => return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::UndefinedFunction(name.clone()))])
-                    },
+                let function_type = match self.get_type(name) {
+                    None => return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::UndefinedFunction(name.clone()))]),
                     Some(ft) => TypeScheme { bound_variables: HashSet::new(), enclosed_type: ft },
                 };
 

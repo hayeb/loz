@@ -1,0 +1,16 @@
+f x = g x
+where
+    :: G = G Int
+
+    g x = h (G x)
+
+    h (G x) = x
+.
+
+i x = j x
+where
+    j x = k (G x)
+    k (G x) = x
+.
+
+main = f 19

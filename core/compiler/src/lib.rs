@@ -40,7 +40,8 @@ pub struct FunctionBody {
     pub location: Location,
     pub match_expressions: Vec<MatchExpression>,
     pub rules: Vec<FunctionRule>,
-    pub local_function_declarations: Vec<FunctionDeclaration>,
+    pub local_function_definitions: Vec<FunctionDefinition>,
+    pub local_type_definitions: Vec<CustomType>
 }
 
 pub type TypeVar = String;
@@ -96,7 +97,7 @@ pub struct ADTConstructor {
 }
 
 #[derive(Debug, Clone)]
-pub struct FunctionDeclaration {
+pub struct FunctionDefinition {
     pub location: Location,
     pub name: String,
     pub function_type: Option<TypeScheme>,
@@ -178,7 +179,7 @@ pub enum MatchExpression {
 
 #[derive(Debug, Clone)]
 pub struct AST {
-    pub function_declarations: Vec<FunctionDeclaration>,
+    pub function_declarations: Vec<FunctionDefinition>,
     pub type_declarations: Vec<CustomType>
 }
 

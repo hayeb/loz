@@ -7,7 +7,7 @@ use pest::iterators::Pair;
 use pest::Parser;
 use pest::prec_climber::*;
 
-use crate::{ADTConstructor, ADTDefinition, AST, CaseRule, CustomType, Expression, FunctionBody, FunctionDeclaration, FunctionRule, Location, MatchExpression, RecordDefinition, Type, TypeScheme};
+use crate::{ADTConstructor, ADTDefinition, AST, CaseRule, CustomType, Expression, FunctionBody, FunctionDefinition, FunctionRule, Location, MatchExpression, RecordDefinition, Type, TypeScheme};
 use crate::Expression::*;
 use crate::parser::ParseError::PestError;
 use self::pest::iterators::Pairs;
@@ -44,7 +44,7 @@ impl Display for ParseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
             PestError(pe) => write!(f, "{}", pe),
-            ParseError::FunctionTypeWithoutBody(name, loc) => write!(f, "Found type for function {}, but no bodies were found", name),
+            ParseError::FunctionTypeWithoutBody(name, _loc) => write!(f, "Found type for function {}, but no bodies were found", name),
         }
     }
 }
@@ -92,13 +92,13 @@ fn line_col_number(line_starts: &Vec<usize>, pos: usize) -> (usize, usize) {
     (previous_index + 1, pos - previous_start + 1)
 }
 
-fn contract_function_declarations(mut function_bodies: HashMap<String, Vec<FunctionBody>>, function_types: HashMap<String, (Location, TypeScheme)>) -> Result<Vec<FunctionDeclaration>, ParseError> {
+fn contract_function_declarations(mut function_bodies: HashMap<String, Vec<FunctionBody>>, function_types: HashMap<String, (Location, TypeScheme)>) -> Result<Vec<FunctionDefinition>, ParseError> {
     let mut function_declarations = Vec::new();
     for (function_name, (location, function_scheme)) in function_types {
         match function_bodies.remove(&function_name) {
             None => return Err(ParseError::FunctionTypeWithoutBody(function_name.clone(), location)),
             Some(bodies) => {
-                function_declarations.push(FunctionDeclaration {
+                function_declarations.push(FunctionDefinition {
                     location,
                     name: function_name.clone(),
                     function_type: Some(function_scheme),
@@ -110,7 +110,7 @@ fn contract_function_declarations(mut function_bodies: HashMap<String, Vec<Funct
 
     // Add the remaining functions that do not have a defined type.
     for (function_name, bodies) in function_bodies {
-        function_declarations.push(FunctionDeclaration {
+        function_declarations.push(FunctionDefinition {
             location: bodies.get(0).unwrap().location.clone(),
             name: function_name.clone(),
             function_type: None,
@@ -134,7 +134,7 @@ fn to_ast(pair: Pair<Rule>, file_name: &String, line_starts: &Vec<usize>) -> Res
     }
 }
 
-fn to_declaration_block_elements(pairs: Pairs<Rule>, file_name: &String, line_starts: &Vec<usize>) -> Result<(Vec<CustomType>, Vec<FunctionDeclaration>), ParseError> {
+fn to_declaration_block_elements(pairs: Pairs<Rule>, file_name: &String, line_starts: &Vec<usize>) -> Result<(Vec<CustomType>, Vec<FunctionDefinition>), ParseError> {
     let mut function_types = HashMap::new();
     let mut function_bodies = HashMap::new();
 
@@ -228,14 +228,15 @@ fn to_function_body(file_name: &String, pair: Pair<Rule>, line_starts: &Vec<usiz
     }
 
     let mut rules = Vec::new();
-    let mut local_function_declarations = Vec::new();
-    let mut local_types = Vec::new();
+    let mut local_function_definitions = Vec::new();
+    let mut local_type_definitions = Vec::new();
     for r in parents {
         match r.as_rule() {
-            Rule::local_function_definitions => {
-                let (type_declarations,function_declarations) = to_declaration_block_elements(r.into_inner(), file_name, line_starts)?;
-                local_function_declarations = function_declarations;
-                local_types = type_declarations;
+            // Guaranteed to only occur once.
+            Rule::local_definitions => {
+                let (type_definitions, function_definitions) = to_declaration_block_elements(r.into_inner(), file_name, line_starts)?;
+                local_function_definitions = function_definitions;
+                local_type_definitions = type_definitions;
 
             }
             _ => rules.push(to_function_rule(r, file_name, &function_name, line_starts)),
@@ -253,7 +254,8 @@ fn to_function_body(file_name: &String, pair: Pair<Rule>, line_starts: &Vec<usiz
         location: location.clone(),
         match_expressions,
         rules,
-        local_function_declarations,
+        local_function_definitions,
+        local_type_definitions
     })
 }
 

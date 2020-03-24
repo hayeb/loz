@@ -2,22 +2,26 @@ use std::collections::{HashMap, HashSet};
 
 use petgraph::Graph;
 
-use crate::{AST, Expression, FunctionDeclaration, FunctionRule, Location};
+use crate::{Expression, FunctionDefinition, FunctionRule, Location};
 
-pub fn to_components(declarations: &Vec<FunctionDeclaration>) -> Vec<Vec<&FunctionDeclaration>> {
+pub fn to_components(declarations: &Vec<FunctionDefinition>) -> Vec<Vec<&FunctionDefinition>> {
     let mut name_to_index = HashMap::new();
     let mut index_to_name = HashMap::new();
 
     let mut graph = Graph::<String, ()>::new();
 
     for d in declarations {
+        println!("Adding node for {}", d.name);
         let node = graph.add_node(d.name.clone());
         name_to_index.insert(&d.name, node.clone());
         index_to_name.insert(node.clone(), &d.name);
     }
 
     for f in declarations {
+        println!("Function {}", f.name);
         let referred = declaration_referred_functions(f);
+        println!("Referred functions: {:?}", referred);
+
         for (name, _) in referred {
             graph.add_edge(name_to_index.get(&f.name).unwrap().clone(), name_to_index.get(&name).unwrap().clone(), ());
         }
@@ -25,7 +29,7 @@ pub fn to_components(declarations: &Vec<FunctionDeclaration>) -> Vec<Vec<&Functi
 
     let sccs = petgraph::algo::kosaraju_scc(&graph);
 
-    let function_name_to_declaration: HashMap<String, &FunctionDeclaration> = declarations.iter()
+    let function_name_to_declaration: HashMap<String, &FunctionDefinition> = declarations.iter()
         .map(|d| (d.name.clone(), d))
         .collect();
 
@@ -37,7 +41,7 @@ pub fn to_components(declarations: &Vec<FunctionDeclaration>) -> Vec<Vec<&Functi
         .collect()
 }
 
-fn declaration_referred_functions(d: &FunctionDeclaration) -> HashSet<(String, Location)> {
+fn declaration_referred_functions(d: &FunctionDefinition) -> HashSet<(String, Location)> {
     let mut referred = HashSet::new();
 
     let mut local_variables = HashSet::new();
@@ -46,7 +50,7 @@ fn declaration_referred_functions(d: &FunctionDeclaration) -> HashSet<(String, L
         for me in &b.match_expressions {
             local_variables.extend(me.variables());
         }
-        for d in &b.local_function_declarations {
+        for d in &b.local_function_definitions {
             local_variables.insert(d.name.clone());
         }
         for r in &b.rules {

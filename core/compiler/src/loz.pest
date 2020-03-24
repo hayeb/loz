@@ -32,7 +32,7 @@ string_char = {
 }
 
 // f a b c
-function_header = ${ identifier ~ (WHITESPACE+ ~match_expression)* }
+function_header = ${ (!"where" ~ identifier ) ~ (WHITESPACE+ ~match_expression)* }
 
 // f a b c = a
 //  ...
@@ -42,7 +42,7 @@ function_header = ${ identifier ~ (WHITESPACE+ ~match_expression)* }
 function_body = {
         function_header
     ~   function_rules_body
-    ~   local_function_definitions?
+    ~   local_definitions?
 }
 
 // | a == "Hello" = c
@@ -61,7 +61,7 @@ function_rules_body = _{
 
     function_expression_rule = { NEWLINE* ~ "=" ~ expression }
 
-    local_function_definitions = {NEWLINE+ ~ "where" ~ NEWLINE+ ~ ((function_type_definition | function_body | type_definition) ~ NEWLINE*)* ~ "."}
+    local_definitions = {NEWLINE+ ~ "where" ~ NEWLINE+ ~ ((function_type_definition | function_body | type_definition) ~ NEWLINE*)* ~ "."}
 
 // f :: Int Char -> Int
 function_type_definition = { identifier ~ "::" ~ loz_top_type  ~ NEWLINE+ }
