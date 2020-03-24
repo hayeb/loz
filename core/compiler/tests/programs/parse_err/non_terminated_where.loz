@@ -1,0 +1,6 @@
+f x = g x
+where
+    g x = 18 + x
+
+
+main = f 18

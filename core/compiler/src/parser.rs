@@ -52,7 +52,7 @@ impl Display for ParseError {
 
 pub fn parse(file_name: &String, input: &str) -> Result<AST, ParseError> {
     let ast = LOZParser::parse(Rule::ast, input).map_err(|e| PestError(e))?.next().unwrap();
-    println!("Raw AST: {:#?}", ast);
+    //println!("Raw AST: {:#?}", ast);
     let line_starts = build_line_start_cache(input);
     to_ast(ast, file_name, &line_starts)
 }

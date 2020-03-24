@@ -11,19 +11,19 @@ pub fn to_components(declarations: &Vec<FunctionDefinition>) -> Vec<Vec<&Functio
     let mut graph = Graph::<String, ()>::new();
 
     for d in declarations {
-        println!("Adding node for {}", d.name);
         let node = graph.add_node(d.name.clone());
         name_to_index.insert(&d.name, node.clone());
         index_to_name.insert(node.clone(), &d.name);
     }
 
     for f in declarations {
-        println!("Function {}", f.name);
         let referred = declaration_referred_functions(f);
-        println!("Referred functions: {:?}", referred);
 
         for (name, _) in referred {
-            graph.add_edge(name_to_index.get(&f.name).unwrap().clone(), name_to_index.get(&name).unwrap().clone(), ());
+
+            if name_to_index.contains_key(&name) {
+                graph.add_edge(name_to_index.get(&f.name).unwrap().clone(), name_to_index.get(&name).unwrap().clone(), ());
+            }
         }
     }
 

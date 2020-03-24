@@ -1,0 +1,17 @@
+f x = g x
+where
+    g x = h (x - 1)
+
+    h 0 = 0
+    h 1 = 1
+    h x = i x + g x
+    where
+        i x = j (x - 1)
+
+        j 0 = 0
+        j 1 = 1
+        j x = f x + h x + g x
+    .
+.
+
+main = f 3
