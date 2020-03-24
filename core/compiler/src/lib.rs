@@ -10,8 +10,8 @@ use std::fmt::{Display, Formatter};
 use crate::Expression::*;
 
 pub mod inferencer;
-pub mod parser;
 pub mod interpreter;
+pub mod parser;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Location {
@@ -23,7 +23,11 @@ pub struct Location {
 
 impl Display for Location {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
-        write!(f, "{}::{}[{}:{}]", self.file, self.function, self.line, self.col)
+        write!(
+            f,
+            "{}::{}[{}:{}]",
+            self.file, self.function, self.line, self.col
+        )
     }
 }
 
@@ -41,7 +45,7 @@ pub struct FunctionBody {
     pub match_expressions: Vec<MatchExpression>,
     pub rules: Vec<FunctionRule>,
     pub local_function_definitions: Vec<FunctionDefinition>,
-    pub local_type_definitions: Vec<CustomType>
+    pub local_type_definitions: Vec<CustomType>,
 }
 
 pub type TypeVar = String;
@@ -180,7 +184,7 @@ pub enum MatchExpression {
 #[derive(Debug, Clone)]
 pub struct AST {
     pub function_declarations: Vec<FunctionDefinition>,
-    pub type_declarations: Vec<CustomType>
+    pub type_declarations: Vec<CustomType>,
 }
 
 impl Display for Type {
@@ -192,17 +196,36 @@ impl Display for Type {
             Type::Int => write!(f, "Int"),
             Type::Float => write!(f, "Float"),
             Type::UserType(t, type_arguments) if type_arguments.len() == 0 => write!(f, "{}", t),
-            Type::UserType(t, type_arguments) => write!(f, "{} {}", t, type_arguments.into_iter().map(|e| e.to_string()).collect::<Vec<String>>().join(" ")),
+            Type::UserType(t, type_arguments) => write!(
+                f,
+                "{} {}",
+                t,
+                type_arguments
+                    .into_iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<String>>()
+                    .join(" ")
+            ),
             Type::Variable(name) => write!(f, "{}", name),
-            Type::Tuple(elements) => {
-                write!(f, "({})", elements.into_iter().map(|e| e.to_string()).collect::<Vec<String>>().join(", "))
-            }
-            Type::List(e) => {
-                write!(f, "[{}]", e)
-            }
-            Type::Function(from, to) => {
-                write!(f, "{} -> {}", from.iter().map(|t| t.to_string()).collect::<Vec<String>>().join(" "), to.to_string())
-            }
+            Type::Tuple(elements) => write!(
+                f,
+                "({})",
+                elements
+                    .into_iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
+            Type::List(e) => write!(f, "[{}]", e),
+            Type::Function(from, to) => write!(
+                f,
+                "{} -> {}",
+                from.iter()
+                    .map(|t| t.to_string())
+                    .collect::<Vec<String>>()
+                    .join(" "),
+                to.to_string()
+            ),
         }
     }
 }
@@ -210,7 +233,16 @@ impl Display for Type {
 impl Display for TypeScheme {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         if self.bound_variables.len() > 0 {
-            write!(f, "∀{}: {}", self.bound_variables.iter().cloned().collect::<Vec<String>>().join(" "), self.enclosed_type)
+            write!(
+                f,
+                "∀{}: {}",
+                self.bound_variables
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<String>>()
+                    .join(" "),
+                self.enclosed_type
+            )
         } else {
             write!(f, "{}", self.enclosed_type)
         }
@@ -218,7 +250,6 @@ impl Display for TypeScheme {
 }
 
 impl Type {
-
     pub fn collect_free_type_variables(&self) -> HashSet<String> {
         match self {
             Type::Bool => HashSet::new(),
@@ -270,21 +301,27 @@ impl Type {
             Type::Int => HashSet::new(),
             Type::Float => HashSet::new(),
             Type::UserType(name, arguments) => {
-                let mut types : HashSet<String> = HashSet::new();
+                let mut types: HashSet<String> = HashSet::new();
                 types.insert(name.clone());
                 for a in arguments {
                     types.extend(a.referenced_custom_types());
                 }
                 types
-            },
-            Type::Tuple(elements) => elements.iter().flat_map(|e| e.referenced_custom_types().into_iter()).collect(),
+            }
+            Type::Tuple(elements) => elements
+                .iter()
+                .flat_map(|e| e.referenced_custom_types().into_iter())
+                .collect(),
             Type::List(list_type) => list_type.referenced_custom_types(),
             Type::Variable(_) => HashSet::new(),
             Type::Function(from_types, to_type) => {
-                let mut types: HashSet<String> = from_types.iter().flat_map(|t| t.referenced_custom_types().into_iter()).collect();
+                let mut types: HashSet<String> = from_types
+                    .iter()
+                    .flat_map(|t| t.referenced_custom_types().into_iter())
+                    .collect();
                 types.extend(to_type.referenced_custom_types());
                 types
-            },
+            }
         }
     }
 }
@@ -345,12 +382,22 @@ impl Expression {
             Expression::CharacterLiteral(_, _) => HashSet::new(),
             Expression::IntegerLiteral(_, _) => HashSet::new(),
             Expression::FloatLiteral(_, _) => HashSet::new(),
-            Expression::TupleLiteral(_, expressions) => Expression::expressions_referred_functions(expressions),
+            Expression::TupleLiteral(_, expressions) => {
+                Expression::expressions_referred_functions(expressions)
+            }
             Expression::EmptyListLiteral(_) => HashSet::new(),
-            Expression::ShorthandListLiteral(_, expressions) => Expression::expressions_referred_functions(expressions),
-            Expression::LonghandListLiteral(_, e1, e2) => Expression::dual_referred_functions(e1, e2),
-            Expression::ADTTypeConstructor(_, _, expressions) => Expression::expressions_referred_functions(expressions),
-            Expression::Record(_, _, expressions) => Expression::expressions_referred_functions(&expressions.into_iter().map(|(_, e)| e.clone()).collect()),
+            Expression::ShorthandListLiteral(_, expressions) => {
+                Expression::expressions_referred_functions(expressions)
+            }
+            Expression::LonghandListLiteral(_, e1, e2) => {
+                Expression::dual_referred_functions(e1, e2)
+            }
+            Expression::ADTTypeConstructor(_, _, expressions) => {
+                Expression::expressions_referred_functions(expressions)
+            }
+            Expression::Record(_, _, expressions) => Expression::expressions_referred_functions(
+                &expressions.into_iter().map(|(_, e)| e.clone()).collect(),
+            ),
             Expression::Case(_, e, rules) => {
                 let mut fs: HashSet<(String, Location)> = e.function_references();
 
@@ -420,8 +467,14 @@ impl MatchExpression {
             MatchExpression::StringLiteral(_, _) => HashSet::new(),
             MatchExpression::BoolLiteral(_, _) => HashSet::new(),
             MatchExpression::Identifier(_, id) => vec![id.clone()].into_iter().collect(),
-            MatchExpression::Tuple(_, elements) => elements.into_iter().flat_map(|e| e.variables().into_iter()).collect(),
-            MatchExpression::ShorthandList(_, elements) => elements.into_iter().flat_map(|e| e.variables().into_iter()).collect(),
+            MatchExpression::Tuple(_, elements) => elements
+                .into_iter()
+                .flat_map(|e| e.variables().into_iter())
+                .collect(),
+            MatchExpression::ShorthandList(_, elements) => elements
+                .into_iter()
+                .flat_map(|e| e.variables().into_iter())
+                .collect(),
             MatchExpression::LonghandList(_, h, t) => {
                 let mut vars = HashSet::new();
                 vars.extend(h.variables());
@@ -429,9 +482,11 @@ impl MatchExpression {
                 vars
             }
             MatchExpression::Wildcard(_) => HashSet::new(),
-            MatchExpression::ADT(_, _, elements) => elements.into_iter().flat_map(|e| e.variables().into_iter()).collect(),
+            MatchExpression::ADT(_, _, elements) => elements
+                .into_iter()
+                .flat_map(|e| e.variables().into_iter())
+                .collect(),
             MatchExpression::Record(_, _, fields) => fields.into_iter().cloned().collect(),
         }
     }
 }
-

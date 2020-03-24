@@ -1,13 +1,15 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Error, Formatter};
 
-use crate::{Expression, FunctionBody, FunctionDefinition, FunctionRule, MatchExpression, Location};
 use crate::inferencer::TypedAST;
 use crate::interpreter::InterpreterError::{DivisionByZero, NoApplicableFunctionBody};
+use crate::{
+    Expression, FunctionBody, FunctionDefinition, FunctionRule, Location, MatchExpression,
+};
 
 #[derive(Debug, Clone)]
 struct RunState {
-    frames: Vec<Frame>
+    frames: Vec<Frame>,
 }
 
 impl RunState {
@@ -42,15 +44,21 @@ impl RunState {
 #[derive(Debug, Clone)]
 struct Frame {
     variables: HashMap<String, Value>,
-    declared_functions: HashMap<String, FunctionDefinition>
+    declared_functions: HashMap<String, FunctionDefinition>,
 }
 
 impl Frame {
     fn new() -> Self {
-        Frame { variables: HashMap::new(), declared_functions: HashMap::new() }
+        Frame {
+            variables: HashMap::new(),
+            declared_functions: HashMap::new(),
+        }
     }
     fn with_variables(variables: HashMap<String, Value>) -> Self {
-        Frame { variables, declared_functions: HashMap::new() }
+        Frame {
+            variables,
+            declared_functions: HashMap::new(),
+        }
     }
 }
 
@@ -76,21 +84,44 @@ impl Display for Value {
             Value::Float(float) => write!(f, "{}", float),
             Value::Char(c) => write!(f, "{}", c),
             Value::String(s) => write!(f, "\"{}\"", s),
-            Value::Tuple(elements) => {
-                write!(f, "({})", elements.iter().map(|e| e.to_string()).collect::<Vec<String>>().join(", "))
-            }
-            Value::List(elements) => {
-                write!(f, "[{}]", elements.iter().map(|e| e.to_string()).collect::<Vec<String>>().join(", "))
-            }
-            Value::ADTValue(constructor, arguments) => {
-                write!(f, "{} {}", constructor, arguments.iter().map(|a| a.to_string()).collect::<Vec<String>>().join(" "))
-            }
-            Value::RecordValue(fields) => {
-                write!(f, "{{{}}}", fields.iter().map(|(name, value)| format!("{} = {}", name, value)).collect::<Vec<String>>().join(", "))
-            }
-            Value::Lambda(args, _) => {
-                write!(f, "Lambda with {} args", args.len())
-            }
+            Value::Tuple(elements) => write!(
+                f,
+                "({})",
+                elements
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
+            Value::List(elements) => write!(
+                f,
+                "[{}]",
+                elements
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
+            Value::ADTValue(constructor, arguments) => write!(
+                f,
+                "{} {}",
+                constructor,
+                arguments
+                    .iter()
+                    .map(|a| a.to_string())
+                    .collect::<Vec<String>>()
+                    .join(" ")
+            ),
+            Value::RecordValue(fields) => write!(
+                f,
+                "{{{}}}",
+                fields
+                    .iter()
+                    .map(|(name, value)| format!("{} = {}", name, value))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
+            Value::Lambda(args, _) => write!(f, "Lambda with {} args", args.len()),
         }
     }
 }
@@ -105,17 +136,24 @@ pub enum InterpreterError {
 }
 
 pub fn interpret(ast: &TypedAST) -> Result<(), InterpreterError> {
-    let result = evaluate(&Expression::Call(Location {
-        file: "?".to_string(),
-        function: "main".to_string(),
-        line: 1,
-        col: 1
-    }, "main".to_string(), vec![]), &mut RunState {
-        frames: vec![Frame {
-            variables: HashMap::new(),
-            declared_functions: ast.function_name_to_declaration.clone()
-        }]
-    })?;
+    let result = evaluate(
+        &Expression::Call(
+            Location {
+                file: "?".to_string(),
+                function: "main".to_string(),
+                line: 1,
+                col: 1,
+            },
+            "main".to_string(),
+            vec![],
+        ),
+        &mut RunState {
+            frames: vec![Frame {
+                variables: HashMap::new(),
+                declared_functions: ast.function_name_to_declaration.clone(),
+            }],
+        },
+    )?;
     println!("{}", result);
     Ok(())
 }
@@ -171,7 +209,7 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterEr
                     results.extend(values);
                     Ok(Value::List(results))
                 }
-                v => unreachable!("tail evaluated to '{:?}' instead of Value::List", v)
+                v => unreachable!("tail evaluated to '{:?}' instead of Value::List", v),
             }
         }
 
@@ -198,15 +236,13 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterEr
         Expression::Variable(_, v) => Ok(state.retrieve_variable_value(v)),
         Expression::Negation(_, e) => Ok(Value::Bool(!eval_bool(e, state)?)),
         Expression::Minus(_, e) => Ok(Value::Int(-eval_int(e, state)?)),
-        Expression::Times(_, e1, e2) => {
-            match (evaluate(e1, state)?, evaluate(e2, state)?) {
-                (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x * y)),
-                (Value::Int(x), Value::Float(y)) => Ok(Value::Float(x as f64 * y)),
-                (Value::Float(x), Value::Int(y)) => Ok(Value::Float(x * y as f64)),
-                (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x * y)),
-                _ => unreachable!()
-            }
-        }
+        Expression::Times(_, e1, e2) => match (evaluate(e1, state)?, evaluate(e2, state)?) {
+            (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x * y)),
+            (Value::Int(x), Value::Float(y)) => Ok(Value::Float(x as f64 * y)),
+            (Value::Float(x), Value::Int(y)) => Ok(Value::Float(x * y as f64)),
+            (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x * y)),
+            _ => unreachable!(),
+        },
         Expression::Divide(_, e1, e2) => {
             let divider = evaluate(e2, state)?;
             if let Value::Int(0) = divider {
@@ -217,42 +253,54 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterEr
                 (Value::Int(x), Value::Float(y)) => Ok(Value::Float(x as f64 / y)),
                 (Value::Float(x), Value::Int(y)) => Ok(Value::Float(x / y as f64)),
                 (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x / y)),
-                _ => unreachable!()
+                _ => unreachable!(),
             }
         }
-        Expression::Modulo(_, e1, e2) => Ok(Value::Int(eval_int(e1, state)? % eval_int(e2, state)?)),
-        Expression::Add(_, e1, e2) => {
-            match (evaluate(e1, state)?, evaluate(e2, state)?) {
-                (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x + y)),
-                (Value::Int(x), Value::Float(y)) => Ok(Value::Float(x as f64 + y)),
-                (Value::Float(x), Value::Int(y)) => Ok(Value::Float(x + y as f64)),
-                (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x + y)),
-                (Value::String(mut l), Value::String(r)) => {
-                    l.push_str(r.as_str());
-                    Ok(Value::String(l))
-                }
-                (l, r) => unreachable!("Addition between results {:?} and {:?}", l, r)
-            }
+        Expression::Modulo(_, e1, e2) => {
+            Ok(Value::Int(eval_int(e1, state)? % eval_int(e2, state)?))
         }
-        Expression::Subtract(_, e1, e2) => {
-            match (evaluate(e1, state)?, evaluate(e2, state)?) {
-                (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x - y)),
-                (Value::Int(x), Value::Float(y)) => Ok(Value::Float(x as f64 - y)),
-                (Value::Float(x), Value::Int(y)) => Ok(Value::Float(x - y as f64)),
-                (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x - y)),
-                _ => unreachable!()
+        Expression::Add(_, e1, e2) => match (evaluate(e1, state)?, evaluate(e2, state)?) {
+            (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x + y)),
+            (Value::Int(x), Value::Float(y)) => Ok(Value::Float(x as f64 + y)),
+            (Value::Float(x), Value::Int(y)) => Ok(Value::Float(x + y as f64)),
+            (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x + y)),
+            (Value::String(mut l), Value::String(r)) => {
+                l.push_str(r.as_str());
+                Ok(Value::String(l))
             }
+            (l, r) => unreachable!("Addition between results {:?} and {:?}", l, r),
+        },
+        Expression::Subtract(_, e1, e2) => match (evaluate(e1, state)?, evaluate(e2, state)?) {
+            (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x - y)),
+            (Value::Int(x), Value::Float(y)) => Ok(Value::Float(x as f64 - y)),
+            (Value::Float(x), Value::Int(y)) => Ok(Value::Float(x - y as f64)),
+            (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x - y)),
+            _ => unreachable!(),
+        },
+        Expression::ShiftLeft(_, e1, e2) => {
+            Ok(Value::Int(eval_int(e1, state)? << eval_int(e2, state)?))
         }
-        Expression::ShiftLeft(_, e1, e2) => Ok(Value::Int(eval_int(e1, state)? << eval_int(e2, state)?)),
-        Expression::ShiftRight(_, e1, e2) => Ok(Value::Int(eval_int(e1, state)? >> eval_int(e2, state)?)),
-        Expression::Greater(_, e1, e2) => Ok(Value::Bool(eval_int(e1, state)? > eval_int(e2, state)?)),
-        Expression::Greq(_, e1, e2) => Ok(Value::Bool(eval_int(e1, state)? >= eval_int(e2, state)?)),
+        Expression::ShiftRight(_, e1, e2) => {
+            Ok(Value::Int(eval_int(e1, state)? >> eval_int(e2, state)?))
+        }
+        Expression::Greater(_, e1, e2) => {
+            Ok(Value::Bool(eval_int(e1, state)? > eval_int(e2, state)?))
+        }
+        Expression::Greq(_, e1, e2) => {
+            Ok(Value::Bool(eval_int(e1, state)? >= eval_int(e2, state)?))
+        }
         Expression::Leq(_, e1, e2) => Ok(Value::Bool(eval_int(e1, state)? <= eval_int(e2, state)?)),
-        Expression::Lesser(_, e1, e2) => Ok(Value::Bool(eval_int(e1, state)? < eval_int(e2, state)?)),
+        Expression::Lesser(_, e1, e2) => {
+            Ok(Value::Bool(eval_int(e1, state)? < eval_int(e2, state)?))
+        }
         Expression::Eq(_, e1, e2) => Ok(Value::Bool(evaluate(e1, state)? == evaluate(e2, state)?)),
         Expression::Neq(_, e1, e2) => Ok(Value::Bool(evaluate(e1, state)? != evaluate(e2, state)?)),
-        Expression::And(_, e1, e2) => Ok(Value::Bool(eval_bool(e1, state)? && eval_bool(e2, state)?)),
-        Expression::Or(_, e1, e2) => Ok(Value::Bool(eval_bool(e1, state)? || eval_bool(e2, state)?)),
+        Expression::And(_, e1, e2) => {
+            Ok(Value::Bool(eval_bool(e1, state)? && eval_bool(e2, state)?))
+        }
+        Expression::Or(_, e1, e2) => {
+            Ok(Value::Bool(eval_bool(e1, state)? || eval_bool(e2, state)?))
+        }
         Expression::RecordFieldAccess(_, record_expression, field_accessor) => {
             let record_value = evaluate(record_expression, state)?;
             if let Value::RecordValue(fields) = record_value {
@@ -262,18 +310,27 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterEr
             }
             unreachable!()
         }
-        Expression::Lambda(_, args, body) => Ok(Value::Lambda(args.clone(), *body.clone()))
+        Expression::Lambda(_, args, body) => Ok(Value::Lambda(args.clone(), *body.clone())),
     }
 }
 
-fn eval_function_call(f: &String, args: &Vec<Expression>, state: &mut RunState) -> Result<Value, InterpreterError> {
+fn eval_function_call(
+    f: &String,
+    args: &Vec<Expression>,
+    state: &mut RunState,
+) -> Result<Value, InterpreterError> {
     match state.get_function_definition(f) {
         Some(d) => eval_declared_function(&d, args, state),
-        None => eval_lambda(f, state.retrieve_variable_value(f), args, state)
+        None => eval_lambda(f, state.retrieve_variable_value(f), args, state),
     }
 }
 
-fn eval_lambda(f: &String, lambda: Value, args: &Vec<Expression>, state: &mut RunState) -> Result<Value, InterpreterError> {
+fn eval_lambda(
+    f: &String,
+    lambda: Value,
+    args: &Vec<Expression>,
+    state: &mut RunState,
+) -> Result<Value, InterpreterError> {
     match lambda {
         Value::Lambda(match_expressions, body) => {
             let mut body_frame = Frame::new();
@@ -300,7 +357,11 @@ fn eval_lambda(f: &String, lambda: Value, args: &Vec<Expression>, state: &mut Ru
     Err(InterpreterError::NoApplicableFunctionBody(f.clone()))
 }
 
-fn eval_declared_function(d: &FunctionDefinition, args: &Vec<Expression>, state: &mut RunState) -> Result<Value, InterpreterError> {
+fn eval_declared_function(
+    d: &FunctionDefinition,
+    args: &Vec<Expression>,
+    state: &mut RunState,
+) -> Result<Value, InterpreterError> {
     for body in &d.function_bodies {
         let mut body_frame = Frame::new();
 
@@ -317,9 +378,11 @@ fn eval_declared_function(d: &FunctionDefinition, args: &Vec<Expression>, state:
             }
         }
         if matches {
-
             for function_definition in &body.local_function_definitions {
-                body_frame.declared_functions.insert(function_definition.name.clone(), function_definition.clone());
+                body_frame.declared_functions.insert(
+                    function_definition.name.clone(),
+                    function_definition.clone(),
+                );
             }
 
             state.frames.push(body_frame);
@@ -333,7 +396,11 @@ fn eval_declared_function(d: &FunctionDefinition, args: &Vec<Expression>, state:
     Err(NoApplicableFunctionBody(d.name.clone()))
 }
 
-fn eval_function_body(name: &String, body: &FunctionBody, state: &mut RunState) -> Result<Value, InterpreterError> {
+fn eval_function_body(
+    name: &String,
+    body: &FunctionBody,
+    state: &mut RunState,
+) -> Result<Value, InterpreterError> {
     for rule in &body.rules {
         match rule {
             FunctionRule::ConditionalRule(_, condition_expression, result_expression) => {
@@ -355,7 +422,10 @@ fn eval_function_body(name: &String, body: &FunctionBody, state: &mut RunState) 
     Err(InterpreterError::NoApplicableFunctionRule(name.clone()))
 }
 
-fn collect_match_variables(match_expression: &MatchExpression, evaluated_expression: &Value) -> Result<HashMap<String, Value>, InterpreterError> {
+fn collect_match_variables(
+    match_expression: &MatchExpression,
+    evaluated_expression: &Value,
+) -> Result<HashMap<String, Value>, InterpreterError> {
     match (match_expression, evaluated_expression) {
         (MatchExpression::Identifier(_loc_info, identifier), value) => {
             let mut map = HashMap::new();
@@ -366,25 +436,37 @@ fn collect_match_variables(match_expression: &MatchExpression, evaluated_express
             if _n == n {
                 return Ok(HashMap::new());
             }
-            Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::IntLiteral(loc_info.clone(), _n.clone()), Value::Int(n.clone())))
+            Err(InterpreterError::ExpressionDoesNotMatch(
+                MatchExpression::IntLiteral(loc_info.clone(), _n.clone()),
+                Value::Int(n.clone()),
+            ))
         }
         (MatchExpression::CharLiteral(loc_info, _c), Value::Char(c)) => {
             if _c == c {
                 return Ok(HashMap::new());
             }
-            Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::CharLiteral(loc_info.clone(), _c.clone()), Value::Char(c.clone())))
+            Err(InterpreterError::ExpressionDoesNotMatch(
+                MatchExpression::CharLiteral(loc_info.clone(), _c.clone()),
+                Value::Char(c.clone()),
+            ))
         }
         (MatchExpression::StringLiteral(loc_info, _s), Value::String(s)) => {
             if _s == s {
                 return Ok(HashMap::new());
             }
-            Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::StringLiteral(loc_info.clone(), _s.clone()), Value::String(s.clone())))
+            Err(InterpreterError::ExpressionDoesNotMatch(
+                MatchExpression::StringLiteral(loc_info.clone(), _s.clone()),
+                Value::String(s.clone()),
+            ))
         }
         (MatchExpression::BoolLiteral(loc_info, _b), Value::Bool(b)) => {
             if _b == b {
                 return Ok(HashMap::new());
             }
-            Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::BoolLiteral(loc_info.clone(), _b.clone()), Value::Bool(b.clone())))
+            Err(InterpreterError::ExpressionDoesNotMatch(
+                MatchExpression::BoolLiteral(loc_info.clone(), _b.clone()),
+                Value::Bool(b.clone()),
+            ))
         }
 
         (MatchExpression::Tuple(_loc_info, elements), Value::Tuple(values)) => {
@@ -396,7 +478,10 @@ fn collect_match_variables(match_expression: &MatchExpression, evaluated_express
         }
         (MatchExpression::ShorthandList(loc_info, elements), Value::List(values)) => {
             if elements.len() != values.len() {
-                return Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::ShorthandList(loc_info.clone(), elements.clone()), Value::List(values.clone())));
+                return Err(InterpreterError::ExpressionDoesNotMatch(
+                    MatchExpression::ShorthandList(loc_info.clone(), elements.clone()),
+                    Value::List(values.clone()),
+                ));
             }
 
             let mut map = HashMap::new();
@@ -407,18 +492,34 @@ fn collect_match_variables(match_expression: &MatchExpression, evaluated_express
         }
         (MatchExpression::LonghandList(loc_info, head, tail), Value::List(values)) => {
             if values.is_empty() {
-                return Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::LonghandList(loc_info.clone(), head.clone(), tail.clone()), Value::List(values.clone())));
+                return Err(InterpreterError::ExpressionDoesNotMatch(
+                    MatchExpression::LonghandList(loc_info.clone(), head.clone(), tail.clone()),
+                    Value::List(values.clone()),
+                ));
             }
 
             let mut head_variables = collect_match_variables(head, values.iter().next().unwrap())?;
-            let tail_variables = collect_match_variables(tail, &Value::List(values.iter().skip(1).cloned().collect()))?;
+            let tail_variables = collect_match_variables(
+                tail,
+                &Value::List(values.iter().skip(1).cloned().collect()),
+            )?;
             head_variables.extend(tail_variables);
 
             Ok(head_variables)
         }
-        (MatchExpression::ADT(loc_info, match_name, match_arguments), Value::ADTValue(name, arguments)) => {
+        (
+            MatchExpression::ADT(loc_info, match_name, match_arguments),
+            Value::ADTValue(name, arguments),
+        ) => {
             if match_name != name {
-                return Err(InterpreterError::ExpressionDoesNotMatch(MatchExpression::ADT(loc_info.clone(), match_name.clone(), match_arguments.clone()), Value::ADTValue(name.clone(), arguments.clone())));
+                return Err(InterpreterError::ExpressionDoesNotMatch(
+                    MatchExpression::ADT(
+                        loc_info.clone(),
+                        match_name.clone(),
+                        match_arguments.clone(),
+                    ),
+                    Value::ADTValue(name.clone(), arguments.clone()),
+                ));
             }
 
             let mut variables = HashMap::new();
@@ -428,23 +529,29 @@ fn collect_match_variables(match_expression: &MatchExpression, evaluated_express
             Ok(variables)
         }
         (MatchExpression::Record(_loc_info, _name, fields), Value::RecordValue(field_to_value)) => {
-            Ok(fields.iter().map(|field| (field.clone(), field_to_value.get(field).unwrap().clone())).collect())
+            Ok(fields
+                .iter()
+                .map(|field| (field.clone(), field_to_value.get(field).unwrap().clone()))
+                .collect())
         }
         (MatchExpression::Wildcard(_loc_info), _type) => Ok(HashMap::new()),
-        (mexpr, mvalue) => unreachable!("Could not collect match variables for expression {:?} with value {:?}", mexpr, mvalue)
+        (mexpr, mvalue) => unreachable!(
+            "Could not collect match variables for expression {:?} with value {:?}",
+            mexpr, mvalue
+        ),
     }
 }
 
 fn eval_bool(e: &Expression, state: &mut RunState) -> Result<bool, InterpreterError> {
     match evaluate(e, state) {
         Ok(Value::Bool(b)) => Ok(b),
-        _ => unreachable!("evaluate wrong type (expected bool)")
+        _ => unreachable!("evaluate wrong type (expected bool)"),
     }
 }
 
 fn eval_int(e: &Expression, state: &mut RunState) -> Result<isize, InterpreterError> {
     match evaluate(e, state) {
         Ok(Value::Int(n)) => Ok(n),
-        e => unreachable!("evaluate wrong type (expected int): {:?}", e)
+        e => unreachable!("evaluate wrong type (expected int): {:?}", e),
     }
 }

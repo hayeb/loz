@@ -1,10 +1,10 @@
-use std::{fs, io, fmt};
-use loz_compiler::{parser, AST};
 use loz_compiler::inferencer;
-use loz_compiler::inferencer::{TypedAST, InferenceError, InferencerOptions};
-use std::path::PathBuf;
+use loz_compiler::inferencer::{InferenceError, InferencerOptions, TypedAST};
 use loz_compiler::parser::ParseError;
-use std::fmt::{Display, Formatter, Error};
+use loz_compiler::{parser, AST};
+use std::fmt::{Display, Error, Formatter};
+use std::path::PathBuf;
+use std::{fmt, fs, io};
 
 #[test]
 fn test_ok_files() -> Result<(), io::Error> {
@@ -26,30 +26,30 @@ enum CompileResult {
 
     ParseError(ParseError),
 
-    InferenceError(Vec<InferenceError>)
+    InferenceError(Vec<InferenceError>),
 }
 
 impl CompileResult {
-     fn compiled(&self) -> bool {
-         match self {
-             CompileResult::Compiled => true,
-             _ => false
-         }
-     }
+    fn compiled(&self) -> bool {
+        match self {
+            CompileResult::Compiled => true,
+            _ => false,
+        }
+    }
 
-     fn parse_error(&self) -> bool {
-         match self {
-             CompileResult::ParseError(_) => true,
-             _ => false
-         }
-     }
+    fn parse_error(&self) -> bool {
+        match self {
+            CompileResult::ParseError(_) => true,
+            _ => false,
+        }
+    }
 
-     fn inference_error(&self) -> bool {
-         match self {
-             CompileResult::InferenceError(_) => true,
-             _ => false
-         }
-     }
+    fn inference_error(&self) -> bool {
+        match self {
+            CompileResult::InferenceError(_) => true,
+            _ => false,
+        }
+    }
 }
 
 impl Display for CompileResult {
@@ -66,13 +66,21 @@ impl Display for CompileResult {
                     result.extend("\n".chars())
                 }
                 write!(f, "Parse error: \n{}", result)
-            },
-            CompileResult::InferenceError(inference_errors) => write!(f, "Inference errors:\n\t\t{}", inference_errors.into_iter().map(|ie| ie.to_string()).collect::<Vec<String>>().join("\n\t\t")),
+            }
+            CompileResult::InferenceError(inference_errors) => write!(
+                f,
+                "Inference errors:\n\t\t{}",
+                inference_errors
+                    .into_iter()
+                    .map(|ie| ie.to_string())
+                    .collect::<Vec<String>>()
+                    .join("\n\t\t")
+            ),
         }
     }
 }
 
-fn compile_files(dir: &str, f: impl Fn (CompileResult) -> bool) -> Result<(), io::Error>{
+fn compile_files(dir: &str, f: impl Fn(CompileResult) -> bool) -> Result<(), io::Error> {
     let r = fs::read_dir(dir)?;
     for entry in r {
         let entry = entry?;
@@ -81,7 +89,10 @@ fn compile_files(dir: &str, f: impl Fn (CompileResult) -> bool) -> Result<(), io
             continue;
         }
 
-        println!("### Compiling program {}...", path.clone().to_str().unwrap());
+        println!(
+            "### Compiling program {}...",
+            path.clone().to_str().unwrap()
+        );
         let res = compile_file(path.clone());
         println!("### {}: Result \n\t{}", path.clone().to_str().unwrap(), res);
         assert!(f(res))
@@ -89,16 +100,23 @@ fn compile_files(dir: &str, f: impl Fn (CompileResult) -> bool) -> Result<(), io
     Ok(())
 }
 
-fn compile_file(path: PathBuf) -> CompileResult  {
+fn compile_file(path: PathBuf) -> CompileResult {
     let file_contents = fs::read_to_string(&path).unwrap();
 
     // For now, assume parsing succeeds..
     let ast = match parser::parse(&path.to_str().unwrap().to_string(), &file_contents) {
         Ok(ast) => ast,
-        Err(parse_error) => return CompileResult::ParseError(parse_error)
+        Err(parse_error) => return CompileResult::ParseError(parse_error),
     };
 
-    match inferencer::infer(&ast, path.to_str().unwrap().to_string(), InferencerOptions { print_types: false, is_main_module: true}) {
+    match inferencer::infer(
+        &ast,
+        path.to_str().unwrap().to_string(),
+        InferencerOptions {
+            print_types: false,
+            is_main_module: true,
+        },
+    ) {
         Ok(_) => CompileResult::Compiled,
         Err(inference_errors) => CompileResult::InferenceError(inference_errors),
     }
