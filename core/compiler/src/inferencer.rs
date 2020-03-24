@@ -2,12 +2,13 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Error, Formatter};
 use std::iter;
 
+use crate::{
+    ADTDefinition, AST, CustomType, Expression, FunctionDefinition, FunctionRule,
+    Location, MatchExpression, RecordDefinition, Type, TypeScheme, TypeVar,
+};
 use crate::inferencer::substitutor::{substitute, substitute_list, substitute_type};
 use crate::inferencer::unifier::{unify, unify_one_of};
-use crate::{
-    ADTDefinition, CustomType, Expression, FunctionDefinition, FunctionRule, Location,
-    MatchExpression, RecordDefinition, Type, TypeScheme, TypeVar, AST,
-};
+use petgraph::Direction::Incoming;
 
 mod grapher;
 mod substitutor;
@@ -41,6 +42,8 @@ pub enum InferenceErrorType {
     WrongNumberOfTypes(usize, usize),
     UndefinedFunction(String),
     UndefinedType(String),
+
+    OperatorArgumentTypesNotEqual(String, Type, Type),
 
     FunctionDeclaredTypeMismatch(Type, Type),
 
@@ -85,59 +88,63 @@ struct ErrorContext {
 
 impl Display for InferenceError {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        use InferenceErrorType::*;
         write_error_context(f, &self.context)?;
         match &self.err {
-            InferenceErrorType::UnificationError(a, b) => write!(f, "Could not unify expected type\n\t{}\nwith inferred type\n\t{}", b, a),
-            InferenceErrorType::UnificationErrorMultiple(a, b) => write!(f, "Could not unify one of \n\t[{}]\nwith\n\t{}", a.into_iter().map(|a| a.to_string()).collect::<Vec<String>>().join(","), b),
-            InferenceErrorType::UnboundTypeVariable(v) => write!(f, "Unbound type variable '{}'", v),
-            InferenceErrorType::WrongNumberOfTypes(left, right) => write!(f, "Expected {} types, got {}", left, right),
+            UnificationError(a, b) => write!(f, "Could not unify expected type\n\t{}\nwith inferred type\n\t{}", b, a),
+            UnificationErrorMultiple(a, b) => write!(f, "Could not unify one of \n\t[{}]\nwith\n\t{}", a.into_iter().map(|a| a.to_string()).collect::<Vec<String>>().join(","), b),
+            UnboundTypeVariable(v) => write!(f, "Unbound type variable '{}'", v),
+            WrongNumberOfTypes(left, right) => write!(f, "Expected {} types, got {}", left, right),
 
-            InferenceErrorType::FunctionDeclaredTypeMismatch(declared, derived) => write!(f, "Declared type\n\t{}\nnot equal to inferred type\n\t{}", declared, derived),
-            InferenceErrorType::FunctionDerivedTypeMismatch(expected, derived, location_derived) => write!(f, "Derived type from previous body at line {}\n\t{}\ncould not be unified with current derived body type\n\t{}", location_derived.line, expected, derived),
+            FunctionDeclaredTypeMismatch(declared, derived) => write!(f, "Declared type\n\t{}\nnot equal to inferred type\n\t{}", declared, derived),
+            FunctionDerivedTypeMismatch(expected, derived, location_derived) => write!(f, "Derived type from previous body at line {}\n\t{}\ncould not be unified with current derived body type\n\t{}", location_derived.line, expected, derived),
 
-            InferenceErrorType::FunctionMultiplyDefined(name, location) => write!(f, "Function {} already defined, encountered earlier at {}", name, location),
-            InferenceErrorType::UndefinedFunction(name) => write!(f, "Function {} undefined", name),
-            InferenceErrorType::UndefinedType(name) => write!(f, "Type {} undefined", name),
+            FunctionMultiplyDefined(name, location) => write!(f, "Function {} already defined, encountered earlier at {}", name, location),
+            UndefinedFunction(name) => write!(f, "Function {} undefined", name),
+            UndefinedType(name) => write!(f, "Type {} undefined", name),
 
-            InferenceErrorType::TypeMultiplyDefined(name, location) => write!(f, "Type {} already defined, encountered earlier at {}", name, location),
-            InferenceErrorType::TypeConstructorMultiplyDefined(constructor_name, defined_in_type, defined_in_location) => write!(f, "Type constructor {} already defined in type {} at {}", constructor_name, defined_in_type, defined_in_location),
+            OperatorArgumentTypesNotEqual(name, left_type, right_type)
+            => write!(f, "Operator '{}' argument types not equal.\n\tLeft:  {}\n\tRight: {}", name, left_type, right_type),
+
+            TypeMultiplyDefined(name, location) => write!(f, "Type {} already defined, encountered earlier at {}", name, location),
+            TypeConstructorMultiplyDefined(constructor_name, defined_in_type, defined_in_location) => write!(f, "Type constructor {} already defined in type {} at {}", constructor_name, defined_in_type, defined_in_location),
             // ADT
-            InferenceErrorType::UndefinedTypeConstructor(name) => write!(f, "Undefined type constructor {}", name),
-            InferenceErrorType::WrongNumberConstructorArguments(name, expected, got) => write!(f, "Expected {} arguments to type constructor {}, got {}", expected, name, got),
+            UndefinedTypeConstructor(name) => write!(f, "Undefined type constructor {}", name),
+            WrongNumberConstructorArguments(name, expected, got) => write!(f, "Expected {} arguments to type constructor {}, got {}", expected, name, got),
 
             // Record
-            InferenceErrorType::UndefinedRecord(name) => write!(f, "Record with name {} is not defined", name),
+            UndefinedRecord(name) => write!(f, "Record with name {} is not defined", name),
 
-            InferenceErrorType::UndefinedRecordFields(name, undefined_fields) if undefined_fields.len() == 1
+            UndefinedRecordFields(name, undefined_fields) if undefined_fields.len() == 1
             => write!(f, "Field {} is not defined in record {}", undefined_fields.join(","), name),
-            InferenceErrorType::UndefinedRecordFields(name, undefined_fields)
+            UndefinedRecordFields(name, undefined_fields)
             => write!(f, "Fields [{}] are not defined in record {}", undefined_fields.join(","), name),
 
-            InferenceErrorType::MissingRecordFields(name, missing_fields_values) if missing_fields_values.len() == 1
+            MissingRecordFields(name, missing_fields_values) if missing_fields_values.len() == 1
             => write!(f, "Field {} is missing a value in record {}", missing_fields_values.join(","), name),
-            InferenceErrorType::MissingRecordFields(name, missing_fields_values)
+            MissingRecordFields(name, missing_fields_values)
             => write!(f, "Fields [{}] are missing a value in record {}", missing_fields_values.join(","), name),
 
-            InferenceErrorType::ExpectedRecordType(got)
+            ExpectedRecordType(got)
             => write!(f, "Expected record type on LHS of '.', got {}", got),
 
-            InferenceErrorType::ExpectedRecordFieldAccessor(got)
+            ExpectedRecordFieldAccessor(got)
             => write!(f, "Expected record field accessor on RLHS of '.', got {}", got),
 
-            InferenceErrorType::UndefinedVariable(name) => write!(f, "Variable {} is not defined", name),
+            UndefinedVariable(name) => write!(f, "Variable {} is not defined", name),
 
-            InferenceErrorType::MissingMainFunction => write!(f, "Missing main function")
+            MissingMainFunction => write!(f, "Missing main function")
         }
     }
 }
 
 fn write_error_context(f: &mut Formatter<'_>, context: &ErrorContext) -> Result<(), Error> {
     if context.function.is_empty() {
-        write!(f, "{}@[{}:{}]: ", context.file, context.line, context.col)
+        write!(f, "{}@[{}:{}]:\n", context.file, context.line, context.col)
     } else {
         write!(
             f,
-            "{}::{}@[{}:{}]: ",
+            "{}::{}@[{}:{}]:\n",
             context.file, context.function, context.line, context.col
         )
     }
@@ -1315,25 +1322,44 @@ impl InferencerState {
                 expected_type,
             )?,
 
-            Expression::Eq(loc, l, r) => self.infer_binary_expression(
-                loc,
-                l,
-                r,
-                &vec![Type::Int, Type::Float, Type::String, Type::Char, Type::Bool],
-                "==".to_string(),
-                static_type_combinator(Type::Bool),
-                expected_type,
-            )?,
+            Expression::Eq(loc, l, r) => {
+                let fresh_l = self.fresh();
+                let subs_l = self.infer_expression(l, &fresh_l)?;
+                self.extend_type_environment(&subs_l);
 
-            Expression::Neq(loc, l, r) => self.infer_binary_expression(
-                loc,
-                l,
-                r,
-                &vec![Type::Int, Type::Float, Type::String, Type::Char, Type::Bool],
-                "!=".to_string(),
-                static_type_combinator(Type::Bool),
-                expected_type,
-            )?,
+                let fresh_r = self.fresh();
+                let subs_r = self.infer_expression(r, &fresh_r)?;
+                self.extend_type_environment(&subs_r);
+
+                let type_l = substitute_type(&subs_l, &fresh_l);
+                let type_r = substitute_type(&subs_r, &fresh_r);
+
+                if type_l != type_r {
+                    return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::OperatorArgumentTypesNotEqual("==".to_string(), type_l, type_r))]);
+                }
+
+                map_unify(loc.clone(), unify(&Type::Bool, expected_type))?
+            },
+
+            Expression::Neq(loc, l, r) => {
+                let fresh_l = self.fresh();
+                let subs_l = self.infer_expression(l, &fresh_l)?;
+                self.extend_type_environment(&subs_l);
+
+                let fresh_r = self.fresh();
+                let subs_r = self.infer_expression(r, &fresh_r)?;
+                self.extend_type_environment(&subs_r);
+
+                let type_l = substitute_type(&subs_l, &fresh_l);
+                let type_r = substitute_type(&subs_r, &fresh_r);
+                let subs = match unify(&type_l, &type_r) {
+                    Ok(subs) => subs,
+                    Err(unification_error) => return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::OperatorArgumentTypesNotEqual("!=".to_string(), type_l, type_r))]),
+                };
+                self.extend_type_environment(&subs);
+
+                map_unify(loc.clone(), unify(&Type::Bool, expected_type))?
+            },
 
             Expression::And(loc, l, r) => self.infer_binary_expression(
                 loc,

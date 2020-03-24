@@ -1,0 +1,5 @@
+f :: Int Char Int -> Bool
+f 1 'c' 0 = true
+f _ _ _ = false
+
+main = f 2 't' 'z'
