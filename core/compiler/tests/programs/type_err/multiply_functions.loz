@@ -1,0 +1,6 @@
+f x = x * g
+where
+    g x y = x * y
+.
+
+main = f 18

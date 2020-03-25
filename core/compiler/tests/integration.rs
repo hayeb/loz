@@ -1,8 +1,8 @@
 use loz_compiler::inferencer;
-use loz_compiler::inferencer::{InferenceError, InferencerOptions, TypedAST};
+use loz_compiler::inferencer::{InferenceError, InferencerOptions};
 use loz_compiler::parser::ParseError;
-use loz_compiler::{parser, AST};
-use std::fmt::{Display, Error, Formatter};
+use loz_compiler::{parser};
+use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use std::{fmt, fs, io};
 

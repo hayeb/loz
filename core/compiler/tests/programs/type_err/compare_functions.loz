@@ -1,0 +1,9 @@
+f x
+| g != h = x
+= x + 1
+where
+    g x = x + 1
+    h x = x - 1
+.
+
+main = f 1
