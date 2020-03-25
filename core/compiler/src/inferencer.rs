@@ -1346,7 +1346,7 @@ impl InferencerState {
 
                 let subs = match unify(&type_l, &type_r) {
                     Ok(subs) => subs,
-                    Err(unification_error) => return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::OperatorArgumentTypesNotEqual("==".to_string(), type_l, type_r))]),
+                    Err(_unification_error) => return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::OperatorArgumentTypesNotEqual("==".to_string(), type_l, type_r))]),
                 };
 
                 map_unify(loc.clone(), unify(&Type::Bool, expected_type))
@@ -1383,7 +1383,7 @@ impl InferencerState {
 
                 let subs = match unify(&type_l, &type_r) {
                     Ok(subs) => subs,
-                    Err(unification_error) => return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::OperatorArgumentTypesNotEqual("!=".to_string(), type_l, type_r))]),
+                    Err(_unification_error) => return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::OperatorArgumentTypesNotEqual("!=".to_string(), type_l, type_r))]),
                 };
                 self.extend_type_environment(&subs);
 

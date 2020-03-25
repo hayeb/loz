@@ -4,4 +4,4 @@ test r
 
 :: F = { f :: (Int Int -> Int), s :: Int }
 
-Main = test {F|f = \x y. x + y, s = 0}
+main = test {F|f = \x y. x + y, s = 0}

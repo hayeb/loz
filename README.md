@@ -31,7 +31,7 @@ Does NOT support laziness and does NOT use graph/term rewriting as basis for eva
     * ✔ Can leave out type signatures for functions
     * More overloaded operators?
     * ✔ Probaby also included type variables
-        ```shell script
+        ```
         find :: [a] a -> Bool
         ```
 * ✔ Implement mutual recursion
