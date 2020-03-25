@@ -1,0 +1,11 @@
+f x y z
+# ff = z x
+# fff = w y
+= ff y + ff z
+where
+    z x y = x + y
+
+    w x y = x * y
+.
+
+main = f 1 2 3
