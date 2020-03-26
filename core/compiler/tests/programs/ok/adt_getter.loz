@@ -1,0 +1,24 @@
+:: Person = Person String Int
+
+filter [] _ = []
+filter [a : as] f
+| f a = [a : filter as f]
+= filter as f
+
+map [] _ = []
+map [a : as] f = [f a : map as f]
+
+person_names_even_ages list
+# even_ages = filter list (\(Person _ age). age % 2 == 0)
+= map even_ages (\(Person name _). name)
+
+main
+# list = [
+    Person "John" 18,
+    Person "Will" 19,
+    Person "Ike" 67,
+    Person "Tina" 12,
+    Person "Frank" 81,
+    Person "Matthew" 60
+]
+= person_names_even_ages list

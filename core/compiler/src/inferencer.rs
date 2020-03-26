@@ -1792,7 +1792,7 @@ impl InferencerState {
 
                 let defined_number_function_arguments = match &instantiated_function_type {
                     Type::Function(from, _to) => from.len(),
-                    t => 0,
+                    _ => 0,
                 };
 
                 let fresh_result = self.fresh();
