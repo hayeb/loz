@@ -1,0 +1,11 @@
+f a b c
+# ff = i a a
+# fff = j b b b
+= ff b + fff c
+where
+    i x y z w  = x + y + z + w
+
+    j x y z w= x * y + z + w
+.
+
+main = f 1 2 3

@@ -92,7 +92,7 @@ impl Display for InferenceError {
         write_error_context(f, &self.context)?;
         match &self.err {
             UnificationError(a, b) => write!(f, "Could not unify expected type\n\t{}\nwith inferred type\n\t{}", b, a),
-            UnificationErrorMultiple(a, b) => write!(f, "Could not unify one of \n\t{}\nwith\n\t{}", a.into_iter().map(|a| a.to_string()).collect::<Vec<String>>().join(", "), b),
+            UnificationErrorMultiple(a, b) => write!(f, "Could not unify one of \n\t{}\nwith inferred type\n\t{}", a.into_iter().map(|a| a.to_string()).collect::<Vec<String>>().join(", "), b),
             UnboundTypeVariable(v) => write!(f, "Unbound type variable '{}'", v),
             WrongNumberOfTypes(left, right) => write!(f, "Expected {} types, got {}", left, right),
 
@@ -1823,7 +1823,6 @@ impl InferencerState {
                 self.extend_type_environment(&result_subs);
 
                 let result_type = substitute_type(&result_subs, &fresh_result.clone());
-                println!("Result type for {}: {}", name, result_type);
 
                 map_unify(loc.clone(), unify(&result_type, &expected_type)).map(|s| {
                     let mut ns = Vec::new();

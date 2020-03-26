@@ -413,12 +413,10 @@ fn eval_function_call(
     args: &Vec<Expression>,
     state: &mut RunState,
 ) -> Result<Value, InterpreterError> {
-    println!("eval_function_call: {}", f);
     let r = match state.get_function_definition(f) {
         Some(d) => eval_declared_function(&d, args, state),
         None => eval_lambda(f, state.retrieve_variable_value(f), args, state),
     };
-    println!("Result: {:?}", r);
     r
 }
 
