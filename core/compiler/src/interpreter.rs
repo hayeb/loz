@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Error, Formatter};
 
-use crate::inferencer::TypedAST;
-use crate::interpreter::InterpreterError::{DivisionByZero, NoApplicableFunctionBody};
 use crate::{
     Expression, FunctionBody, FunctionDefinition, FunctionRule, Location, MatchExpression,
 };
+use crate::inferencer::TypedAST;
+use crate::interpreter::InterpreterError::{DivisionByZero, NoApplicableFunctionBody};
 
 #[derive(Debug, Clone)]
 struct RunState {
@@ -62,7 +62,7 @@ impl Frame {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Value {
     Bool(bool),
     Int(isize),
@@ -73,7 +73,24 @@ pub enum Value {
     List(Vec<Value>),
     ADTValue(String, Vec<Value>),
     RecordValue(HashMap<String, Value>),
-    Lambda(Vec<MatchExpression>, Expression),
+
+    /* We keep currently curried-in values in the lambda itself.
+       We keep a Vec of function bodies. In the following case:
+        # f = \a b. as + b
+       The lambda will just contain a single body.
+
+       When we curry a "proper" function definition:
+        f :: Int Int -> Int
+        f 0 0 = 0
+        f 1 0 = 0
+        f 0 1 = 0
+        f x y = x * y
+        ...
+        # ff = f 1
+       there will be multiple function bodies in the list.
+     */
+
+    Lambda(Vec<Value>, Vec<FunctionBody>),
 }
 
 impl Display for Value {
@@ -121,7 +138,7 @@ impl Display for Value {
                     .collect::<Vec<String>>()
                     .join(", ")
             ),
-            Value::Lambda(args, _) => write!(f, "Lambda with {} args", args.len()),
+            Value::Lambda(curried_arguments, bodies) => write!(f, "Lambda with {} args, {} args already curried in", bodies.get(0).unwrap().match_expressions.len(), curried_arguments.len()),
         }
     }
 }
@@ -277,30 +294,32 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterEr
             (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x - y)),
             _ => unreachable!(),
         },
-        Expression::ShiftLeft(_, e1, e2) => {
-            Ok(Value::Int(eval_int(e1, state)? << eval_int(e2, state)?))
-        }
-        Expression::ShiftRight(_, e1, e2) => {
-            Ok(Value::Int(eval_int(e1, state)? >> eval_int(e2, state)?))
-        }
-        Expression::Greater(_, e1, e2) => {
-            Ok(Value::Bool(eval_int(e1, state)? > eval_int(e2, state)?))
-        }
-        Expression::Greq(_, e1, e2) => {
-            Ok(Value::Bool(eval_int(e1, state)? >= eval_int(e2, state)?))
-        }
-        Expression::Leq(_, e1, e2) => Ok(Value::Bool(eval_int(e1, state)? <= eval_int(e2, state)?)),
-        Expression::Lesser(_, e1, e2) => {
-            Ok(Value::Bool(eval_int(e1, state)? < eval_int(e2, state)?))
-        }
-        Expression::Eq(_, e1, e2) => Ok(Value::Bool(evaluate(e1, state)? == evaluate(e2, state)?)),
-        Expression::Neq(_, e1, e2) => Ok(Value::Bool(evaluate(e1, state)? != evaluate(e2, state)?)),
-        Expression::And(_, e1, e2) => {
-            Ok(Value::Bool(eval_bool(e1, state)? && eval_bool(e2, state)?))
-        }
-        Expression::Or(_, e1, e2) => {
-            Ok(Value::Bool(eval_bool(e1, state)? || eval_bool(e2, state)?))
-        }
+        Expression::ShiftLeft(_, e1, e2)
+        => Ok(Value::Int(eval_int(e1, state)? << eval_int(e2, state)?)),
+
+        Expression::ShiftRight(_, e1, e2)
+        => Ok(Value::Int(eval_int(e1, state)? >> eval_int(e2, state)?)),
+
+        Expression::Greater(_, e1, e2)
+        => Ok(Value::Bool(eval_int(e1, state)? > eval_int(e2, state)?)),
+
+        Expression::Greq(_, e1, e2)
+        => Ok(Value::Bool(eval_int(e1, state)? >= eval_int(e2, state)?)),
+
+        Expression::Leq(_, e1, e2)
+        => Ok(Value::Bool(eval_int(e1, state)? <= eval_int(e2, state)?)),
+
+        Expression::Lesser(_, e1, e2)
+        => Ok(Value::Bool(eval_int(e1, state)? < eval_int(e2, state)?)),
+
+        Expression::Eq(_, e1, e2) => Ok(Value::Bool(eq(evaluate(e1, state)?, evaluate(e2, state)?))),
+        Expression::Neq(_, e1, e2) => Ok(Value::Bool(neq(evaluate(e1, state)?, evaluate(e2, state)?))),
+        Expression::And(_, e1, e2)
+        => Ok(Value::Bool(eval_bool(e1, state)? && eval_bool(e2, state)?)),
+
+        Expression::Or(_, e1, e2)
+        => Ok(Value::Bool(eval_bool(e1, state)? || eval_bool(e2, state)?)),
+
         Expression::RecordFieldAccess(_, record_expression, field_accessor) => {
             let record_value = evaluate(record_expression, state)?;
             if let Value::RecordValue(fields) = record_value {
@@ -310,7 +329,82 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterEr
             }
             unreachable!()
         }
-        Expression::Lambda(_, args, body) => Ok(Value::Lambda(args.clone(), *body.clone())),
+        Expression::Lambda(loc, args, body) => {
+            let lambda_body = FunctionBody {
+                name: "".to_string(),
+                location: loc.clone(),
+                match_expressions: args.clone(),
+                rules: vec![FunctionRule::ExpressionRule(loc.clone(), *body.clone())],
+                local_function_definitions: vec![],
+                local_type_definitions: vec![],
+            };
+            Ok(Value::Lambda(Vec::new(), vec![lambda_body]))
+        }
+    }
+}
+
+fn eq(l: Value, r: Value) -> bool {
+    match (l, r) {
+        (Value::Bool(l), Value::Bool(r)) => l == r,
+        (Value::Int(l), Value::Int(r)) => l == r,
+        (Value::Float(l), Value::Float(r)) => l == r,
+        (Value::Char(l), Value::Char(r)) => l == r,
+        (Value::String(l), Value::String(r)) => l == r,
+        (Value::Tuple(l), Value::Tuple(r))
+        => l.into_iter().zip(r).fold(true, |b, (l, r)| b && eq(l, r)),
+
+        (Value::List(l), Value::List(r))
+        => l.into_iter().zip(r).fold(true, |b, (l, r)| b && eq(l, r)),
+
+        (Value::ADTValue(l_constructor, l_arguments), Value::ADTValue(r_constructor, r_arguments))
+        => l_constructor == r_constructor && l_arguments.into_iter().zip(r_arguments).fold(true, |b, (l, r)| b && eq(l, r)),
+
+        (Value::RecordValue(l_values), Value::RecordValue(mut r_values)) => {
+            for (k, v) in l_values {
+                if !eq(v, r_values.remove(&k).unwrap()) {
+                    return false
+                }
+            }
+            return true
+        },
+
+        // This case is prevented by the type inferencer.
+        (Value::Lambda(_, _), Value::Lambda(_, _)) => unreachable!(),
+
+        (l, r) => unreachable!("eq {} and {}", l, r),
+    }
+}
+
+fn neq(l: Value, r: Value) -> bool {
+    match (l, r) {
+        (Value::Bool(l), Value::Bool(r)) => l != r,
+        (Value::Int(l), Value::Int(r)) => l != r,
+        (Value::Float(l), Value::Float(r)) => l != r,
+        (Value::Char(l), Value::Char(r)) => l != r,
+        (Value::String(l), Value::String(r)) => l != r,
+
+        (Value::Tuple(l), Value::Tuple(r))
+        => l.into_iter().zip(r).fold(false, |b, (l, r)| b || neq(l, r)),
+
+        (Value::List(l), Value::List(r))
+        => l.into_iter().zip(r).fold(false, |b, (l, r)| b || neq(l, r)),
+
+        (Value::ADTValue(l_constructor, l_arguments), Value::ADTValue(r_constructor, r_arguments))
+        => l_constructor == r_constructor && l_arguments.into_iter().zip(r_arguments).fold(false, |b, (l, r)| b || eq(l, r)),
+
+        (Value::RecordValue(l_values), Value::RecordValue(mut r_values)) => {
+            for (k, v) in l_values {
+                if neq(v, r_values.remove(&k).unwrap()) {
+                    return true
+                }
+            }
+            return false
+        },
+
+        // This case is prevented by the type inferencer.
+        (Value::Lambda(_, _), Value::Lambda(_, _)) => unreachable!(),
+
+        (l, r) => unreachable!("neq {} and {}", l, r),
     }
 }
 
@@ -319,10 +413,13 @@ fn eval_function_call(
     args: &Vec<Expression>,
     state: &mut RunState,
 ) -> Result<Value, InterpreterError> {
-    match state.get_function_definition(f) {
+    println!("eval_function_call: {}", f);
+    let r = match state.get_function_definition(f) {
         Some(d) => eval_declared_function(&d, args, state),
         None => eval_lambda(f, state.retrieve_variable_value(f), args, state),
-    }
+    };
+    println!("Result: {:?}", r);
+    r
 }
 
 fn eval_lambda(
@@ -331,44 +428,42 @@ fn eval_lambda(
     args: &Vec<Expression>,
     state: &mut RunState,
 ) -> Result<Value, InterpreterError> {
-    match lambda {
-        Value::Lambda(match_expressions, body) => {
-            let mut body_frame = Frame::new();
-            let mut matches = true;
-            for (match_expression, value) in match_expressions.iter().zip(args.iter()) {
-                match collect_match_variables(match_expression, &evaluate(value, state)?) {
-                    Ok(variables) => body_frame.variables.extend(variables),
-                    Err(InterpreterError::ExpressionDoesNotMatch(_, _)) => {
-                        matches = false;
-                        break;
-                    }
-                    Err(e) => return Err(e),
-                }
-            }
-            if matches {
-                state.frames.push(body_frame);
-                let result = evaluate(&body, state);
-                state.frames.remove(state.frames.len() - 1);
-                return result;
-            }
+    let (curried_argument_values, bodies) = match lambda {
+        Value::Lambda(curried_argument_values, bodies) => (curried_argument_values, bodies),
+        v => unreachable!("{}", v)
+    };
+
+    if curried_argument_values.len() + args.len() < bodies.get(0).unwrap().match_expressions.len() {
+        // Handle currying
+        let mut argument_values = Vec::new();
+        for a in args {
+            argument_values.push(evaluate(a, state)?);
         }
-        _ => unreachable!(),
+
+        let mut all_argument_values = Vec::new();
+        all_argument_values.extend(curried_argument_values);
+        all_argument_values.extend(argument_values);
+        return Ok(Value::Lambda(all_argument_values, bodies));
     }
-    Err(InterpreterError::NoApplicableFunctionBody(f.clone()))
+
+    let mut all_args = Vec::new();
+    all_args.extend(curried_argument_values);
+
+    for a in args {
+        all_args.push(evaluate(a, state)?);
+    }
+
+    eval_function_bodies(f.clone(), &bodies, &all_args, state)
 }
 
-fn eval_declared_function(
-    d: &FunctionDefinition,
-    args: &Vec<Expression>,
-    state: &mut RunState,
-) -> Result<Value, InterpreterError> {
-    for body in &d.function_bodies {
+fn eval_function_bodies(f: String, bodies: &Vec<FunctionBody>, args: &Vec<Value>, state: &mut RunState) -> Result<Value, InterpreterError> {
+    for body in bodies {
         let mut body_frame = Frame::new();
 
         let mut matches = true;
 
         for (match_expression, value) in body.match_expressions.iter().zip(args.iter()) {
-            match collect_match_variables(match_expression, &evaluate(value, state)?) {
+            match collect_match_variables(match_expression, value) {
                 Ok(variables) => body_frame.variables.extend(variables),
                 Err(InterpreterError::ExpressionDoesNotMatch(_, _)) => {
                     matches = false;
@@ -387,13 +482,37 @@ fn eval_declared_function(
 
             state.frames.push(body_frame);
 
-            let result = eval_function_body(&d.name, &body, state);
+            let result = eval_function_body(&f, &body, state);
 
             state.frames.remove(state.frames.len() - 1);
             return result;
         }
     }
-    Err(NoApplicableFunctionBody(d.name.clone()))
+    Err(NoApplicableFunctionBody(f))
+}
+
+fn eval_declared_function(
+    d: &FunctionDefinition,
+    args: &Vec<Expression>,
+    state: &mut RunState,
+) -> Result<Value, InterpreterError> {
+    if d.function_bodies.get(0).unwrap().match_expressions.len() > args.len() {
+        // Handle currying
+        let mut argument_values = Vec::new();
+        for a in args {
+            argument_values.push(evaluate(a, state)?);
+        }
+
+        return Ok(Value::Lambda(argument_values, d.function_bodies.clone()));
+    }
+
+    let mut arg_values = Vec::new();
+    for a in args {
+        arg_values.push(evaluate(a, state)?);
+    }
+
+
+    eval_function_bodies(d.name.clone(), &d.function_bodies, &arg_values, state)
 }
 
 fn eval_function_body(

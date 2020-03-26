@@ -219,7 +219,7 @@ impl Display for Type {
             Type::List(e) => write!(f, "[{}]", e),
             Type::Function(from, to) => write!(
                 f,
-                "{} -> {}",
+                "({} -> {})",
                 from.iter()
                     .map(|t| t.to_string())
                     .collect::<Vec<String>>()

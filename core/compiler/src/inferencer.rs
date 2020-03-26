@@ -1776,8 +1776,6 @@ impl InferencerState {
                     Some(ft) => ft
                 };
 
-                let instantiated_function_type = self.instantiate(&function_type);
-
                 // f :: v0 v0 -> v0
                 let mut argument_types = Vec::new();
                 let mut arg_subs = Vec::new();
@@ -1790,19 +1788,42 @@ impl InferencerState {
                     argument_types.push(substitute_type(&subs, &fresh));
                 }
 
-                // FIXME: This reports the wrong error location. Check if instantiated_function_type
-                //        is a function, then we can report better errors.. Otherwise we report the error
-                //        of unifying the two whole types like now.
+                let instantiated_function_type = self.instantiate(&function_type);
+
+                let defined_number_function_arguments = match &instantiated_function_type {
+                    Type::Function(from, _to) => from.len(),
+                    t => 0,
+                };
+
                 let fresh_result = self.fresh();
-                let result_subs = map_unify(
-                    loc.clone(),
-                    unify(
-                        &Type::Function(argument_types, Box::new(fresh_result.clone())),
-                        &instantiated_function_type,
-                    ),
-                )?;
+                let result_subs = if defined_number_function_arguments > arguments.len() {
+                    // f ::: Int Char Bool -> String
+                    // # g = f i // g :: Char Bool String
+                    // Currying
+                    let (defined_from, defined_to) = match instantiated_function_type {
+                        Type::Function(from, to) => (from, to),
+                        t => unreachable!("{}", t)
+                    };
+
+                    let (l, r) = defined_from.split_at(arguments.len());
+
+                    let curry_adjusted_instantiated_function_type = Type::Function(l.to_vec(), Box::new(Type::Function(r.to_vec(), defined_to)));
+
+                    map_unify(loc.clone(),unify(&Type::Function(argument_types, Box::new(fresh_result.clone())),
+                              &curry_adjusted_instantiated_function_type))?
+                } else {
+                    map_unify(
+                        loc.clone(),
+                        unify(
+                            &Type::Function(argument_types, Box::new(fresh_result.clone())),
+                            &instantiated_function_type,
+                        )
+                    )?
+                };
                 self.extend_type_environment(&result_subs);
+
                 let result_type = substitute_type(&result_subs, &fresh_result.clone());
+                println!("Result type for {}: {}", name, result_type);
 
                 map_unify(loc.clone(), unify(&result_type, &expected_type)).map(|s| {
                     let mut ns = Vec::new();
