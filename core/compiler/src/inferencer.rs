@@ -357,7 +357,7 @@ fn check_function_calls_defined(
                 match r {
                     FunctionRule::ConditionalRule(_, cond, result) => {
                         errors.extend(
-                            cond.function_references()
+                            cond.references(false)
                                 .into_iter()
                                 .filter(|(name, _)| {
                                     !defined_functions.contains(name)
@@ -372,7 +372,7 @@ fn check_function_calls_defined(
                         );
                         errors.extend(
                             result
-                                .function_references()
+                                .references(false)
                                 .into_iter()
                                 .filter(|(name, _)| {
                                     !defined_functions.contains(name)
@@ -389,7 +389,7 @@ fn check_function_calls_defined(
                     FunctionRule::ExpressionRule(_, expression) => {
                         errors.extend(
                             expression
-                                .function_references()
+                                .references(false)
                                 .into_iter()
                                 .filter(|(name, _)| {
                                     !defined_functions.contains(name)
@@ -408,7 +408,7 @@ fn check_function_calls_defined(
 
                         errors.extend(
                             expression
-                                .function_references()
+                                .references(false)
                                 .into_iter()
                                 .filter(|(name, _)| {
                                     !defined_functions.contains(name)

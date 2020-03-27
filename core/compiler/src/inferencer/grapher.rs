@@ -63,12 +63,12 @@ fn declaration_referred_functions(d: &FunctionDefinition) -> HashSet<(String, Lo
         for r in &b.rules {
             referred.extend(match r {
                 FunctionRule::ConditionalRule(_, cond, expr) => {
-                    Expression::dual_referred_functions(cond, expr)
+                    Expression::dual_references(cond, expr, false)
                 }
-                FunctionRule::ExpressionRule(_, expr) => expr.function_references(),
+                FunctionRule::ExpressionRule(_, expr) => expr.references(false),
                 FunctionRule::LetRule(_, match_expression, expr) => {
                     local_variables.extend(match_expression.variables());
-                    expr.function_references()
+                    expr.references(false)
                 }
             });
         }

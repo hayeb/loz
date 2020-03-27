@@ -1,0 +1,6 @@
+f x y = g x y
+where
+    g a b = x * y * a * b
+.
+
+main = f 1 2

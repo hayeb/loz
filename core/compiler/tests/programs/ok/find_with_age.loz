@@ -1,0 +1,22 @@
+:: Person = {name :: String, age :: Int}
+
+:: Maybe a = Nothing | Just a
+
+find :: [a] (a -> Bool) -> Maybe a
+find [] _ = Nothing
+find [a:as] f
+| f a = Just a
+= find as f
+
+find_with_age list a = find list (\{Person|age}. age == a)
+
+main
+# list = [
+    {Person|name = "John", age = 18},
+    {Person|name = "Will", age = 19},
+    {Person|name = "Ike", age = 67},
+    {Person|name = "Tina", age = 12},
+    {Person|name = "Frank", age = 81},
+    {Person|name = "Matthew", age = 60}
+]
+= find_with_age list 12

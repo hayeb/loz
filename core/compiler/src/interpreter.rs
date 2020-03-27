@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Error, Formatter};
 
 use crate::{
@@ -90,7 +90,7 @@ pub enum Value {
        there will be multiple function bodies in the list.
      */
 
-    Lambda(Vec<Value>, Vec<FunctionBody>),
+    Lambda(Vec<Value>, HashMap<String, Value>, Vec<FunctionBody>),
 }
 
 impl Display for Value {
@@ -138,7 +138,7 @@ impl Display for Value {
                     .collect::<Vec<String>>()
                     .join(", ")
             ),
-            Value::Lambda(curried_arguments, bodies) => write!(f, "Lambda with {} args, {} args already curried in", bodies.get(0).unwrap().match_expressions.len(), curried_arguments.len()),
+            Value::Lambda(curried_arguments, _captured_variables, bodies) => write!(f, "Lambda with {} args, {} args already curried in", bodies.get(0).unwrap().match_expressions.len(), curried_arguments.len()),
         }
     }
 }
@@ -338,7 +338,13 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterEr
                 local_function_definitions: vec![],
                 local_type_definitions: vec![],
             };
-            Ok(Value::Lambda(Vec::new(), vec![lambda_body]))
+
+            let introduced_match_variables : HashSet<String> = args.iter().flat_map(|me| me.variables().into_iter()).collect();
+            let captured = body.references(true).into_iter()
+                .filter(|(v, _)| !introduced_match_variables.contains(v))
+                .map(|(v,_)| (v.clone(), state.retrieve_variable_value(&v)))
+                .collect();
+            Ok(Value::Lambda(Vec::new(), captured, vec![lambda_body]))
         }
     }
 }
@@ -369,7 +375,7 @@ fn eq(l: Value, r: Value) -> bool {
         },
 
         // This case is prevented by the type inferencer.
-        (Value::Lambda(_, _), Value::Lambda(_, _)) => unreachable!(),
+        (Value::Lambda(_, _, _), Value::Lambda(_, _, _)) => unreachable!(),
 
         (l, r) => unreachable!("eq {} and {}", l, r),
     }
@@ -402,7 +408,7 @@ fn neq(l: Value, r: Value) -> bool {
         },
 
         // This case is prevented by the type inferencer.
-        (Value::Lambda(_, _), Value::Lambda(_, _)) => unreachable!(),
+        (Value::Lambda(_, _, _), Value::Lambda(_, _, _)) => unreachable!(),
 
         (l, r) => unreachable!("neq {} and {}", l, r),
     }
@@ -426,8 +432,8 @@ fn eval_lambda(
     args: &Vec<Expression>,
     state: &mut RunState,
 ) -> Result<Value, InterpreterError> {
-    let (curried_argument_values, bodies) = match lambda {
-        Value::Lambda(curried_argument_values, bodies) => (curried_argument_values, bodies),
+    let (curried_argument_values, captured_variable_values, bodies) = match lambda {
+        Value::Lambda(curried_argument_values, captured_variable_values, bodies) => (curried_argument_values, captured_variable_values, bodies),
         v => unreachable!("{}", v)
     };
 
@@ -441,7 +447,7 @@ fn eval_lambda(
         let mut all_argument_values = Vec::new();
         all_argument_values.extend(curried_argument_values);
         all_argument_values.extend(argument_values);
-        return Ok(Value::Lambda(all_argument_values, bodies));
+        return Ok(Value::Lambda(all_argument_values, captured_variable_values, bodies));
     }
 
     let mut all_args = Vec::new();
@@ -451,7 +457,11 @@ fn eval_lambda(
         all_args.push(evaluate(a, state)?);
     }
 
-    eval_function_bodies(f.clone(), &bodies, &all_args, state)
+    state.frames.push(Frame::with_variables(captured_variable_values));
+
+    let res = eval_function_bodies(f.clone(), &bodies, &all_args, state);
+    state.frames.pop();
+    res
 }
 
 fn eval_function_bodies(f: String, bodies: &Vec<FunctionBody>, args: &Vec<Value>, state: &mut RunState) -> Result<Value, InterpreterError> {
@@ -482,7 +492,7 @@ fn eval_function_bodies(f: String, bodies: &Vec<FunctionBody>, args: &Vec<Value>
 
             let result = eval_function_body(&f, &body, state);
 
-            state.frames.remove(state.frames.len() - 1);
+            state.frames.pop();
             return result;
         }
     }
@@ -494,6 +504,8 @@ fn eval_declared_function(
     args: &Vec<Expression>,
     state: &mut RunState,
 ) -> Result<Value, InterpreterError> {
+
+    // Inferencer insures all bodies have the same number of arguments, so we just use the first.
     if d.function_bodies.get(0).unwrap().match_expressions.len() > args.len() {
         // Handle currying
         let mut argument_values = Vec::new();
@@ -501,14 +513,14 @@ fn eval_declared_function(
             argument_values.push(evaluate(a, state)?);
         }
 
-        return Ok(Value::Lambda(argument_values, d.function_bodies.clone()));
+        // Calling a declared function does not capture any values.
+        return Ok(Value::Lambda(argument_values, HashMap::new(), d.function_bodies.clone()));
     }
 
     let mut arg_values = Vec::new();
     for a in args {
         arg_values.push(evaluate(a, state)?);
     }
-
 
     eval_function_bodies(d.name.clone(), &d.function_bodies, &arg_values, state)
 }

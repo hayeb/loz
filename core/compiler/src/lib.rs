@@ -365,17 +365,17 @@ impl Expression {
         }
     }
 
-    fn expressions_referred_functions(es: &Vec<Expression>) -> HashSet<(String, Location)> {
-        es.iter().flat_map(|e| e.function_references()).collect()
+    fn list_references(es: &Vec<Expression>, include_variables: bool) -> HashSet<(String, Location)> {
+        es.iter().flat_map(|e| e.references(include_variables)).collect()
     }
 
-    pub fn dual_referred_functions(l: &Expression, r: &Expression) -> HashSet<(String, Location)> {
-        let mut lrf = l.function_references();
-        lrf.extend(r.function_references());
+    pub fn dual_references(l: &Expression, r: &Expression, include_variables: bool) -> HashSet<(String, Location)> {
+        let mut lrf = l.references(include_variables);
+        lrf.extend(r.references(include_variables));
         lrf
     }
 
-    pub fn function_references(&self) -> HashSet<(String, Location)> {
+    pub fn references(&self, include_variables: bool) -> HashSet<(String, Location)> {
         match self {
             Expression::BoolLiteral(_, _) => HashSet::new(),
             Expression::StringLiteral(_, _) => HashSet::new(),
@@ -383,26 +383,26 @@ impl Expression {
             Expression::IntegerLiteral(_, _) => HashSet::new(),
             Expression::FloatLiteral(_, _) => HashSet::new(),
             Expression::TupleLiteral(_, expressions) => {
-                Expression::expressions_referred_functions(expressions)
+                Expression::list_references(expressions, include_variables)
             }
             Expression::EmptyListLiteral(_) => HashSet::new(),
             Expression::ShorthandListLiteral(_, expressions) => {
-                Expression::expressions_referred_functions(expressions)
+                Expression::list_references(expressions, include_variables)
             }
             Expression::LonghandListLiteral(_, e1, e2) => {
-                Expression::dual_referred_functions(e1, e2)
+                Expression::dual_references(e1, e2, include_variables)
             }
             Expression::ADTTypeConstructor(_, _, expressions) => {
-                Expression::expressions_referred_functions(expressions)
+                Expression::list_references(expressions, include_variables)
             }
-            Expression::Record(_, _, expressions) => Expression::expressions_referred_functions(
-                &expressions.into_iter().map(|(_, e)| e.clone()).collect(),
+            Expression::Record(_, _, expressions) => Expression::list_references(
+                &expressions.into_iter().map(|(_, e)| e.clone()).collect(), include_variables
             ),
             Expression::Case(_, e, rules) => {
-                let mut fs: HashSet<(String, Location)> = e.function_references();
+                let mut fs: HashSet<(String, Location)> = e.references(include_variables);
 
                 for r in rules {
-                    for fref in &r.result_rule.function_references() {
+                    for fref in &r.result_rule.references(include_variables) {
                         fs.insert(fref.clone());
                     }
                 }
@@ -412,30 +412,31 @@ impl Expression {
             Expression::Call(loc, f, expressions) => {
                 let mut fs = HashSet::new();
                 fs.insert((f.clone(), loc.clone()));
-                fs.extend(Expression::expressions_referred_functions(&expressions));
+                fs.extend(Expression::list_references(&expressions, include_variables));
                 fs
             }
+            Expression::Variable(loc, name) if include_variables => vec![(name.clone(), loc.clone())].into_iter().collect(),
             Expression::Variable(_, _) => HashSet::new(),
-            Expression::Negation(_, e) => e.function_references(),
-            Expression::Minus(_, e) => e.function_references(),
-            Expression::Times(_, l, r) => Expression::dual_referred_functions(l, r),
-            Expression::Divide(_, l, r) => Expression::dual_referred_functions(l, r),
-            Expression::Modulo(_, l, r) => Expression::dual_referred_functions(l, r),
-            Expression::Add(_, l, r) => Expression::dual_referred_functions(l, r),
-            Expression::Subtract(_, l, r) => Expression::dual_referred_functions(l, r),
-            Expression::ShiftLeft(_, l, r) => Expression::dual_referred_functions(l, r),
-            Expression::ShiftRight(_, l, r) => Expression::dual_referred_functions(l, r),
-            Expression::Greater(_, l, r) => Expression::dual_referred_functions(l, r),
-            Expression::Greq(_, l, r) => Expression::dual_referred_functions(l, r),
-            Expression::Leq(_, l, r) => Expression::dual_referred_functions(l, r),
-            Expression::Lesser(_, l, r) => Expression::dual_referred_functions(l, r),
-            Expression::Eq(_, l, r) => Expression::dual_referred_functions(l, r),
-            Expression::Neq(_, l, r) => Expression::dual_referred_functions(l, r),
-            Expression::And(_, l, r) => Expression::dual_referred_functions(l, r),
-            Expression::Or(_, l, r) => Expression::dual_referred_functions(l, r),
-            Expression::RecordFieldAccess(_, l, r) => Expression::dual_referred_functions(l, r),
+            Expression::Negation(_, e) => e.references(include_variables),
+            Expression::Minus(_, e) => e.references(include_variables),
+            Expression::Times(_, l, r) => Expression::dual_references(l, r, include_variables),
+            Expression::Divide(_, l, r) => Expression::dual_references(l, r, include_variables),
+            Expression::Modulo(_, l, r) => Expression::dual_references(l, r, include_variables),
+            Expression::Add(_, l, r) => Expression::dual_references(l, r, include_variables),
+            Expression::Subtract(_, l, r) => Expression::dual_references(l, r, include_variables),
+            Expression::ShiftLeft(_, l, r) => Expression::dual_references(l, r, include_variables),
+            Expression::ShiftRight(_, l, r) => Expression::dual_references(l, r, include_variables),
+            Expression::Greater(_, l, r) => Expression::dual_references(l, r, include_variables),
+            Expression::Greq(_, l, r) => Expression::dual_references(l, r, include_variables),
+            Expression::Leq(_, l, r) => Expression::dual_references(l, r, include_variables),
+            Expression::Lesser(_, l, r) => Expression::dual_references(l, r, include_variables),
+            Expression::Eq(_, l, r) => Expression::dual_references(l, r, include_variables),
+            Expression::Neq(_, l, r) => Expression::dual_references(l, r, include_variables),
+            Expression::And(_, l, r) => Expression::dual_references(l, r, include_variables),
+            Expression::Or(_, l, r) => Expression::dual_references(l, r, include_variables),
+            Expression::RecordFieldAccess(_, l, r) => Expression::dual_references(l, r, include_variables),
             Expression::Lambda(_, _, e) => {
-                let fs = e.function_references();
+                let fs = e.references(include_variables);
                 // TODO: Remove introduced identifiers by lambda arguments
                 fs
             }
