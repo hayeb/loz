@@ -396,7 +396,7 @@ impl Expression {
                 Expression::list_references(expressions, include_variables)
             }
             Expression::Record(_, _, expressions) => Expression::list_references(
-                &expressions.into_iter().map(|(_, e)| e.clone()).collect(), include_variables
+                &expressions.into_iter().map(|(_, e)| e.clone()).collect(), include_variables,
             ),
             Expression::Case(_, e, rules) => {
                 let mut fs: HashSet<(String, Location)> = e.references(include_variables);
@@ -490,4 +490,43 @@ impl MatchExpression {
             MatchExpression::Record(_, _, fields) => fields.into_iter().cloned().collect(),
         }
     }
+}
+
+pub fn declaration_references(d: &FunctionDefinition, include_variables: bool) -> HashSet<(String, Location)> {
+    let mut referred = HashSet::new();
+
+    for b in &d.function_bodies {
+        referred.extend(body_references(b, include_variables));
+    }
+
+    referred
+}
+
+pub fn body_references(b: &FunctionBody, include_variables: bool) -> HashSet<(String, Location)> {
+    let mut local_references = HashSet::new();
+    for me in &b.match_expressions {
+        local_references.extend(me.variables());
+    }
+    for d in &b.local_function_definitions {
+        local_references.insert(d.name.clone());
+    }
+
+    let mut locally_referred = HashSet::new();
+    for r in &b.rules {
+        locally_referred.extend(match r {
+            FunctionRule::ConditionalRule(_, cond, expr) => {
+                Expression::dual_references(cond, expr, include_variables)
+            }
+            FunctionRule::ExpressionRule(_, expr) => expr.references(include_variables),
+            FunctionRule::LetRule(_, match_expression, expr) => {
+                let lambda_variables = match_expression.variables();
+
+                expr.references(include_variables)
+                    .into_iter()
+                    .filter(|(v, _)| !lambda_variables.contains(v))
+                    .collect()
+            }
+        });
+    }
+    locally_referred.into_iter().filter(|(v, _)| !local_references.contains(v)).collect()
 }

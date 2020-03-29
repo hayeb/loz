@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use petgraph::Graph;
 
-use crate::{Expression, FunctionDefinition, FunctionRule, Location};
+use crate::{Expression, FunctionDefinition, FunctionRule, Location, declaration_references};
 
 pub fn to_components(declarations: &Vec<FunctionDefinition>) -> Vec<Vec<&FunctionDefinition>> {
     let mut name_to_index = HashMap::new();
@@ -17,7 +17,7 @@ pub fn to_components(declarations: &Vec<FunctionDefinition>) -> Vec<Vec<&Functio
     }
 
     for f in declarations {
-        let referred = declaration_referred_functions(f);
+        let referred = declaration_references(f, false);
 
         for (name, _) in referred {
             if name_to_index.contains_key(&name) {
@@ -45,37 +45,5 @@ pub fn to_components(declarations: &Vec<FunctionDefinition>) -> Vec<Vec<&Functio
                 })
                 .collect()
         })
-        .collect()
-}
-
-fn declaration_referred_functions(d: &FunctionDefinition) -> HashSet<(String, Location)> {
-    let mut referred = HashSet::new();
-
-    let mut local_variables = HashSet::new();
-
-    for b in &d.function_bodies {
-        for me in &b.match_expressions {
-            local_variables.extend(me.variables());
-        }
-        for d in &b.local_function_definitions {
-            local_variables.insert(d.name.clone());
-        }
-        for r in &b.rules {
-            referred.extend(match r {
-                FunctionRule::ConditionalRule(_, cond, expr) => {
-                    Expression::dual_references(cond, expr, false)
-                }
-                FunctionRule::ExpressionRule(_, expr) => expr.references(false),
-                FunctionRule::LetRule(_, match_expression, expr) => {
-                    local_variables.extend(match_expression.variables());
-                    expr.references(false)
-                }
-            });
-        }
-    }
-
-    referred
-        .into_iter()
-        .filter(|(v, _)| !local_variables.contains(v))
         .collect()
 }

@@ -1,9 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Error, Formatter};
 
-use crate::{
-    Expression, FunctionBody, FunctionDefinition, FunctionRule, Location, MatchExpression,
-};
+use crate::{Expression, FunctionBody, FunctionDefinition, FunctionRule, Location, MatchExpression, body_references};
 use crate::inferencer::TypedAST;
 use crate::interpreter::InterpreterError::{DivisionByZero, NoApplicableFunctionBody};
 
@@ -27,6 +25,15 @@ impl RunState {
             if let Some(v) = val {
                 return v.clone();
             }
+
+            if let Some(d) = f.declared_functions.get(name) {
+                let closures = d.function_bodies.iter()
+                    .map(|fb| FunctionClosure { closed_variables: body_references(fb, true).iter().map(|(v, _)| (v.clone(), self.retrieve_variable_value(v))).collect(),
+                        body: fb.clone() })
+                    .collect();
+
+                return Value::Lambda(Vec::new(), closures)
+            }
         }
         panic!("No value for variable {}", name);
     }
@@ -38,6 +45,15 @@ impl RunState {
             }
         }
         None
+    }
+
+    fn determine_closure(&self, args: &Vec<MatchExpression>, references: &HashSet<(String, Location)>) -> HashMap<String, Value> {
+        let introduced_match_variables : HashSet<String> = args.iter().flat_map(|me| me.variables().into_iter()).collect();
+        references.into_iter()
+            .filter(|(v, _)| !introduced_match_variables.contains(v))
+            .map(|(v,_)| (v.clone(), self.retrieve_variable_value(&v)))
+            .collect()
+
     }
 }
 
@@ -90,7 +106,15 @@ pub enum Value {
        there will be multiple function bodies in the list.
      */
 
-    Lambda(Vec<Value>, HashMap<String, Value>, Vec<FunctionBody>),
+    Lambda(Vec<Value> // Curried-in values (evaluated expressions)
+           , Vec<FunctionClosure>
+    )
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionClosure {
+    closed_variables: HashMap<String, Value>,
+    body: FunctionBody
 }
 
 impl Display for Value {
@@ -138,7 +162,7 @@ impl Display for Value {
                     .collect::<Vec<String>>()
                     .join(", ")
             ),
-            Value::Lambda(curried_arguments, _captured_variables, bodies) => write!(f, "Lambda with {} args, {} args already curried in", bodies.get(0).unwrap().match_expressions.len(), curried_arguments.len()),
+            Value::Lambda(curried_arguments, closures) => write!(f, "Lambda with {} args, {} args already curried in", closures.get(0).unwrap().body.match_expressions.len(), curried_arguments.len()),
         }
     }
 }
@@ -339,12 +363,8 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterEr
                 local_type_definitions: vec![],
             };
 
-            let introduced_match_variables : HashSet<String> = args.iter().flat_map(|me| me.variables().into_iter()).collect();
-            let captured = body.references(true).into_iter()
-                .filter(|(v, _)| !introduced_match_variables.contains(v))
-                .map(|(v,_)| (v.clone(), state.retrieve_variable_value(&v)))
-                .collect();
-            Ok(Value::Lambda(Vec::new(), captured, vec![lambda_body]))
+            let closure = FunctionClosure { closed_variables: state.determine_closure(args, &body.references(true)), body: lambda_body };
+            Ok(Value::Lambda(Vec::new(), vec![closure]))
         }
     }
 }
@@ -375,7 +395,7 @@ fn eq(l: Value, r: Value) -> bool {
         },
 
         // This case is prevented by the type inferencer.
-        (Value::Lambda(_, _, _), Value::Lambda(_, _, _)) => unreachable!(),
+        (Value::Lambda(_, _), Value::Lambda(_, _)) => unreachable!(),
 
         (l, r) => unreachable!("eq {} and {}", l, r),
     }
@@ -408,7 +428,7 @@ fn neq(l: Value, r: Value) -> bool {
         },
 
         // This case is prevented by the type inferencer.
-        (Value::Lambda(_, _, _), Value::Lambda(_, _, _)) => unreachable!(),
+        (Value::Lambda(_, _), Value::Lambda(_, _)) => unreachable!(),
 
         (l, r) => unreachable!("neq {} and {}", l, r),
     }
@@ -432,12 +452,12 @@ fn eval_lambda(
     args: &Vec<Expression>,
     state: &mut RunState,
 ) -> Result<Value, InterpreterError> {
-    let (curried_argument_values, captured_variable_values, bodies) = match lambda {
-        Value::Lambda(curried_argument_values, captured_variable_values, bodies) => (curried_argument_values, captured_variable_values, bodies),
+    let (curried_argument_values, closures) = match lambda {
+        Value::Lambda(curried_argument_values, closures) => (curried_argument_values, closures),
         v => unreachable!("{}", v)
     };
 
-    if curried_argument_values.len() + args.len() < bodies.get(0).unwrap().match_expressions.len() {
+    if curried_argument_values.len() + args.len() < closures.get(0).unwrap().body.match_expressions.len() {
         // Handle currying
         let mut argument_values = Vec::new();
         for a in args {
@@ -447,7 +467,7 @@ fn eval_lambda(
         let mut all_argument_values = Vec::new();
         all_argument_values.extend(curried_argument_values);
         all_argument_values.extend(argument_values);
-        return Ok(Value::Lambda(all_argument_values, captured_variable_values, bodies));
+        return Ok(Value::Lambda(all_argument_values, closures));
     }
 
     let mut all_args = Vec::new();
@@ -457,20 +477,17 @@ fn eval_lambda(
         all_args.push(evaluate(a, state)?);
     }
 
-    state.frames.push(Frame::with_variables(captured_variable_values));
-
-    let res = eval_function_bodies(f.clone(), &bodies, &all_args, state);
+    let res = eval_function_closures(f.clone(), &closures, &all_args, state);
     state.frames.pop();
     res
 }
 
-fn eval_function_bodies(f: String, bodies: &Vec<FunctionBody>, args: &Vec<Value>, state: &mut RunState) -> Result<Value, InterpreterError> {
-    for body in bodies {
+fn eval_function_closures(f: String, bodies: &Vec<FunctionClosure>, args: &Vec<Value>, state: &mut RunState) -> Result<Value, InterpreterError> {
+    for closure in bodies {
         let mut body_frame = Frame::new();
 
         let mut matches = true;
-
-        for (match_expression, value) in body.match_expressions.iter().zip(args.iter()) {
+        for (match_expression, value) in closure.body.match_expressions.iter().zip(args.iter()) {
             match collect_match_variables(match_expression, value) {
                 Ok(variables) => body_frame.variables.extend(variables),
                 Err(InterpreterError::ExpressionDoesNotMatch(_, _)) => {
@@ -481,16 +498,20 @@ fn eval_function_bodies(f: String, bodies: &Vec<FunctionBody>, args: &Vec<Value>
             }
         }
         if matches {
-            for function_definition in &body.local_function_definitions {
+            for function_definition in &closure.body.local_function_definitions {
                 body_frame.declared_functions.insert(
                     function_definition.name.clone(),
                     function_definition.clone(),
                 );
             }
 
+            for (v, value) in &closure.closed_variables {
+                body_frame.variables.insert(v.clone(), value.clone());
+            }
+
             state.frames.push(body_frame);
 
-            let result = eval_function_body(&f, &body, state);
+            let result = eval_function_body(&f, &closure.body, state);
 
             state.frames.pop();
             return result;
@@ -513,8 +534,12 @@ fn eval_declared_function(
             argument_values.push(evaluate(a, state)?);
         }
 
-        // Calling a declared function does not capture any values.
-        return Ok(Value::Lambda(argument_values, HashMap::new(), d.function_bodies.clone()));
+        let closures = d.function_bodies.iter()
+            .map(|fb| FunctionClosure { closed_variables: body_references(fb, true).iter().map(|(v, _)| (v.clone(), state.retrieve_variable_value(v))).collect(),
+                body: fb.clone() })
+            .collect();
+
+        return Ok(Value::Lambda(argument_values, closures));
     }
 
     let mut arg_values = Vec::new();
@@ -522,7 +547,8 @@ fn eval_declared_function(
         arg_values.push(evaluate(a, state)?);
     }
 
-    eval_function_bodies(d.name.clone(), &d.function_bodies, &arg_values, state)
+    let closures = d.function_bodies.iter().map(|b| FunctionClosure {closed_variables: HashMap::new(), body: b.clone()}).collect();
+    eval_function_closures(d.name.clone(), &closures, &arg_values, state)
 }
 
 fn eval_function_body(

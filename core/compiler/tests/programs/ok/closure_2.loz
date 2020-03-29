@@ -1,0 +1,8 @@
+f x y = g
+where
+    g a b = x * y * a * b
+.
+
+main
+# bla = f 1 2
+= bla 3 4
