@@ -1,10 +1,12 @@
 use loz_compiler::inferencer;
-use loz_compiler::inferencer::{InferenceError, InferencerOptions};
+use loz_compiler::inferencer::{InferenceError, InferencerOptions, TypedAST};
 use loz_compiler::parser::ParseError;
 use loz_compiler::{parser};
 use std::fmt::{Display, Formatter};
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 use std::{fmt, fs, io};
+use loz_compiler::interpreter::{interpret, Value, InterpreterError};
+use crate::CompileResult::Compiled;
 
 #[test]
 fn test_ok_files() -> Result<(), io::Error> {
@@ -22,7 +24,7 @@ fn test_type_err_files() -> Result<(), io::Error> {
 }
 
 enum CompileResult {
-    Compiled,
+    Compiled(TypedAST),
 
     ParseError(ParseError),
 
@@ -32,7 +34,7 @@ enum CompileResult {
 impl CompileResult {
     fn compiled(&self) -> bool {
         match self {
-            CompileResult::Compiled => true,
+            CompileResult::Compiled(_) => true,
             _ => false,
         }
     }
@@ -55,7 +57,7 @@ impl CompileResult {
 impl Display for CompileResult {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            CompileResult::Compiled => write!(f, "Compiled successfully"),
+            CompileResult::Compiled(_) => write!(f, "Ok"),
             CompileResult::ParseError(pe) => {
                 let pe_string = pe.to_string();
 
@@ -80,12 +82,12 @@ impl Display for CompileResult {
     }
 }
 
-fn compile_files(dir: &str, f: impl Fn(CompileResult) -> bool) -> Result<(), io::Error> {
+fn compile_files(dir: &str, f: impl Fn(&CompileResult) -> bool) -> Result<(), io::Error> {
     let r = fs::read_dir(dir)?;
     for entry in r {
         let entry = entry?;
         let path = entry.path();
-        if path.is_dir() {
+        if path.is_dir() || path.to_str().unwrap().ends_with(".res") || path.to_str().unwrap().ends_with(".skip") {
             continue;
         }
 
@@ -94,8 +96,25 @@ fn compile_files(dir: &str, f: impl Fn(CompileResult) -> bool) -> Result<(), io:
             path.clone().to_str().unwrap()
         );
         let res = compile_file(path.clone());
-        println!("### {}: Result \n\t{}", path.clone().to_str().unwrap(), res);
-        assert!(f(res))
+        println!("\t### Type inferencing \n\t\t{}", res);
+        assert!(f(&res));
+
+        if let Compiled(ast) = res {
+            let mut result_value_path = path.clone().to_str().unwrap().to_string();
+
+            if Path::new(&format!("{}.skip", result_value_path)).exists() {
+                println!("\t### Skipping execution");
+                continue
+            }
+
+            let result_value_string = fs::read_to_string(format!("{}.res", result_value_path))?;
+            let result = match interpret(&ast) {
+                Ok(value) => format!("{}", value),
+                Err(err) => format!("{}", err),
+            };
+            assert_eq!(result_value_string, result);
+            println!("\t### Verified interpreter result\n\t\tOk");
+        }
     }
     Ok(())
 }
@@ -103,11 +122,12 @@ fn compile_files(dir: &str, f: impl Fn(CompileResult) -> bool) -> Result<(), io:
 fn compile_file(path: PathBuf) -> CompileResult {
     let file_contents = fs::read_to_string(&path).unwrap();
 
-    // For now, assume parsing succeeds..
     let ast = match parser::parse(&path.to_str().unwrap().to_string(), &file_contents) {
         Ok(ast) => ast,
         Err(parse_error) => return CompileResult::ParseError(parse_error),
     };
+
+    println!("\t### Parsing\n\t\tOk");
 
     match inferencer::infer(
         &ast,
@@ -117,7 +137,7 @@ fn compile_file(path: PathBuf) -> CompileResult {
             is_main_module: true,
         },
     ) {
-        Ok(_) => CompileResult::Compiled,
+        Ok(typed_ast) => CompileResult::Compiled(typed_ast),
         Err(inference_errors) => CompileResult::InferenceError(inference_errors),
     }
 }

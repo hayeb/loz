@@ -19,7 +19,7 @@ impl RunState {
         return self.frames.remove(self.frames.len() - 1);
     }
 
-    fn retrieve_variable_value(&self, name: &String) -> Value {
+    fn retrieve_variable_value(&self, name: &String, loc: &Location) -> Value {
         for f in self.frames.iter().rev() {
             let val = f.variables.get(name);
             if let Some(v) = val {
@@ -28,14 +28,14 @@ impl RunState {
 
             if let Some(d) = f.declared_functions.get(name) {
                 let closures = d.function_bodies.iter()
-                    .map(|fb| FunctionClosure { closed_variables: body_references(fb, true).iter().map(|(v, _)| (v.clone(), self.retrieve_variable_value(v))).collect(),
+                    .map(|fb| FunctionClosure { closed_variables: body_references(fb, true).iter().map(|(v, loc)| (v.clone(), self.retrieve_variable_value(v, loc))).collect(),
                         body: fb.clone() })
                     .collect();
 
                 return Value::Lambda(Vec::new(), closures)
             }
         }
-        panic!("No value for variable {}", name);
+        panic!("No value for variable {} at {}", name, loc);
     }
 
     fn get_function_definition(&self, name: &str) -> Option<FunctionDefinition> {
@@ -51,7 +51,7 @@ impl RunState {
         let introduced_match_variables : HashSet<String> = args.iter().flat_map(|me| me.variables().into_iter()).collect();
         references.into_iter()
             .filter(|(v, _)| !introduced_match_variables.contains(v))
-            .map(|(v,_)| (v.clone(), self.retrieve_variable_value(&v)))
+            .map(|(v, loc)| (v.clone(), self.retrieve_variable_value(&v, loc)))
             .collect()
 
     }
@@ -88,7 +88,7 @@ pub enum Value {
     Tuple(Vec<Value>),
     List(Vec<Value>),
     ADTValue(String, Vec<Value>),
-    RecordValue(HashMap<String, Value>),
+    RecordValue(Vec<(String, Value)>),
 
     /* We keep currently curried-in values in the lambda itself.
        We keep a Vec of function bodies. In the following case:
@@ -176,7 +176,19 @@ pub enum InterpreterError {
     NoMatchingCaseRule(Value),
 }
 
-pub fn interpret(ast: &TypedAST) -> Result<(), InterpreterError> {
+impl Display for InterpreterError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        match self {
+            InterpreterError::NoApplicableFunctionRule(name) => write!(f, "No applicable function rule in {}", name),
+            NoApplicableFunctionBody(name) => write!(f, "No applicable function body for {}", name),
+            DivisionByZero => write!(f, "Division by zero"),
+            InterpreterError::ExpressionDoesNotMatch(me, value) => write!(f, "Expression does not match\nMatch expression: {:?}\nValue: {}", me, value),
+            InterpreterError::NoMatchingCaseRule(_) => write!(f, "No matching case rule"),
+        }
+    }
+}
+
+pub fn interpret(ast: &TypedAST) -> Result<Value, InterpreterError> {
     let result = evaluate(
         &Expression::Call(
             Location {
@@ -195,8 +207,7 @@ pub fn interpret(ast: &TypedAST) -> Result<(), InterpreterError> {
             }],
         },
     )?;
-    println!("{}", result);
-    Ok(())
+    Ok(result)
 }
 
 fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterError> {
@@ -207,7 +218,7 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterEr
         Expression::IntegerLiteral(_, n) => Ok(Value::Int(*n)),
         Expression::FloatLiteral(_, f) => Ok(Value::Float(*f)),
 
-        Expression::Call(_, f, args) => eval_function_call(f, args, state),
+        Expression::Call(loc, f, args) => eval_function_call(f, args, state, loc),
 
         Expression::ADTTypeConstructor(_, name, arguments) => {
             let mut evaluated_arguments = Vec::new();
@@ -218,9 +229,10 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterEr
         }
 
         Expression::Record(_, _, field_expressions) => {
-            let mut result = HashMap::new();
+            let mut result = Vec::new();
             for (name, expression) in field_expressions.iter() {
-                result.insert(name.clone(), evaluate(expression, state)?);
+                println!("Evaluate {}..", name);
+                result.push((name.clone(), evaluate(expression, state)?));
             }
             Ok(Value::RecordValue(result))
         }
@@ -274,7 +286,7 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterEr
             Err(InterpreterError::NoMatchingCaseRule(evaluated))
         }
 
-        Expression::Variable(_, v) => Ok(state.retrieve_variable_value(v)),
+        Expression::Variable(loc, v) => Ok(state.retrieve_variable_value(v, loc)),
         Expression::Negation(_, e) => Ok(Value::Bool(!eval_bool(e, state)?)),
         Expression::Minus(_, e) => Ok(Value::Int(-eval_int(e, state)?)),
         Expression::Times(_, e1, e2) => match (evaluate(e1, state)?, evaluate(e2, state)?) {
@@ -337,7 +349,7 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterEr
         => Ok(Value::Bool(eval_int(e1, state)? < eval_int(e2, state)?)),
 
         Expression::Eq(_, e1, e2) => Ok(Value::Bool(eq(evaluate(e1, state)?, evaluate(e2, state)?))),
-        Expression::Neq(_, e1, e2) => Ok(Value::Bool(neq(evaluate(e1, state)?, evaluate(e2, state)?))),
+        Expression::Neq(_, e1, e2) => Ok(Value::Bool(!eq(evaluate(e1, state)?, evaluate(e2, state)?))),
         Expression::And(_, e1, e2)
         => Ok(Value::Bool(eval_bool(e1, state)? && eval_bool(e2, state)?)),
 
@@ -348,7 +360,7 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterEr
             let record_value = evaluate(record_expression, state)?;
             if let Value::RecordValue(fields) = record_value {
                 if let Expression::Variable(_, field) = &**field_accessor {
-                    return Ok(fields.get(field).unwrap().clone());
+                    return Ok(fields.into_iter().find(|(v, _)| v == field).unwrap().clone().1);
                 }
             }
             unreachable!()
@@ -385,14 +397,9 @@ fn eq(l: Value, r: Value) -> bool {
         (Value::ADTValue(l_constructor, l_arguments), Value::ADTValue(r_constructor, r_arguments))
         => l_constructor == r_constructor && l_arguments.into_iter().zip(r_arguments).fold(true, |b, (l, r)| b && eq(l, r)),
 
-        (Value::RecordValue(l_values), Value::RecordValue(mut r_values)) => {
-            for (k, v) in l_values {
-                if !eq(v, r_values.remove(&k).unwrap()) {
-                    return false
-                }
-            }
-            return true
-        },
+        (Value::RecordValue(l_values), Value::RecordValue(r_values))
+        => l_values.into_iter().map(|t| t.1).zip(r_values.into_iter().map(|t|t.1))
+            .all(|(l, r)| eq(l,r)),
 
         // This case is prevented by the type inferencer.
         (Value::Lambda(_, _), Value::Lambda(_, _)) => unreachable!(),
@@ -401,47 +408,15 @@ fn eq(l: Value, r: Value) -> bool {
     }
 }
 
-fn neq(l: Value, r: Value) -> bool {
-    match (l, r) {
-        (Value::Bool(l), Value::Bool(r)) => l != r,
-        (Value::Int(l), Value::Int(r)) => l != r,
-        (Value::Float(l), Value::Float(r)) => l != r,
-        (Value::Char(l), Value::Char(r)) => l != r,
-        (Value::String(l), Value::String(r)) => l != r,
-
-        (Value::Tuple(l), Value::Tuple(r))
-        => l.into_iter().zip(r).fold(false, |b, (l, r)| b || neq(l, r)),
-
-        (Value::List(l), Value::List(r))
-        => l.into_iter().zip(r).fold(false, |b, (l, r)| b || neq(l, r)),
-
-        (Value::ADTValue(l_constructor, l_arguments), Value::ADTValue(r_constructor, r_arguments))
-        => l_constructor == r_constructor && l_arguments.into_iter().zip(r_arguments).fold(false, |b, (l, r)| b || eq(l, r)),
-
-        (Value::RecordValue(l_values), Value::RecordValue(mut r_values)) => {
-            for (k, v) in l_values {
-                if neq(v, r_values.remove(&k).unwrap()) {
-                    return true
-                }
-            }
-            return false
-        },
-
-        // This case is prevented by the type inferencer.
-        (Value::Lambda(_, _), Value::Lambda(_, _)) => unreachable!(),
-
-        (l, r) => unreachable!("neq {} and {}", l, r),
-    }
-}
-
 fn eval_function_call(
     f: &String,
     args: &Vec<Expression>,
     state: &mut RunState,
+    loc: &Location
 ) -> Result<Value, InterpreterError> {
     let r = match state.get_function_definition(f) {
         Some(d) => eval_declared_function(&d, args, state),
-        None => eval_lambda(f, state.retrieve_variable_value(f), args, state),
+        None => eval_lambda(f, state.retrieve_variable_value(f, loc), args, state),
     };
     r
 }
@@ -477,9 +452,7 @@ fn eval_lambda(
         all_args.push(evaluate(a, state)?);
     }
 
-    let res = eval_function_closures(f.clone(), &closures, &all_args, state);
-    state.frames.pop();
-    res
+    eval_function_closures(f.clone(), &closures, &all_args, state)
 }
 
 fn eval_function_closures(f: String, bodies: &Vec<FunctionClosure>, args: &Vec<Value>, state: &mut RunState) -> Result<Value, InterpreterError> {
@@ -535,7 +508,7 @@ fn eval_declared_function(
         }
 
         let closures = d.function_bodies.iter()
-            .map(|fb| FunctionClosure { closed_variables: body_references(fb, true).iter().map(|(v, _)| (v.clone(), state.retrieve_variable_value(v))).collect(),
+            .map(|fb| FunctionClosure { closed_variables: body_references(fb, true).iter().map(|(v, loc)| (v.clone(), state.retrieve_variable_value(v, loc))).collect(),
                 body: fb.clone() })
             .collect();
 
@@ -686,7 +659,7 @@ fn collect_match_variables(
         (MatchExpression::Record(_loc_info, _name, fields), Value::RecordValue(field_to_value)) => {
             Ok(fields
                 .iter()
-                .map(|field| (field.clone(), field_to_value.get(field).unwrap().clone()))
+                .map(|field| (field.clone(), field_to_value.iter().find(|(v, _)| v == field).unwrap().1.clone()))
                 .collect())
         }
         (MatchExpression::Wildcard(_loc_info), _type) => Ok(HashMap::new()),

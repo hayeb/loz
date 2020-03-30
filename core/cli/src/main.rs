@@ -65,5 +65,7 @@ fn main() {
     let result = interpreter::interpret(&inference_result.unwrap());
     if let Err(e) = result {
         eprintln!("Runtime error: {:?}", e)
+    } else {
+        println!("{}", result.unwrap());
     }
 }
