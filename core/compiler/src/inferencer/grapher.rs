@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use petgraph::Graph;
 
-use crate::{Expression, FunctionDefinition, FunctionRule, Location, declaration_references};
+use crate::{declaration_references, Expression, FunctionDefinition, FunctionRule, Location};
 
 pub fn to_components(declarations: &Vec<FunctionDefinition>) -> Vec<Vec<&FunctionDefinition>> {
     let mut name_to_index = HashMap::new();

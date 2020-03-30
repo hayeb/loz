@@ -1,12 +1,12 @@
+use crate::CompileResult::Compiled;
 use loz_compiler::inferencer;
 use loz_compiler::inferencer::{InferenceError, InferencerOptions, TypedAST};
+use loz_compiler::interpreter::{interpret, InterpreterError, Value};
+use loz_compiler::parser;
 use loz_compiler::parser::ParseError;
-use loz_compiler::{parser};
 use std::fmt::{Display, Formatter};
-use std::path::{PathBuf, Path};
+use std::path::{Path, PathBuf};
 use std::{fmt, fs, io};
-use loz_compiler::interpreter::{interpret, Value, InterpreterError};
-use crate::CompileResult::Compiled;
 
 #[test]
 fn test_ok_files() -> Result<(), io::Error> {
@@ -87,7 +87,10 @@ fn compile_files(dir: &str, f: impl Fn(&CompileResult) -> bool) -> Result<(), io
     for entry in r {
         let entry = entry?;
         let path = entry.path();
-        if path.is_dir() || path.to_str().unwrap().ends_with(".res") || path.to_str().unwrap().ends_with(".skip") {
+        if path.is_dir()
+            || path.to_str().unwrap().ends_with(".res")
+            || path.to_str().unwrap().ends_with(".skip")
+        {
             continue;
         }
 
@@ -104,7 +107,7 @@ fn compile_files(dir: &str, f: impl Fn(&CompileResult) -> bool) -> Result<(), io
 
             if Path::new(&format!("{}.skip", result_value_path)).exists() {
                 println!("\t### Skipping execution");
-                continue
+                continue;
             }
 
             let result_value_string = fs::read_to_string(format!("{}.res", result_value_path))?;

@@ -565,7 +565,6 @@ fn to_term(
                 })
                 .collect();
 
-
             Record(loc_info, record_name, field_expressions)
         }
         Rule::lambda => {

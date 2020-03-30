@@ -2,12 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Error, Formatter};
 use std::iter;
 
-use crate::{
-    ADTDefinition, AST, CustomType, Expression, FunctionDefinition, FunctionRule,
-    Location, MatchExpression, RecordDefinition, Type, TypeScheme, TypeVar,
-};
 use crate::inferencer::substitutor::{substitute, substitute_list, substitute_type};
 use crate::inferencer::unifier::{unify, unify_one_of};
+use crate::{
+    ADTDefinition, CustomType, Expression, FunctionDefinition, FunctionRule, Location,
+    MatchExpression, RecordDefinition, Type, TypeScheme, TypeVar, AST,
+};
 
 mod grapher;
 mod substitutor;
@@ -1337,29 +1337,42 @@ impl InferencerState {
                 let type_r = substitute_type(&subs_r, &fresh_r);
 
                 if let Type::Function(_, _) = type_l {
-                    return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::CannotCompareFunctions("==".to_string(), type_l))])
+                    return Err(vec![InferenceError::from_loc(
+                        loc.clone(),
+                        InferenceErrorType::CannotCompareFunctions("==".to_string(), type_l),
+                    )]);
                 }
 
                 if let Type::Function(_, _) = type_r {
-                    return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::CannotCompareFunctions("==".to_string(), type_l))])
+                    return Err(vec![InferenceError::from_loc(
+                        loc.clone(),
+                        InferenceErrorType::CannotCompareFunctions("==".to_string(), type_l),
+                    )]);
                 }
 
                 let subs = match unify(&type_l, &type_r) {
                     Ok(subs) => subs,
-                    Err(_unification_error) => return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::OperatorArgumentTypesNotEqual("==".to_string(), type_l, type_r))]),
+                    Err(_unification_error) => {
+                        return Err(vec![InferenceError::from_loc(
+                            loc.clone(),
+                            InferenceErrorType::OperatorArgumentTypesNotEqual(
+                                "==".to_string(),
+                                type_l,
+                                type_r,
+                            ),
+                        )])
+                    }
                 };
 
-                map_unify(loc.clone(), unify(&Type::Bool, expected_type))
-                    .map(|nr| {
-                        let mut ns = Vec::new();
-                        ns.extend(subs_l);
-                        ns.extend(subs_r);
-                        ns.extend(subs);
-                        ns.extend(nr);
-                        ns
-
-                    })?
-            },
+                map_unify(loc.clone(), unify(&Type::Bool, expected_type)).map(|nr| {
+                    let mut ns = Vec::new();
+                    ns.extend(subs_l);
+                    ns.extend(subs_r);
+                    ns.extend(subs);
+                    ns.extend(nr);
+                    ns
+                })?
+            }
 
             Expression::Neq(loc, l, r) => {
                 let fresh_l = self.fresh();
@@ -1374,30 +1387,43 @@ impl InferencerState {
                 let type_r = substitute_type(&subs_r, &fresh_r);
 
                 if let Type::Function(_, _) = type_l {
-                    return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::CannotCompareFunctions("!=".to_string(), type_l))])
+                    return Err(vec![InferenceError::from_loc(
+                        loc.clone(),
+                        InferenceErrorType::CannotCompareFunctions("!=".to_string(), type_l),
+                    )]);
                 }
 
                 if let Type::Function(_, _) = type_r {
-                    return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::CannotCompareFunctions("!=".to_string(), type_l))])
+                    return Err(vec![InferenceError::from_loc(
+                        loc.clone(),
+                        InferenceErrorType::CannotCompareFunctions("!=".to_string(), type_l),
+                    )]);
                 }
 
                 let subs = match unify(&type_l, &type_r) {
                     Ok(subs) => subs,
-                    Err(_unification_error) => return Err(vec![InferenceError::from_loc(loc.clone(), InferenceErrorType::OperatorArgumentTypesNotEqual("!=".to_string(), type_l, type_r))]),
+                    Err(_unification_error) => {
+                        return Err(vec![InferenceError::from_loc(
+                            loc.clone(),
+                            InferenceErrorType::OperatorArgumentTypesNotEqual(
+                                "!=".to_string(),
+                                type_l,
+                                type_r,
+                            ),
+                        )])
+                    }
                 };
                 self.extend_type_environment(&subs);
 
-                map_unify(loc.clone(), unify(&Type::Bool, expected_type))
-                    .map(|nr| {
-                        let mut ns = Vec::new();
-                        ns.extend(subs_l);
-                        ns.extend(subs_r);
-                        ns.extend(subs);
-                        ns.extend(nr);
-                        ns
-
-                    })?
-            },
+                map_unify(loc.clone(), unify(&Type::Bool, expected_type)).map(|nr| {
+                    let mut ns = Vec::new();
+                    ns.extend(subs_l);
+                    ns.extend(subs_r);
+                    ns.extend(subs);
+                    ns.extend(nr);
+                    ns
+                })?
+            }
 
             Expression::And(loc, l, r) => self.infer_binary_expression(
                 loc,
@@ -1493,10 +1519,12 @@ impl InferencerState {
                     types.push(substitute_type(&subs, &fresh_type));
                     union_subs.extend(subs);
                 }
-                map_unify(loc.clone(), unify(&Type::Tuple(types), &expected_type)).map(|mut r| {
-                    r.extend(union_subs);
-                    r
-                })?
+                map_unify(loc.clone(), unify(&Type::Tuple(types), &expected_type)).map(
+                    |mut r| {
+                        r.extend(union_subs);
+                        r
+                    },
+                )?
             }
             Expression::EmptyListLiteral(loc) => {
                 let fresh = self.fresh();
@@ -1773,7 +1801,7 @@ impl InferencerState {
                             InferenceErrorType::UndefinedFunction(name.clone()),
                         )])
                     }
-                    Some(ft) => ft
+                    Some(ft) => ft,
                 };
 
                 // f :: v0 v0 -> v0
@@ -1802,22 +1830,30 @@ impl InferencerState {
                     // Currying
                     let (defined_from, defined_to) = match instantiated_function_type {
                         Type::Function(from, to) => (from, to),
-                        t => unreachable!("{}", t)
+                        t => unreachable!("{}", t),
                     };
 
                     let (l, r) = defined_from.split_at(arguments.len());
 
-                    let curry_adjusted_instantiated_function_type = Type::Function(l.to_vec(), Box::new(Type::Function(r.to_vec(), defined_to)));
+                    let curry_adjusted_instantiated_function_type = Type::Function(
+                        l.to_vec(),
+                        Box::new(Type::Function(r.to_vec(), defined_to)),
+                    );
 
-                    map_unify(loc.clone(),unify(&Type::Function(argument_types, Box::new(fresh_result.clone())),
-                              &curry_adjusted_instantiated_function_type))?
+                    map_unify(
+                        loc.clone(),
+                        unify(
+                            &Type::Function(argument_types, Box::new(fresh_result.clone())),
+                            &curry_adjusted_instantiated_function_type,
+                        ),
+                    )?
                 } else {
                     map_unify(
                         loc.clone(),
                         unify(
                             &Type::Function(argument_types, Box::new(fresh_result.clone())),
                             &instantiated_function_type,
-                        )
+                        ),
                     )?
                 };
                 self.extend_type_environment(&result_subs);

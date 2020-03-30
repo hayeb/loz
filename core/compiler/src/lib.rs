@@ -365,11 +365,20 @@ impl Expression {
         }
     }
 
-    fn list_references(es: &Vec<Expression>, include_variables: bool) -> HashSet<(String, Location)> {
-        es.iter().flat_map(|e| e.references(include_variables)).collect()
+    fn list_references(
+        es: &Vec<Expression>,
+        include_variables: bool,
+    ) -> HashSet<(String, Location)> {
+        es.iter()
+            .flat_map(|e| e.references(include_variables))
+            .collect()
     }
 
-    pub fn dual_references(l: &Expression, r: &Expression, include_variables: bool) -> HashSet<(String, Location)> {
+    pub fn dual_references(
+        l: &Expression,
+        r: &Expression,
+        include_variables: bool,
+    ) -> HashSet<(String, Location)> {
         let mut lrf = l.references(include_variables);
         lrf.extend(r.references(include_variables));
         lrf
@@ -396,7 +405,8 @@ impl Expression {
                 Expression::list_references(expressions, include_variables)
             }
             Expression::Record(_, _, expressions) => Expression::list_references(
-                &expressions.into_iter().map(|(_, e)| e.clone()).collect(), include_variables,
+                &expressions.into_iter().map(|(_, e)| e.clone()).collect(),
+                include_variables,
             ),
             Expression::Case(_, e, rules) => {
                 let mut fs: HashSet<(String, Location)> = e.references(include_variables);
@@ -415,7 +425,9 @@ impl Expression {
                 fs.extend(Expression::list_references(&expressions, include_variables));
                 fs
             }
-            Expression::Variable(loc, name) if include_variables => vec![(name.clone(), loc.clone())].into_iter().collect(),
+            Expression::Variable(loc, name) if include_variables => {
+                vec![(name.clone(), loc.clone())].into_iter().collect()
+            }
             Expression::Variable(_, _) => HashSet::new(),
             Expression::Negation(_, e) => e.references(include_variables),
             Expression::Minus(_, e) => e.references(include_variables),
@@ -434,7 +446,9 @@ impl Expression {
             Expression::Neq(_, l, r) => Expression::dual_references(l, r, include_variables),
             Expression::And(_, l, r) => Expression::dual_references(l, r, include_variables),
             Expression::Or(_, l, r) => Expression::dual_references(l, r, include_variables),
-            Expression::RecordFieldAccess(_, l, r) => Expression::dual_references(l, r, include_variables),
+            Expression::RecordFieldAccess(_, l, r) => {
+                Expression::dual_references(l, r, include_variables)
+            }
             Expression::Lambda(_, _, e) => {
                 let fs = e.references(include_variables);
                 // TODO: Remove introduced identifiers by lambda arguments
@@ -492,7 +506,10 @@ impl MatchExpression {
     }
 }
 
-pub fn declaration_references(d: &FunctionDefinition, include_variables: bool) -> HashSet<(String, Location)> {
+pub fn declaration_references(
+    d: &FunctionDefinition,
+    include_variables: bool,
+) -> HashSet<(String, Location)> {
     let mut referred = HashSet::new();
 
     for b in &d.function_bodies {
@@ -528,5 +545,8 @@ pub fn body_references(b: &FunctionBody, include_variables: bool) -> HashSet<(St
             }
         });
     }
-    locally_referred.into_iter().filter(|(v, _)| !local_references.contains(v)).collect()
+    locally_referred
+        .into_iter()
+        .filter(|(v, _)| !local_references.contains(v))
+        .collect()
 }
