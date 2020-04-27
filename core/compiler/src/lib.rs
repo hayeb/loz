@@ -12,6 +12,7 @@ use crate::Expression::*;
 pub mod inferencer;
 pub mod interpreter;
 pub mod parser;
+pub mod module_system;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Location {
@@ -31,6 +32,19 @@ impl Display for Location {
     }
 }
 
+pub type ExportMember = String;
+
+#[derive(Debug, Clone)]
+pub enum Import {
+    // Module name, imported members
+    // from A import b, d
+    ImportMembers(Location, String, HashSet<String>),
+
+    // Import A
+    // Import A as B
+    ImportModule(Location, String, Option<String>),
+}
+
 #[derive(Debug, Clone)]
 pub enum FunctionRule {
     ConditionalRule(Location, Expression, Expression),
@@ -45,7 +59,8 @@ pub struct FunctionBody {
     pub match_expressions: Vec<MatchExpression>,
     pub rules: Vec<FunctionRule>,
     pub local_function_definitions: Vec<FunctionDefinition>,
-    pub local_type_definitions: Vec<CustomType>,
+    pub local_adt_definitions: Vec<ADTDefinition>,
+    pub local_record_definitions: Vec<RecordDefinition>
 }
 
 pub type TypeVar = String;
@@ -75,14 +90,9 @@ pub struct TypeScheme {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum CustomType {
-    ADT(Location, ADTDefinition),
-    Record(Location, RecordDefinition),
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct RecordDefinition {
     pub name: String,
+    pub location: Location,
     pub type_variables: Vec<String>,
     pub fields: HashMap<String, Type>,
 }
@@ -90,6 +100,7 @@ pub struct RecordDefinition {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ADTDefinition {
     pub name: String,
+    pub location: Location,
     pub type_variables: Vec<String>,
     pub constructors: HashMap<String, ADTConstructor>,
 }
@@ -182,9 +193,14 @@ pub enum MatchExpression {
 }
 
 #[derive(Debug, Clone)]
-pub struct AST {
+pub struct Module {
+    pub name: String,
+    pub file_name: String,
+    pub exported_members: HashSet<ExportMember>,
+    pub imports: Vec<Import>,
     pub function_declarations: Vec<FunctionDefinition>,
-    pub type_declarations: Vec<CustomType>,
+    pub adt_definitions: Vec<ADTDefinition>,
+    pub record_definitions: Vec<RecordDefinition>,
 }
 
 impl Display for Type {

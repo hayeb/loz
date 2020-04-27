@@ -1,21 +1,18 @@
 extern crate pest;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fmt::{Display, Formatter};
 
 use pest::error::Error;
 use pest::iterators::Pair;
-use pest::prec_climber::*;
 use pest::Parser;
+use pest::prec_climber::*;
+
+use crate::{ADTConstructor, ADTDefinition, CaseRule, ExportMember, Expression, FunctionBody, FunctionDefinition, FunctionRule, Import, Location, MatchExpression, Module, RecordDefinition, Type, TypeScheme};
+use crate::Expression::*;
+use crate::parser::ParseError::PestError;
 
 use self::pest::iterators::Pairs;
-use crate::parser::ParseError::PestError;
-use crate::Expression::*;
-use crate::{
-    ADTConstructor, ADTDefinition, CaseRule, CustomType, Expression, FunctionBody,
-    FunctionDefinition, FunctionRule, Location, MatchExpression, RecordDefinition, Type,
-    TypeScheme, AST,
-};
-use std::fmt::{Display, Formatter};
 
 #[derive(Parser)]
 #[grammar = "loz.pest"]
@@ -62,14 +59,14 @@ impl Display for ParseError {
     }
 }
 
-pub fn parse(file_name: &String, input: &str) -> Result<AST, ParseError> {
+pub fn parse(file_name: &String, module_name: String, input: &str) -> Result<Module, ParseError> {
     let ast = LOZParser::parse(Rule::ast, input)
         .map_err(|e| PestError(e))?
         .next()
         .unwrap();
     //println!("Raw AST: {:#?}", ast);
     let line_starts = build_line_start_cache(input);
-    to_ast(ast, file_name, &line_starts)
+    to_module(ast, module_name, file_name, &line_starts)
 }
 
 fn build_line_start_cache(input: &str) -> Vec<usize> {
@@ -118,7 +115,7 @@ fn contract_function_declarations(
                 return Err(ParseError::FunctionTypeWithoutBody(
                     function_name.clone(),
                     location,
-                ))
+                ));
             }
             Some(bodies) => function_declarations.push(FunctionDefinition {
                 location,
@@ -142,18 +139,27 @@ fn contract_function_declarations(
     Ok(function_declarations)
 }
 
-fn to_ast(
+fn to_module(
     pair: Pair<Rule>,
+    module_name: String,
     file_name: &String,
     line_starts: &Vec<usize>,
-) -> Result<AST, ParseError> {
+) -> Result<Module, ParseError> {
     match pair.as_rule() {
         Rule::ast => {
-            let (type_declarations, function_declarations) =
-                to_declaration_block_elements(pair.into_inner(), file_name, line_starts)?;
-            return Ok(AST {
+            let (adt_definitions,
+                record_definitions,
                 function_declarations,
-                type_declarations,
+                exports,
+                imports) = to_declaration_block_elements(pair.into_inner(), file_name, line_starts)?;
+            return Ok(Module {
+                name: module_name,
+                file_name: file_name.clone(),
+                exported_members: exports,
+                imports,
+                function_declarations,
+                adt_definitions,
+                record_definitions,
             });
         }
         _ => unreachable!(),
@@ -164,17 +170,25 @@ fn to_declaration_block_elements(
     pairs: Pairs<Rule>,
     file_name: &String,
     line_starts: &Vec<usize>,
-) -> Result<(Vec<CustomType>, Vec<FunctionDefinition>), ParseError> {
+) -> Result<(Vec<ADTDefinition>, Vec<RecordDefinition>, Vec<FunctionDefinition>, HashSet<ExportMember>, Vec<Import>), ParseError> {
     let mut function_types = HashMap::new();
     let mut function_bodies = HashMap::new();
 
-    let mut type_declarations = Vec::new();
+    let mut adt_definitions = Vec::new();
+    let mut record_definitions = Vec::new();
+
+    let mut module_exports = HashSet::<String>::new();
+    let mut module_imports = Vec::new();
 
     for pair in pairs {
         match pair.as_rule() {
             Rule::type_definition => {
-                let def = to_type_definition(pair, file_name, line_starts);
-                type_declarations.push(def);
+                let child = pair.into_inner().next().unwrap();
+                match child.as_rule() {
+                    Rule::adt_definition => adt_definitions.push(to_adt_type(child, file_name, line_starts)),
+                    Rule::record_definition => record_definitions.push(to_record_type(child, file_name, line_starts)),
+                    r => unreachable!("{:?}", r)
+                }
             }
             Rule::function_body => {
                 let fb = to_function_body(file_name, pair, line_starts)?;
@@ -206,105 +220,129 @@ fn to_declaration_block_elements(
                     ),
                 );
             }
+            Rule::module_export => {
+                println!("Module export: {:?}", pair);
+                module_exports.insert(pair.into_inner().next().unwrap().as_str().to_string());
+            }
+            Rule::module_import => {
+                let (line, col) = line_col_number(line_starts, pair.as_span().start());
+                let module_import = pair.into_inner().next().unwrap();
+                match module_import.as_rule() {
+                    Rule::module_import_full => {
+                        println!("Module import full: {:?}", module_import);
+                        let mut members = module_import.into_inner();
+                        let defined_module_name = members.next().unwrap().as_str().to_string();
+                        module_imports.push(Import::ImportModule(Location { file: file_name.clone(), function: "".to_owned(), line, col }, defined_module_name, members.next().map(|r| r.as_str().to_string())))
+                    }
+                    Rule::module_import_members => {
+                        println!("Module import members: {:?}", module_import);
+                        let mut members = module_import.into_inner();
+                        let defined_module_name = members.next().unwrap().as_str().to_string();
+                        let imported_members = members.into_iter()
+                            .map(|m| m.as_str().to_string())
+                            .collect();
+                        module_imports.push(Import::ImportMembers(Location { file: file_name.clone(), function: "".to_owned(), line, col }, defined_module_name, imported_members))
+                    }
+                    _ => unreachable!("Module import: {:?}", module_import)
+                }
+            }
             _ => continue,
         }
     }
     Ok((
-        type_declarations,
+        adt_definitions,
+        record_definitions,
         contract_function_declarations(function_bodies, function_types)?,
+        module_exports,
+        module_imports
     ))
 }
 
-fn to_type_definition(
-    pair: Pair<Rule>,
+fn to_adt_type(
+    adt_definition: Pair<Rule>,
     file_name: &String,
     line_starts: &Vec<usize>,
-) -> CustomType {
-    let type_definition = pair.into_inner().next().unwrap();
-    match type_definition.as_rule() {
-        Rule::adt_definition => {
-            let mut elements = type_definition.clone().into_inner();
-            let name = elements.next().unwrap().as_str().to_string();
-            let type_variables = elements
-                .next()
-                .unwrap()
-                .into_inner()
-                .map(|tv| tv.as_str().to_string())
-                .collect();
+) -> ADTDefinition {
+    let mut elements = adt_definition.clone().into_inner();
+    let name = elements.next().unwrap().as_str().to_string();
+    let type_variables = elements
+        .next()
+        .unwrap()
+        .into_inner()
+        .map(|tv| tv.as_str().to_string())
+        .collect();
 
-            let constructors = elements
-                .next()
-                .unwrap()
-                .into_inner()
-                .map(|alternative_rule| {
-                    let mut alternative_elements = alternative_rule.into_inner();
-                    let alternative_name =
-                        alternative_elements.next().unwrap().as_str().to_string();
-                    let alternative_elements = alternative_elements.map(to_type).collect();
-                    (
-                        alternative_name.clone(),
-                        ADTConstructor {
-                            name: alternative_name.clone(),
-                            elements: alternative_elements,
-                        },
-                    )
-                })
-                .collect();
-
-            let (line, col) =
-                line_col_number(line_starts, type_definition.clone().as_span().start());
-            CustomType::ADT(
-                Location {
-                    file: file_name.clone(),
-                    function: name.clone(),
-                    line,
-                    col,
-                },
-                ADTDefinition {
-                    name: name.clone(),
-                    constructors,
-                    type_variables,
+    let constructors = elements
+        .next()
+        .unwrap()
+        .into_inner()
+        .map(|alternative_rule| {
+            let mut alternative_elements = alternative_rule.into_inner();
+            let alternative_name =
+                alternative_elements.next().unwrap().as_str().to_string();
+            let alternative_elements = alternative_elements.map(to_type).collect();
+            (
+                alternative_name.clone(),
+                ADTConstructor {
+                    name: alternative_name.clone(),
+                    elements: alternative_elements,
                 },
             )
-        }
-        Rule::record_definition => {
-            let mut elements = type_definition.clone().into_inner();
-            let name = elements.next().unwrap().as_str().to_string();
-            let type_variables = elements
-                .next()
-                .unwrap()
-                .into_inner()
-                .map(|tv| tv.as_str().to_string())
-                .collect();
-            let fields = elements
-                .next()
-                .unwrap()
-                .into_inner()
-                .map(|field_rule| {
-                    let mut field_elements = field_rule.into_inner();
-                    let field_name = field_elements.next().unwrap().as_str().to_string();
-                    let field_type = to_type(field_elements.next().unwrap());
-                    (field_name, field_type)
-                })
-                .collect();
+        })
+        .collect();
 
-            let (line, col) =
-                line_col_number(line_starts, type_definition.clone().as_span().start());
-            CustomType::Record(
-                Location {
-                    file: file_name.clone(),
-                    function: name.clone(),
-                    line,
-                    col,
-                },
-                RecordDefinition {
-                    name: name.clone(),
-                    fields,
-                    type_variables,
-                },
-            )
-        }
-        r => unreachable!("Unhandled type rule: {:?}", r),
+    let (line, col) =
+        line_col_number(line_starts, adt_definition.clone().as_span().start());
+    ADTDefinition {
+        name: name.clone(),
+        location: Location {
+            file: file_name.clone(),
+            function: name.clone(),
+            line,
+            col,
+        },
+        constructors,
+        type_variables,
+    }
+}
+
+fn to_record_type(
+    record_definition: Pair<Rule>,
+    file_name: &String,
+    line_starts: &Vec<usize>,
+) -> RecordDefinition {
+    let mut elements = record_definition.clone().into_inner();
+    let name = elements.next().unwrap().as_str().to_string();
+    let type_variables = elements
+        .next()
+        .unwrap()
+        .into_inner()
+        .map(|tv| tv.as_str().to_string())
+        .collect();
+    let fields = elements
+        .next()
+        .unwrap()
+        .into_inner()
+        .map(|field_rule| {
+            let mut field_elements = field_rule.into_inner();
+            let field_name = field_elements.next().unwrap().as_str().to_string();
+            let field_type = to_type(field_elements.next().unwrap());
+            (field_name, field_type)
+        })
+        .collect();
+
+    let (line, col) =
+        line_col_number(line_starts, record_definition.clone().as_span().start());
+    RecordDefinition {
+        name: name.clone(),
+        location: Location {
+            file: file_name.clone(),
+            function: name.clone(),
+            line,
+            col,
+        },
+        fields,
+        type_variables,
     }
 }
 
@@ -335,15 +373,19 @@ fn to_function_body(
 
     let mut rules = Vec::new();
     let mut local_function_definitions = Vec::new();
-    let mut local_type_definitions = Vec::new();
+    let mut local_adt_definitions = Vec::new();
+    let mut local_record_definitions = Vec::new();
     for r in parents {
         match r.as_rule() {
             // Guaranteed to only occur once.
             Rule::local_definitions => {
-                let (type_definitions, function_definitions) =
+                let (adt_definitions,
+                    record_definitions,
+                    function_definitions, _, _) =
                     to_declaration_block_elements(r.into_inner(), file_name, line_starts)?;
                 local_function_definitions = function_definitions;
-                local_type_definitions = type_definitions;
+                local_adt_definitions = adt_definitions;
+                local_record_definitions = record_definitions;
             }
             _ => rules.push(to_function_rule(r, file_name, &function_name, line_starts)),
         }
@@ -361,7 +403,8 @@ fn to_function_body(
         match_expressions,
         rules,
         local_function_definitions,
-        local_type_definitions,
+        local_adt_definitions,
+        local_record_definitions,
     })
 }
 
@@ -443,7 +486,7 @@ fn to_term(
                 .collect();
             Call(loc_info, function.to_string(), arguments)
         }
-        Rule::identifier => Variable(loc_info, sub.as_str().to_string()),
+        Rule::qualifiable_identifier => Variable(loc_info, sub.as_str().to_string()),
         Rule::subexpr => to_expression(
             sub.into_inner().next().unwrap(),
             file_name,

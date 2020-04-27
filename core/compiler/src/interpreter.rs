@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Error, Formatter};
 
-use crate::inferencer::TypedAST;
+use crate::inferencer::TypedModule;
 use crate::interpreter::InterpreterError::{DivisionByZero, NoApplicableFunctionBody};
 use crate::{
     body_references, Expression, FunctionBody, FunctionDefinition, FunctionRule, Location,
@@ -216,7 +216,7 @@ impl Display for InterpreterError {
     }
 }
 
-pub fn interpret(ast: &TypedAST) -> Result<Value, InterpreterError> {
+pub fn interpret(ast: &TypedModule) -> Result<Value, InterpreterError> {
     let result = evaluate(
         &Expression::Call(
             Location {
@@ -259,7 +259,6 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterEr
         Expression::Record(_, _, field_expressions) => {
             let mut result = Vec::new();
             for (name, expression) in field_expressions.iter() {
-                println!("Evaluate {}..", name);
                 result.push((name.clone(), evaluate(expression, state)?));
             }
             Ok(Value::RecordValue(result))
@@ -415,7 +414,8 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterEr
                 match_expressions: args.clone(),
                 rules: vec![FunctionRule::ExpressionRule(loc.clone(), *body.clone())],
                 local_function_definitions: vec![],
-                local_type_definitions: vec![],
+                local_adt_definitions: vec![],
+                local_record_definitions: vec![]
             };
 
             let closure = FunctionClosure {

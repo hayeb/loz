@@ -10,8 +10,14 @@ float = @{ ASCII_DIGIT ~ "." ~ ASCII_DIGIT+ }
 identifier = @{
     (LOWERCASE_LETTER | "_") ~ (LETTER | DECIMAL_NUMBER | "_" )*
 }
+qualifiable_identifier = @{
+    (module_name ~ "::")? ~ identifier
+}
 
 capital_identifier = @{ UPPERCASE_LETTER ~ (LETTER | DECIMAL_NUMBER | "_")*}
+qualifiable_capital_identifier = @{
+    (module_name ~ "::")? ~ capital_identifier
+}
 
 char_literal = @{
     "'" ~ (CASED_LETTER | TITLECASE_LETTER) ~ "'"
@@ -103,12 +109,12 @@ function_type = {
 tuple_type = { "(" ~ loz_type_term ~ ("," ~ loz_type_term)+ ~ ")" }
 
 call = {
-    identifier ~ function_argument+
+    qualifiable_identifier ~ function_argument+
 }
 
 function_argument = {
     simple_term
-    | identifier
+    | qualifiable_identifier
 }
 
 simple_term = _{
@@ -133,7 +139,7 @@ term = {
     | case_expression
     | adt_term
     | call // Function call
-    | identifier // Variable reference
+    | qualifiable_identifier // Variable reference
 }
 
 lambda = { lambda_header ~ expression}
@@ -150,8 +156,8 @@ case_expression_rule = {
     match_expression ~ "=>" ~ expression
 }
 
-adt_term = { capital_identifier ~ expression*}
-record_term = {"{" ~ capital_identifier ~ "|" ~ NEWLINE? ~ record_field_term ~ NEWLINE? ~ ("," ~ NEWLINE? ~ record_field_term)* ~ NEWLINE? ~ "}"}
+adt_term = { qualifiable_capital_identifier ~ expression*}
+record_term = {"{" ~ qualifiable_capital_identifier ~ "|" ~ NEWLINE? ~ record_field_term ~ NEWLINE? ~ ("," ~ NEWLINE? ~ record_field_term)* ~ NEWLINE? ~ "}"}
     record_field_term = {identifier ~ "=" ~ expression}
 
 tuple_literal = !{ "(" ~ NEWLINE* ~ expression ~ NEWLINE* ~ ("," ~ NEWLINE* ~ expression)+ ~ NEWLINE* ~ ")" }
@@ -275,8 +281,40 @@ type_definition = {
     | record_definition
 }
 
+name = _{
+    (capital_identifier | identifier)
+}
+
+module_name = _{
+    (name) ~ ("." ~ name)*
+}
+
+module_import = {
+    module_import_members
+    | module_import_full
+}
+    module_import_members = {
+        "from" ~ module_name ~ "import" ~ name ~ ("," ~ name)*
+    }
+
+    module_import_full = {
+        "import" ~ module_name ~ ("as" ~ name)?
+    }
+
+module_export = {
+    "export" ~ name
+}
+
 ast = {
-   SOI ~  NEWLINE* ~ ((function_type_definition | function_body | type_definition) ~ NEWLINE*)* ~ NEWLINE* ~ EOI
+      SOI
+    ~ NEWLINE*
+    ~ (module_import ~ NEWLINE+)*
+    ~ NEWLINE*
+    ~ (module_export ~ NEWLINE+)*
+    ~ NEWLINE*
+    ~ ((function_type_definition | function_body | type_definition) ~ NEWLINE*)*
+    ~ NEWLINE*
+    ~ EOI
 }
 
 

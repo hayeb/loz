@@ -1,0 +1,6 @@
+export SomeRecord
+
+:: SomeRecord = {
+    bla :: Int,
+    blie :: String
+}
