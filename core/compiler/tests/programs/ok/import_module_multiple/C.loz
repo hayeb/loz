@@ -1,0 +1,7 @@
+import Maybe
+
+find :: [a] a -> Maybe a
+find [] _ = Nothing
+find [a : as] x
+| a == x = Just a
+= find as x

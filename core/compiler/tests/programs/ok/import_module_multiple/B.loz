@@ -1,0 +1,5 @@
+import Maybe
+
+mapMaybe :: (Maybe a) (a -> b) -> Maybe b
+mapMaybe Nothing _ = Nothing
+mapMaybe (Just a) f = Just (f a)

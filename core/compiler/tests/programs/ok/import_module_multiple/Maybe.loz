@@ -1,0 +1,4 @@
+:: Maybe a = Nothing | Just a
+
+fromJust :: (Maybe a) -> a
+fromJust (Just a) = a

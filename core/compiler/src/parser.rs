@@ -2,6 +2,7 @@ extern crate pest;
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
+use std::rc::Rc;
 
 use pest::error::Error;
 use pest::iterators::Pair;
@@ -105,9 +106,9 @@ fn line_col_number(line_starts: &Vec<usize>, pos: usize) -> (usize, usize) {
 }
 
 fn contract_function_declarations(
-    mut function_bodies: HashMap<String, Vec<FunctionBody>>,
-    function_types: HashMap<String, (Location, TypeScheme)>,
-) -> Result<Vec<FunctionDefinition>, ParseError> {
+    mut function_bodies: HashMap<String, Vec<Rc<FunctionBody>>>,
+    function_types: HashMap<String, (Location, Rc<TypeScheme>)>,
+) -> Result<Vec<Rc<FunctionDefinition>>, ParseError> {
     let mut function_declarations = Vec::new();
     for (function_name, (location, function_scheme)) in function_types {
         match function_bodies.remove(&function_name) {
@@ -117,23 +118,23 @@ fn contract_function_declarations(
                     location,
                 ));
             }
-            Some(bodies) => function_declarations.push(FunctionDefinition {
+            Some(bodies) => function_declarations.push(Rc::new(FunctionDefinition {
                 location,
                 name: function_name.clone(),
                 function_type: Some(function_scheme),
                 function_bodies: bodies,
-            }),
+            })),
         }
     }
 
     // Add the remaining functions that do not have a defined type.
     for (function_name, bodies) in function_bodies {
-        function_declarations.push(FunctionDefinition {
+        function_declarations.push(Rc::new(FunctionDefinition {
             location: bodies.get(0).unwrap().location.clone(),
             name: function_name.clone(),
             function_type: None,
             function_bodies: bodies,
-        });
+        }));
     }
 
     Ok(function_declarations)
@@ -170,7 +171,7 @@ fn to_declaration_block_elements(
     pairs: Pairs<Rule>,
     file_name: &String,
     line_starts: &Vec<usize>,
-) -> Result<(Vec<ADTDefinition>, Vec<RecordDefinition>, Vec<FunctionDefinition>, HashSet<ExportMember>, Vec<Import>), ParseError> {
+) -> Result<(Vec<Rc<ADTDefinition>>, Vec<Rc<RecordDefinition>>, Vec<Rc<FunctionDefinition>>, HashSet<ExportMember>, Vec<Import>), ParseError> {
     let mut function_types = HashMap::new();
     let mut function_bodies = HashMap::new();
 
@@ -185,13 +186,13 @@ fn to_declaration_block_elements(
             Rule::type_definition => {
                 let child = pair.into_inner().next().unwrap();
                 match child.as_rule() {
-                    Rule::adt_definition => adt_definitions.push(to_adt_type(child, file_name, line_starts)),
-                    Rule::record_definition => record_definitions.push(to_record_type(child, file_name, line_starts)),
+                    Rule::adt_definition => adt_definitions.push(Rc::new(to_adt_type(child, file_name, line_starts))),
+                    Rule::record_definition => record_definitions.push(Rc::new(to_record_type(child, file_name, line_starts))),
                     r => unreachable!("{:?}", r)
                 }
             }
             Rule::function_body => {
-                let fb = to_function_body(file_name, pair, line_starts)?;
+                let fb = Rc::new(to_function_body(file_name, pair, line_starts)?);
                 match function_bodies.get_mut(&fb.name) {
                     None => {
                         function_bodies.insert(fb.name.clone(), vec![fb]);
@@ -213,15 +214,14 @@ fn to_declaration_block_elements(
                             line,
                             col,
                         },
-                        TypeScheme {
-                            bound_variables: function_type.clone().collect_free_type_variables(),
-                            enclosed_type: function_type,
-                        },
+                        Rc::new(TypeScheme {
+                            bound_variables: function_type.collect_free_type_variables(),
+                            enclosed_type: Rc::new(function_type),
+                        }),
                     ),
                 );
             }
             Rule::module_export => {
-                println!("Module export: {:?}", pair);
                 module_exports.insert(pair.into_inner().next().unwrap().as_str().to_string());
             }
             Rule::module_import => {
@@ -229,13 +229,11 @@ fn to_declaration_block_elements(
                 let module_import = pair.into_inner().next().unwrap();
                 match module_import.as_rule() {
                     Rule::module_import_full => {
-                        println!("Module import full: {:?}", module_import);
                         let mut members = module_import.into_inner();
                         let defined_module_name = members.next().unwrap().as_str().to_string();
                         module_imports.push(Import::ImportModule(Location { file: file_name.clone(), function: "".to_owned(), line, col }, defined_module_name, members.next().map(|r| r.as_str().to_string())))
                     }
                     Rule::module_import_members => {
-                        println!("Module import members: {:?}", module_import);
                         let mut members = module_import.into_inner();
                         let defined_module_name = members.next().unwrap().as_str().to_string();
                         let imported_members = members.into_iter()
@@ -280,7 +278,7 @@ fn to_adt_type(
             let mut alternative_elements = alternative_rule.into_inner();
             let alternative_name =
                 alternative_elements.next().unwrap().as_str().to_string();
-            let alternative_elements = alternative_elements.map(to_type).collect();
+            let alternative_elements = alternative_elements.map(to_type).map(Rc::new).collect();
             (
                 alternative_name.clone(),
                 ADTConstructor {
@@ -327,7 +325,7 @@ fn to_record_type(
             let mut field_elements = field_rule.into_inner();
             let field_name = field_elements.next().unwrap().as_str().to_string();
             let field_type = to_type(field_elements.next().unwrap());
-            (field_name, field_type)
+            (field_name, Rc::new(field_type))
         })
         .collect();
 
@@ -825,8 +823,8 @@ fn to_type(pair: Pair<Rule>) -> Type {
         Rule::int_type => Type::Int,
         Rule::char_type => Type::Char,
         Rule::float_type => Type::Float,
-        Rule::tuple_type => Type::Tuple(pair.into_inner().map(|r| to_type(r)).collect()),
-        Rule::list_type => Type::List(Box::new(to_type(pair.into_inner().next().unwrap()))),
+        Rule::tuple_type => Type::Tuple(pair.into_inner().map(|r| Rc::new(to_type(r))).collect()),
+        Rule::list_type => Type::List(Rc::new(to_type(pair.into_inner().next().unwrap()))),
         Rule::custom_type_single => {
             let name = pair.into_inner().next().unwrap().as_str().to_string();
             Type::UserType(name, vec![])
@@ -837,18 +835,18 @@ fn to_type(pair: Pair<Rule>) -> Type {
 
             let mut type_arguments = Vec::new();
             while let Some(e) = elements.next() {
-                type_arguments.push(to_type(e))
+                type_arguments.push(Rc::new(to_type(e)))
             }
             Type::UserType(name, type_arguments)
         }
         Rule::type_variable => Type::Variable(pair.as_str().to_string()),
         Rule::function_type => {
-            let types: Vec<Type> = pair.into_inner().map(|t| to_type(t)).collect();
+            let types: Vec<Rc<Type>> = pair.into_inner().map(|t| Rc::new(to_type(t))).collect();
 
             let (result_type, arguments) = types.split_last().unwrap();
             Type::Function(
                 arguments.into_iter().cloned().collect(),
-                Box::new(result_type.clone()),
+                Rc::clone(result_type),
             )
         }
         t => unreachable!("Unhandled type: {:?}: {:#?}", t, pair),

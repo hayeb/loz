@@ -1,8 +1,11 @@
+use std::borrow::Borrow;
+use std::rc::Rc;
+
 use crate::{Type, TypeScheme, TypeVar};
 
-pub fn substitute(substitutions: &Vec<(TypeVar, Type)>, target: &TypeScheme) -> TypeScheme {
+pub fn substitute(substitutions: &Vec<(TypeVar, Rc<Type>)>, target: &Rc<TypeScheme>) -> TypeScheme {
     let bound_variables = &target.bound_variables;
-    let subs: Vec<(TypeVar, Type)> = substitutions
+    let subs: Vec<(TypeVar, Rc<Type>)> = substitutions
         .clone()
         .into_iter()
         .filter(|(v, _)| !bound_variables.contains(v))
@@ -13,8 +16,8 @@ pub fn substitute(substitutions: &Vec<(TypeVar, Type)>, target: &TypeScheme) -> 
     }
 }
 
-fn apply_substitution(v: &TypeVar, t: &Type, target: &Type) -> Type {
-    match target {
+fn apply_substitution(v: &TypeVar, t: &Type, target: &Rc<Type>) -> Rc<Type> {
+    Rc::new(match target.borrow() {
         Type::Bool => Type::Bool,
         Type::Char => Type::Char,
         Type::String => Type::String,
@@ -35,11 +38,11 @@ fn apply_substitution(v: &TypeVar, t: &Type, target: &Type) -> Type {
                 .map(|target| apply_substitution(v, t, target))
                 .collect(),
         ),
-        Type::List(element_type) => Type::List(Box::new(apply_substitution(
+        Type::List(element_type) => Type::List(apply_substitution(
             v,
             t,
-            element_type.clone().as_ref(),
-        ))),
+            element_type,
+        )),
         Type::Variable(name) if name == v => t.clone(),
         Type::Variable(ref name) => Type::Variable(name.clone()),
 
@@ -48,20 +51,20 @@ fn apply_substitution(v: &TypeVar, t: &Type, target: &Type) -> Type {
                 .into_iter()
                 .map(|ft| apply_substitution(v, t, ft))
                 .collect(),
-            Box::new(apply_substitution(v, t, to_type)),
+            apply_substitution(v, t, to_type),
         ),
-    }
+    })
 }
 
-pub fn substitute_type(substitutions: &Vec<(TypeVar, Type)>, target: &Type) -> Type {
-    let mut result_type = target.clone();
+pub fn substitute_type(substitutions: &Vec<(TypeVar, Rc<Type>)>, target: &Rc<Type>) -> Rc<Type> {
+    let mut result_type = Rc::clone(target);
     for (v, t) in substitutions {
         result_type = apply_substitution(&v, &t, &result_type);
     }
     result_type
 }
 
-pub fn substitute_list(substitutions: &Vec<(TypeVar, Type)>, targets: &Vec<Type>) -> Vec<Type> {
+pub fn substitute_list(substitutions: &Vec<(TypeVar, Rc<Type>)>, targets: &Vec<Rc<Type>>) -> Vec<Rc<Type>> {
     targets
         .into_iter()
         .map(|target| substitute_type(substitutions, target))

@@ -2,12 +2,14 @@
 extern crate lazy_static;
 #[macro_use]
 extern crate pest_derive;
+
 extern crate petgraph;
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
 use crate::Expression::*;
+use std::rc::Rc;
 
 pub mod inferencer;
 pub mod interpreter;
@@ -58,9 +60,9 @@ pub struct FunctionBody {
     pub location: Location,
     pub match_expressions: Vec<MatchExpression>,
     pub rules: Vec<FunctionRule>,
-    pub local_function_definitions: Vec<FunctionDefinition>,
-    pub local_adt_definitions: Vec<ADTDefinition>,
-    pub local_record_definitions: Vec<RecordDefinition>
+    pub local_function_definitions: Vec<Rc<FunctionDefinition>>,
+    pub local_adt_definitions: Vec<Rc<ADTDefinition>>,
+    pub local_record_definitions: Vec<Rc<RecordDefinition>>
 }
 
 pub type TypeVar = String;
@@ -74,19 +76,19 @@ pub enum Type {
     Float,
 
     // :: A b c d = A a | B b | C c
-    UserType(String, Vec<Type>),
-    Tuple(Vec<Type>),
-    List(Box<Type>),
+    UserType(String, Vec<Rc<Type>>),
+    Tuple(Vec<Rc<Type>>),
+    List(Rc<Type>),
     Variable(TypeVar),
 
     // a a b b -> b
-    Function(Vec<Type>, Box<Type>),
+    Function(Vec<Rc<Type>>, Rc<Type>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeScheme {
     pub bound_variables: HashSet<String>,
-    pub enclosed_type: Type,
+    pub enclosed_type: Rc<Type>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -94,7 +96,7 @@ pub struct RecordDefinition {
     pub name: String,
     pub location: Location,
     pub type_variables: Vec<String>,
-    pub fields: HashMap<String, Type>,
+    pub fields: HashMap<String, Rc<Type>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -108,15 +110,15 @@ pub struct ADTDefinition {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ADTConstructor {
     pub name: String,
-    pub elements: Vec<Type>,
+    pub elements: Vec<Rc<Type>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct FunctionDefinition {
     pub location: Location,
     pub name: String,
-    pub function_type: Option<TypeScheme>,
-    pub function_bodies: Vec<FunctionBody>,
+    pub function_type: Option<Rc<TypeScheme>>,
+    pub function_bodies: Vec<Rc<FunctionBody>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -198,9 +200,9 @@ pub struct Module {
     pub file_name: String,
     pub exported_members: HashSet<ExportMember>,
     pub imports: Vec<Import>,
-    pub function_declarations: Vec<FunctionDefinition>,
-    pub adt_definitions: Vec<ADTDefinition>,
-    pub record_definitions: Vec<RecordDefinition>,
+    pub function_declarations: Vec<Rc<FunctionDefinition>>,
+    pub adt_definitions: Vec<Rc<ADTDefinition>>,
+    pub record_definitions: Vec<Rc<RecordDefinition>>,
 }
 
 impl Display for Type {
@@ -523,7 +525,7 @@ impl MatchExpression {
 }
 
 pub fn declaration_references(
-    d: &FunctionDefinition,
+    d: &Rc<FunctionDefinition>,
     include_variables: bool,
 ) -> HashSet<(String, Location)> {
     let mut referred = HashSet::new();

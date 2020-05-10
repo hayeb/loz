@@ -1,9 +1,12 @@
-use crate::inferencer::substitutor::substitute_type;
-use crate::inferencer::InferenceErrorType;
-use crate::{Type, TypeVar};
+use std::borrow::Borrow;
+use std::rc::Rc;
 
-pub fn unify(a: &Type, b: &Type) -> Result<Vec<(TypeVar, Type)>, InferenceErrorType> {
-    match (a, b) {
+use crate::{Type, TypeVar};
+use crate::inferencer::InferenceErrorType;
+use crate::inferencer::substitutor::substitute_type;
+
+pub fn unify(a: &Rc<Type>, b: &Rc<Type>) -> Result<Vec<(TypeVar, Rc<Type>)>, InferenceErrorType> {
+    match (a.borrow(), b.borrow()) {
         // Basic types always succeed with no unifications
         (Type::Bool, Type::Bool) => Ok(Vec::new()),
         (Type::Char, Type::Char) => Ok(Vec::new()),
@@ -27,8 +30,8 @@ pub fn unify(a: &Type, b: &Type) -> Result<Vec<(TypeVar, Type)>, InferenceErrorT
             Ok(subs) => Ok(subs),
             Err(InferenceErrorType::UnificationError(l, r)) => {
                 Err(InferenceErrorType::UnificationError(
-                    Type::List(Box::new(l)),
-                    Type::List(Box::new(r)),
+                    Rc::new(Type::List(l)),
+                    Rc::new(Type::List(r)),
                 ))
             }
             Err(e) => Err(e),
@@ -41,28 +44,28 @@ pub fn unify(a: &Type, b: &Type) -> Result<Vec<(TypeVar, Type)>, InferenceErrorT
         (Type::Variable(a_var), Type::Variable(b_var)) if a_var == b_var => Ok(Vec::new()),
 
         (Type::Variable(a_var), b_type)
-            if !b_type.collect_free_type_variables().contains(a_var) =>
-        {
-            let mut subs = Vec::new();
-            subs.push((a_var.clone(), b_type.clone()));
-            Ok(subs)
-        }
+        if !b_type.collect_free_type_variables().contains(a_var) =>
+            {
+                let mut subs = Vec::new();
+                subs.push((a_var.clone(), Rc::clone(b)));
+                Ok(subs)
+            }
         (a_type, Type::Variable(b_var))
-            if !a_type.collect_free_type_variables().contains(b_var) =>
-        {
-            let mut subs = Vec::new();
-            subs.push((b_var.clone(), a_type.clone()));
-            Ok(subs)
-        }
+        if !a_type.collect_free_type_variables().contains(b_var) =>
+            {
+                let mut subs = Vec::new();
+                subs.push((b_var.clone(), Rc::clone(a)));
+                Ok(subs)
+            }
 
-        (a, b) => Err(InferenceErrorType::UnificationError(a.clone(), b.clone())),
+        (_, _) => Err(InferenceErrorType::UnificationError(Rc::clone(a), Rc::clone(b))),
     }
 }
 
 pub fn unify_one_of(
-    types: &Vec<Type>,
-    r: &Type,
-) -> Result<Vec<(TypeVar, Type)>, InferenceErrorType> {
+    types: &Vec<Rc<Type>>,
+    r: &Rc<Type>,
+) -> Result<Vec<(TypeVar, Rc<Type>)>, InferenceErrorType> {
     for l in types {
         match unify(&l, &r) {
             Ok(unifiers) => return Ok(unifiers),
@@ -76,9 +79,9 @@ pub fn unify_one_of(
 }
 
 fn unify_types(
-    a_types: &Vec<Type>,
-    b_types: &Vec<Type>,
-) -> Result<Vec<(TypeVar, Type)>, InferenceErrorType> {
+    a_types: &Vec<Rc<Type>>,
+    b_types: &Vec<Rc<Type>>,
+) -> Result<Vec<(TypeVar, Rc<Type>)>, InferenceErrorType> {
     if a_types.len() != b_types.len() {
         return Err(InferenceErrorType::WrongNumberOfTypes(
             a_types.len(),
@@ -97,15 +100,15 @@ fn unify_types(
 }
 
 fn unify_functions(
-    a_arguments: &Vec<Type>,
-    a_result: &Type,
-    b_arguments: &Vec<Type>,
-    b_result: &Type,
-) -> Result<Vec<(TypeVar, Type)>, InferenceErrorType> {
+    a_arguments: &Vec<Rc<Type>>,
+    a_result: &Rc<Type>,
+    b_arguments: &Vec<Rc<Type>>,
+    b_result: &Rc<Type>,
+) -> Result<Vec<(TypeVar, Rc<Type>)>, InferenceErrorType> {
     if a_arguments.len() != b_arguments.len() {
         return Err(InferenceErrorType::UnificationError(
-            Type::Function(a_arguments.clone(), Box::new(a_result.clone())),
-            Type::Function(b_arguments.clone(), Box::new(b_result.clone())),
+            Rc::new(Type::Function(a_arguments.clone(), Rc::clone(a_result))),
+            Rc::new(Type::Function(b_arguments.clone(), Rc::clone(b_result))),
         ));
     }
 
@@ -117,12 +120,12 @@ fn unify_functions(
             &substitute_type(&subs, a_argument_type),
             &substitute_type(&subs, b_argument_type),
         )
-        .map_err(|_| {
-            InferenceErrorType::UnificationError(
-                Type::Function(a_arguments.clone(), Box::new(a_result.clone())),
-                Type::Function(b_arguments.clone(), Box::new(b_result.clone())),
-            )
-        })?;
+            .map_err(|_| {
+                InferenceErrorType::UnificationError(
+                    Rc::new(Type::Function(a_arguments.clone(), Rc::clone(a_result))),
+                    Rc::new(Type::Function(b_arguments.clone(), Rc::clone(b_result))),
+                )
+            })?;
         a_result_type = substitute_type(&new_subs, &a_result_type);
         b_result_type = substitute_type(&new_subs, &b_result_type);
 
@@ -133,12 +136,12 @@ fn unify_functions(
         &substitute_type(&subs, &a_result_type),
         &substitute_type(&subs, &b_result_type),
     )
-    .map_err(|_| {
-        InferenceErrorType::UnificationError(
-            Type::Function(a_arguments.clone(), Box::new(a_result.clone())),
-            Type::Function(b_arguments.clone(), Box::new(b_result.clone())),
-        )
-    })?;
+        .map_err(|_| {
+            InferenceErrorType::UnificationError(
+                Rc::new(Type::Function(a_arguments.clone(), Rc::clone(a_result))),
+                Rc::new(Type::Function(b_arguments.clone(), Rc::clone(b_result))),
+            )
+        })?;
     subs.extend(result_unifiers);
     Ok(subs.to_owned())
 }
@@ -149,110 +152,110 @@ mod tests {
 
     #[test]
     fn test_unify_basic_types() {
-        assert!(unify(&Type::Bool, &Type::Bool).is_ok());
-        assert!(unify(&Type::Int, &Type::Int).is_ok());
-        assert!(unify(&Type::Float, &Type::Float).is_ok());
-        assert!(unify(&Type::String, &Type::String).is_ok());
-        assert!(unify(&Type::Char, &Type::Char).is_ok());
+        assert!(unify(&Rc::new(Type::Bool), &Rc::new(Type::Bool)).is_ok());
+        assert!(unify(&Rc::new(Type::Int), &Rc::new(Type::Int)).is_ok());
+        assert!(unify(&Rc::new(Type::Float), &Rc::new(Type::Float)).is_ok());
+        assert!(unify(&Rc::new(Type::String), &Rc::new(Type::String)).is_ok());
+        assert!(unify(&Rc::new(Type::Char), &Rc::new(Type::Char)).is_ok());
     }
 
     #[test]
     fn test_variable() {
-        let unify_result = unify(&Type::Variable("a".to_string()), &Type::Bool);
+        let unify_result = unify(&Rc::new(Type::Variable("a".to_string())), &Rc::new(Type::Bool));
         assert!(unify_result.is_ok());
         let unify_result = unify_result.unwrap();
-        assert_eq!(unify_result.get(0), Some(&("a".to_string(), Type::Bool)))
+        assert_eq!(unify_result.get(0), Some(&("a".to_string(), Rc::new(Type::Bool))))
     }
 
     #[test]
     fn test_unify_tuple() {
         assert!(unify(
-            &Type::Tuple(vec![Type::Bool, Type::Int]),
-            &Type::Tuple(vec![Type::Bool, Type::Int])
+            &Rc::new(Type::Tuple(vec![Rc::new(Type::Bool), Rc::new(Type::Int)])),
+            &Rc::new(Type::Tuple(vec![Rc::new(Type::Bool), Rc::new(Type::Int)])),
         )
-        .is_ok());
+            .is_ok());
         assert!(unify(
-            &Type::Tuple(vec![Type::Bool, Type::Int]),
-            &Type::Tuple(vec![Type::Int, Type::Int])
+            &Rc::new(Type::Tuple(vec![Rc::new(Type::Bool), Rc::new(Type::Int)])),
+            &Rc::new(Type::Tuple(vec![Rc::new(Type::Int), Rc::new(Type::Int)])),
         )
-        .is_err());
+            .is_err());
 
         let unify_result = unify(
-            &Type::Tuple(vec![Type::Variable("a".to_string()), Type::Int]),
-            &Type::Tuple(vec![Type::Bool, Type::Int]),
+            &Rc::new(Type::Tuple(vec![Rc::new(Type::Variable("a".to_string())), Rc::new(Type::Int)])),
+            &Rc::new(Type::Tuple(vec![Rc::new(Type::Bool), Rc::new(Type::Int)])),
         );
         assert!(unify_result.is_ok());
         let unify_result = unify_result.unwrap();
-        assert_eq!(unify_result.get(0), Some(&("a".to_string(), Type::Bool)));
+        assert_eq!(unify_result.get(0), Some(&("a".to_string(), Rc::new(Type::Bool))));
 
         let unify_result = unify(
-            &Type::Tuple(vec![Type::Bool, Type::Int]),
-            &Type::Tuple(vec![Type::Variable("a".to_string()), Type::Int]),
+            &Rc::new(Type::Tuple(vec![Rc::new(Type::Bool), Rc::new(Type::Int)])),
+            &Rc::new(Type::Tuple(vec![Rc::new(Type::Variable("a".to_string())), Rc::new(Type::Int)])),
         );
         assert!(unify_result.is_ok());
         let unify_result = unify_result.unwrap();
-        assert_eq!(unify_result.get(0), Some(&("a".to_string(), Type::Bool)))
+        assert_eq!(unify_result.get(0), Some(&("a".to_string(), Rc::new(Type::Bool))))
     }
 
     #[test]
     fn test_unify_list() {
         assert!(unify(
-            &Type::List(Box::new(Type::Bool)),
-            &Type::List(Box::new(Type::Bool))
+            &Rc::new(Type::List(Rc::new(Type::Bool))),
+            &Rc::new(Type::List(Rc::new(Type::Bool))),
         )
-        .is_ok());
+            .is_ok());
         assert!(unify(
-            &Type::List(Box::new(Type::Int)),
-            &Type::List(Box::new(Type::Bool))
+            &Rc::new(Type::List(Rc::new(Type::Int))),
+            &Rc::new(Type::List(Rc::new(Type::Bool))),
         )
-        .is_err());
+            .is_err());
 
         let unify_result = unify(
-            &&Type::List(Box::new(Type::Variable("a".to_string()))),
-            &Type::List(Box::new(Type::Bool)),
+            &Rc::new(Type::List(Rc::new(Type::Variable("a".to_string())))),
+            &Rc::new(Type::List(Rc::new(Type::Bool))),
         );
         assert!(unify_result.is_ok());
         let unify_result = unify_result.unwrap();
-        assert_eq!(unify_result.get(0), Some(&("a".to_string(), Type::Bool)));
+        assert_eq!(unify_result.get(0), Some(&("a".to_string(), Rc::new(Type::Bool))));
 
         let unify_result = unify(
-            &&Type::List(Box::new(Type::Bool)),
-            &Type::List(Box::new(Type::Variable("a".to_string()))),
+            &Rc::new(Type::List(Rc::new(Type::Bool))),
+            &Rc::new(Type::List(Rc::new(Type::Variable("a".to_string())))),
         );
         assert!(unify_result.is_ok());
         let unify_result = unify_result.unwrap();
-        assert_eq!(unify_result.get(0), Some(&("a".to_string(), Type::Bool)))
+        assert_eq!(unify_result.get(0), Some(&("a".to_string(), Rc::new(Type::Bool))))
     }
 
     #[test]
     fn test_unify_custom_type() {
-        let adt_a = Type::UserType("A".to_string(), vec![Type::Bool, Type::Int]);
-        let adt_b = Type::UserType("B".to_string(), vec![Type::String]);
-        let adt_c = Type::UserType(
+        let adt_a = Rc::new(Type::UserType("A".to_string(), vec![Rc::new(Type::Bool), Rc::new(Type::Int)]));
+        let adt_b = Rc::new(Type::UserType("B".to_string(), vec![Rc::new(Type::String)]));
+        let adt_c = Rc::new(Type::UserType(
             "A".to_string(),
             vec![
-                Type::Variable("a".to_string()),
-                Type::Variable("b".to_string()),
+                Rc::new(Type::Variable("a".to_string())),
+                Rc::new(Type::Variable("b".to_string())),
             ],
-        );
+        ));
 
-        assert!(unify(&adt_a, &Type::Variable("a".to_string())).is_ok());
+        assert!(unify(&adt_a, &Rc::new(Type::Variable("a".to_string()))).is_ok());
         assert!(unify(&adt_a, &adt_b).is_err());
 
         let unify_result = unify(&adt_a, &adt_c);
         assert!(unify_result.is_ok());
         let unify_result = unify_result.unwrap();
-        assert_eq!(unify_result.get(0), Some(&("a".to_string(), Type::Bool)));
-        assert_eq!(unify_result.get(1), Some(&("b".to_string(), Type::Int)));
+        assert_eq!(unify_result.get(0), Some(&("a".to_string(), Rc::new(Type::Bool))));
+        assert_eq!(unify_result.get(1), Some(&("b".to_string(), Rc::new(Type::Int))));
     }
 
     #[test]
     fn test_free_variables() {
-        let f_a = Type::Function(
-            vec![Type::Variable("a".to_string())],
-            Box::new(Type::Variable("b".to_string())),
-        );
-        let b = Type::Variable("a".to_string());
+        let f_a = Rc::new(Type::Function(
+            vec![Rc::new(Type::Variable("a".to_string()))],
+            Rc::new(Type::Variable("b".to_string())),
+        ));
+        let b = Rc::new(Type::Variable("a".to_string()));
 
         let unify_result = unify(&f_a, &b);
         assert!(unify_result.is_err());

@@ -3,4 +3,4 @@ f a = g a
 
 g a = f a
 
-main = f 18
+main = 1

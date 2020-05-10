@@ -1,10 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::rc::Rc;
 
 use petgraph::Graph;
 
-use crate::{declaration_references, Expression, FunctionDefinition, FunctionRule, Location};
+use crate::{declaration_references, FunctionDefinition};
 
-pub fn to_components(declarations: &Vec<FunctionDefinition>) -> Vec<Vec<&FunctionDefinition>> {
+pub fn to_components(declarations: &Vec<Rc<FunctionDefinition>>) -> Vec<Vec<Rc<FunctionDefinition>>> {
     let mut name_to_index = HashMap::new();
     let mut index_to_name = HashMap::new();
 
@@ -32,16 +33,16 @@ pub fn to_components(declarations: &Vec<FunctionDefinition>) -> Vec<Vec<&Functio
 
     let sccs = petgraph::algo::kosaraju_scc(&graph);
 
-    let function_name_to_declaration: HashMap<String, &FunctionDefinition> =
-        declarations.iter().map(|d| (d.name.clone(), d)).collect();
+    let function_name_to_declaration: HashMap<String, Rc<FunctionDefinition>> =
+        declarations.iter().map(|d| (d.name.clone(), Rc::clone(d))).collect();
 
     sccs.iter()
         .map(|scc| {
             scc.iter()
                 .map(|n| {
-                    *function_name_to_declaration
+                    Rc::clone(function_name_to_declaration
                         .get(index_to_name.get(n).unwrap().clone())
-                        .unwrap()
+                        .unwrap())
                 })
                 .collect()
         })

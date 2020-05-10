@@ -1,40 +1,35 @@
-use loz_compiler::{inferencer, module_system};
-use loz_compiler::inferencer::{InferenceError, InferencerOptions, TypedModule, ExternalDefinitions};
-use loz_compiler::interpreter::{interpret, InterpreterError, Value};
-use loz_compiler::parser;
-use loz_compiler::parser::ParseError;
+use std::{fs, io};
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
-use std::{fmt, fs, io, env};
-use itertools::Itertools;
+
+use loz_compiler::module_system;
+use loz_compiler::inferencer::{InferencerOptions, TypedModule};
+use loz_compiler::interpreter::{interpret, InterpreterError, Value};
 use loz_compiler::module_system::{compile_modules, Error};
 
 #[test]
 fn test_ok_files() -> Result<(), io::Error> {
-    env::set_current_dir(Path::new("tests/programs/ok"));
-    compile_files(".", |res| res.is_ok())
+    compile_files("tests/programs/ok", |res| res.is_ok())
 }
 
 #[test]
 fn test_parse_err_files() -> Result<(), io::Error> {
-    env::set_current_dir(Path::new("tests/programs/parse_err"));
-    compile_files(".", |res| match res {
-        Err(Error::ParseError(e)) => true,
+    compile_files("tests/programs/parse_err", |res| match res {
+        Err(Error::ParseError(_)) => true,
         _ => false
     })
 }
 
 #[test]
 fn test_type_err_files() -> Result<(), io::Error> {
-    env::set_current_dir(Path::new("tests/programs/type_err"));
-    compile_files(".", |res| match res {
-        Err(Error::InferenceError(e)) => true,
+    compile_files("tests/programs/type_err", |res| match res {
+        Err(Error::InferenceError(_)) => true,
         _ => false
     })
 }
 
-fn compile_files(dir: &str, f: impl Fn(&Result<TypedModule, module_system::Error>) -> bool) -> Result<(), io::Error> {
-    for entry in fs::read_dir(env::current_dir().unwrap())? {
+fn compile_files(directory: &str, f: impl Fn(&Result<TypedModule, module_system::Error>) -> bool) -> Result<(), io::Error> {
+    for entry in fs::read_dir(Path::new(directory))? {
         let entry = entry?;
         let mut path = entry.path();
         if path.to_str().unwrap().ends_with(".res")
@@ -43,11 +38,8 @@ fn compile_files(dir: &str, f: impl Fn(&Result<TypedModule, module_system::Error
             continue;
         }
 
-        let mut wd = env::current_dir().unwrap();
-
         if path.is_dir() {
-            wd.push(path.components().last().unwrap().as_os_str());
-            path.push("A.loz");
+            path.push("A.loz")
         }
 
         println!(
@@ -55,11 +47,29 @@ fn compile_files(dir: &str, f: impl Fn(&Result<TypedModule, module_system::Error
             path.clone().to_str().unwrap()
         );
 
-        let res = compile_modules(path.clone().to_str().unwrap(), &wd, &InferencerOptions {
+        let res = compile_modules(path.clone().to_str().unwrap().to_string(), &InferencerOptions {
             print_types: false,
-            is_main_module: true
+            is_main_module: true,
         });
+        println!("Result: {:?}", res);
         assert!(f(&res));
+
+        if let Ok(ast) = res {
+            let mut result_value_path = path.clone().to_str().unwrap().to_string();
+
+            if Path::new(&format!("{}.skip", result_value_path)).exists() {
+                println!("Skipping execution...");
+                continue;
+            }
+
+            let result_value_string = fs::read_to_string(format!("{}.res", result_value_path))?;
+            let result = match interpret(&ast) {
+                Ok(value) => format!("{}", value),
+                Err(err) => format!("{}", err),
+            };
+            assert_eq!(result_value_string, result);
+            println!("Verified interpreter result: Ok");
+        }
     }
     Ok(())
 }

@@ -7,6 +7,7 @@ use crate::{
     body_references, Expression, FunctionBody, FunctionDefinition, FunctionRule, Location,
     MatchExpression,
 };
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 struct RunState {
@@ -38,7 +39,7 @@ impl RunState {
                             .iter()
                             .map(|(v, loc)| (v.clone(), self.retrieve_variable_value(v, loc)))
                             .collect(),
-                        body: fb.clone(),
+                        body: Rc::clone(fb),
                     })
                     .collect();
 
@@ -48,10 +49,10 @@ impl RunState {
         panic!("No value for variable {} at {}", name, loc);
     }
 
-    fn get_function_definition(&self, name: &str) -> Option<FunctionDefinition> {
+    fn get_function_definition(&self, name: &str) -> Option<Rc<FunctionDefinition>> {
         for f in self.frames.iter().rev() {
             if let Some(function_definition) = f.declared_functions.get(name) {
-                return Some(function_definition.clone());
+                return Some(Rc::clone(function_definition));
             }
         }
         None
@@ -77,7 +78,7 @@ impl RunState {
 #[derive(Debug, Clone)]
 struct Frame {
     variables: HashMap<String, Value>,
-    declared_functions: HashMap<String, FunctionDefinition>,
+    declared_functions: HashMap<String, Rc<FunctionDefinition>>,
 }
 
 impl Frame {
@@ -131,7 +132,7 @@ pub enum Value {
 #[derive(Debug, Clone)]
 pub struct FunctionClosure {
     closed_variables: HashMap<String, Value>,
-    body: FunctionBody,
+    body: Rc<FunctionBody>,
 }
 
 impl Display for Value {
@@ -160,6 +161,7 @@ impl Display for Value {
                     .collect::<Vec<String>>()
                     .join(", ")
             ),
+            Value::ADTValue(constructor, arguments) if arguments.len() == 0 => write!(f, "{}", constructor),
             Value::ADTValue(constructor, arguments) => write!(
                 f,
                 "{} {}",
@@ -231,7 +233,7 @@ pub fn interpret(ast: &TypedModule) -> Result<Value, InterpreterError> {
         &mut RunState {
             frames: vec![Frame {
                 variables: HashMap::new(),
-                declared_functions: ast.function_name_to_declaration.clone(),
+                declared_functions: ast.function_name_to_declaration.iter().map(|(n, d)| (n.clone(), Rc::clone(d)) ).collect(),
             }],
         },
     )?;
@@ -420,7 +422,7 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterEr
 
             let closure = FunctionClosure {
                 closed_variables: state.determine_closure(args, &body.references(true)),
-                body: lambda_body,
+                body: Rc::new(lambda_body),
             };
             Ok(Value::Lambda(Vec::new(), vec![closure]))
         }
@@ -536,10 +538,10 @@ fn eval_function_closures(
             }
         }
         if matches {
-            for function_definition in &closure.body.local_function_definitions {
+            for function_definition in closure.body.local_function_definitions.iter() {
                 body_frame.declared_functions.insert(
                     function_definition.name.clone(),
-                    function_definition.clone(),
+                    Rc::clone(function_definition),
                 );
             }
 
