@@ -1,5 +1,0 @@
-import C as C
-
-b x = C::c x
-
-c x = x + 3

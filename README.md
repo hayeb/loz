@@ -20,7 +20,7 @@ Does NOT support laziness and does NOT use graph/term rewriting as basis for eva
   
     Main = map [1, 2, 3] (\a. a + 1)
   ```
-* Implement currying
+* ✔ Implement currying
 * ✔ Implement record field accessor operator ```.```
 * Implement tail call elimination (in interpreter?)
 * Implement interactive interpreter
@@ -44,7 +44,7 @@ Does NOT support laziness and does NOT use graph/term rewriting as basis for eva
     g 0 = 1
     g n = f (n - 1)
     ```
-* Implement reading code from multiple files
+* ✔ Implement reading code from multiple files
 * Implement simple module system
     ```
     import lib/types.loz
@@ -58,9 +58,9 @@ Does NOT support laziness and does NOT use graph/term rewriting as basis for eva
 * Implement checking match completeness
 
 ### Technical improvements
-* Clean-up AST, should speed up parsing
+* ✔ Clean-up AST, should speed up parsing
 * ✔ Rework ```Main``` start rule, should be a normal function called ```main```
-* I'm using ```clone()``` more than I'd like, due to not bothering with lifetimes
+* ✔ I'm using ```clone()``` more than I'd like, due to not bothering with lifetimes
 * Benchmark
 * Probably use different parser
 * Build test suite 
@@ -68,6 +68,8 @@ Does NOT support laziness and does NOT use graph/term rewriting as basis for eva
 
 
 ## Usage
+
+TODO: This should be updated..
 The compiler supports reading code from a single file:
 ```shell script
 $ cloz test/test.loz

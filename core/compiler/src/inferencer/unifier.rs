@@ -196,7 +196,7 @@ mod tests {
         let unify_result = unify_result.unwrap();
         assert_eq!(
             unify_result.get(0),
-            Some(&("a".to_string(), Rc::new(Type::Bool)))
+            Some(&(Rc::new("a".to_string()), Rc::new(Type::Bool)))
         )
     }
 
@@ -224,7 +224,7 @@ mod tests {
         let unify_result = unify_result.unwrap();
         assert_eq!(
             unify_result.get(0),
-            Some(&("a".to_string(), Rc::new(Type::Bool)))
+            Some(&(Rc::new("a".to_string()), Rc::new(Type::Bool)))
         );
 
         let unify_result = unify(
@@ -238,7 +238,7 @@ mod tests {
         let unify_result = unify_result.unwrap();
         assert_eq!(
             unify_result.get(0),
-            Some(&("a".to_string(), Rc::new(Type::Bool)))
+            Some(&(Rc::new("a".to_string()), Rc::new(Type::Bool)))
         )
     }
 
@@ -265,7 +265,7 @@ mod tests {
         let unify_result = unify_result.unwrap();
         assert_eq!(
             unify_result.get(0),
-            Some(&("a".to_string(), Rc::new(Type::Bool)))
+            Some(&(Rc::new("a".to_string()), Rc::new(Type::Bool)))
         );
 
         let unify_result = unify(
@@ -278,7 +278,7 @@ mod tests {
         let unify_result = unify_result.unwrap();
         assert_eq!(
             unify_result.get(0),
-            Some(&("a".to_string(), Rc::new(Type::Bool)))
+            Some(&(Rc::new("a".to_string()), Rc::new(Type::Bool)))
         )
     }
 
@@ -308,11 +308,11 @@ mod tests {
         let unify_result = unify_result.unwrap();
         assert_eq!(
             unify_result.get(0),
-            Some(&("a".to_string(), Rc::new(Type::Bool)))
+            Some(&(Rc::new("a".to_string()), Rc::new(Type::Bool)))
         );
         assert_eq!(
             unify_result.get(1),
-            Some(&("b".to_string(), Rc::new(Type::Int)))
+            Some(&(Rc::new("b".to_string()), Rc::new(Type::Int)))
         );
     }
 

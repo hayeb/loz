@@ -1,3 +1,5 @@
-import C
+import C as C
 
-b x = c x
+b x = C::c x
+
+c x = x + 80

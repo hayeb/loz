@@ -1,4 +1,0 @@
-import B
-
-// Should 2 + 5 = 7
-main = b 1 + c 2

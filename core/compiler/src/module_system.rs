@@ -251,7 +251,6 @@ pub fn compile_modules(
 
         match infer(module, module_inference_options, &external_definitions) {
             Ok(module) => {
-                let module = add_external_definitions(module, external_definitions);
                 if infer_stack_peekable.peek().is_none() {
                     return Ok((module, inferred_modules_by_name));
                 }
@@ -360,28 +359,4 @@ fn prefix_constructor_names(
         location: adt_definition.location.clone(),
         type_variables: adt_definition.type_variables.clone(),
     })
-}
-
-fn add_external_definitions(
-    module: TypedModule,
-    external_definitions: ExternalDefinitions,
-) -> TypedModule {
-    TypedModule {
-        record_name_to_definition: module
-            .record_name_to_definition
-            .into_iter()
-            .chain(external_definitions.record_name_to_definition.into_iter())
-            .collect(),
-        adt_name_to_definition: module
-            .adt_name_to_definition
-            .into_iter()
-            .chain(external_definitions.adt_name_to_definition.into_iter())
-            .collect(),
-        function_name_to_definition: module
-            .function_name_to_definition
-            .into_iter()
-            .chain(external_definitions.function_name_to_definition.into_iter())
-            .collect(),
-        ..module
-    }
 }

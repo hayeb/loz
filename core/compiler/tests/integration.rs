@@ -6,6 +6,8 @@ use loz_compiler::inferencer::{InferencerOptions, TypedModule};
 use loz_compiler::interpreter::{interpret, InterpreterError, Value};
 use loz_compiler::module_system;
 use loz_compiler::module_system::{compile_modules, Error};
+use std::collections::HashMap;
+use std::rc::Rc;
 
 #[test]
 fn test_ok_files() -> Result<(), io::Error> {
@@ -30,7 +32,7 @@ fn test_type_err_files() -> Result<(), io::Error> {
 
 fn compile_files(
     directory: &str,
-    f: impl Fn(&Result<TypedModule, module_system::Error>) -> bool,
+    f: impl Fn(&Result<(TypedModule, HashMap<Rc<String>, Rc<TypedModule>>), module_system::Error>) -> bool,
 ) -> Result<(), io::Error> {
     for entry in fs::read_dir(Path::new(directory))? {
         let entry = entry?;
@@ -55,10 +57,10 @@ fn compile_files(
                 is_main_module: true,
             },
         );
-        println!("Result: {:?}", res);
+        println!("Result: {:#?}", res);
         assert!(f(&res));
 
-        if let Ok(ast) = res {
+        if let Ok((ast, _)) = res {
             let mut result_value_path = path.clone().to_str().unwrap().to_string();
 
             if Path::new(&format!("{}.skip", result_value_path)).exists() {
