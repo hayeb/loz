@@ -1,11 +1,11 @@
 [package]
-name = "cli"
+name = "loz-cli"
 version = "0.1.0"
 authors = ["Haye Böhm <haye.bohm@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-loz_compiler = {version = "0.1.0", path="../compiler"}
+loz-compiler = {version = "0.1.0", path="../compiler"}
 clap = "2.33.0"
 
 [[bin]]

@@ -77,14 +77,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cli"
-version = "0.1.0"
-dependencies = [
- "clap 2.33.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "loz_compiler 0.1.0",
-]
-
-[[package]]
 name = "digest"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -158,7 +150,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "loz_compiler"
+name = "loz-cli"
+version = "0.1.0"
+dependencies = [
+ "clap 2.33.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "loz-compiler 0.1.0",
+]
+
+[[package]]
+name = "loz-compiler"
 version = "0.1.0"
 dependencies = [
  "itertools 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",

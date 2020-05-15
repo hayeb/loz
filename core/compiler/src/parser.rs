@@ -6,12 +6,16 @@ use std::rc::Rc;
 
 use pest::error::Error;
 use pest::iterators::Pair;
-use pest::Parser;
 use pest::prec_climber::*;
+use pest::Parser;
 
-use crate::{ADTConstructor, ADTDefinition, CaseRule, ExportMember, Expression, FunctionBody, FunctionDefinition, FunctionRule, Import, Location, MatchExpression, Module, RecordDefinition, Type, TypeScheme};
-use crate::Expression::*;
+use crate::ast::{
+    ADTConstructor, ADTDefinition, CaseRule, ExportMember, Expression, FunctionBody,
+    FunctionDefinition, FunctionRule, Import, Location, MatchExpression, Module, RecordDefinition,
+    Type, TypeScheme,
+};
 use crate::parser::ParseError::PestError;
+use crate::Expression::*;
 
 use self::pest::iterators::Pairs;
 
@@ -44,7 +48,7 @@ lazy_static! {
 pub enum ParseError {
     PestError(Error<Rule>),
 
-    FunctionTypeWithoutBody(String, Location),
+    FunctionTypeWithoutBody(Rc<String>, Rc<Location>),
 }
 
 impl Display for ParseError {
@@ -60,14 +64,18 @@ impl Display for ParseError {
     }
 }
 
-pub fn parse(file_name: &String, module_name: String, input: &str) -> Result<Module, ParseError> {
-    let ast = LOZParser::parse(Rule::ast, input)
+pub fn parse(
+    file_name: String,
+    module_name: Rc<String>,
+    input: String,
+) -> Result<Module, ParseError> {
+    let ast = LOZParser::parse(Rule::ast, &input)
         .map_err(|e| PestError(e))?
         .next()
         .unwrap();
     //println!("Raw AST: {:#?}", ast);
-    let line_starts = build_line_start_cache(input);
-    to_module(ast, module_name, file_name, &line_starts)
+    let line_starts = build_line_start_cache(&input);
+    to_module(ast, &module_name, &Rc::new(file_name), &line_starts)
 }
 
 fn build_line_start_cache(input: &str) -> Vec<usize> {
@@ -106,21 +114,21 @@ fn line_col_number(line_starts: &Vec<usize>, pos: usize) -> (usize, usize) {
 }
 
 fn contract_function_declarations(
-    mut function_bodies: HashMap<String, Vec<Rc<FunctionBody>>>,
-    function_types: HashMap<String, (Location, Rc<TypeScheme>)>,
+    mut function_bodies: HashMap<Rc<String>, Vec<Rc<FunctionBody>>>,
+    function_types: HashMap<Rc<String>, (Rc<Location>, Rc<TypeScheme>)>,
 ) -> Result<Vec<Rc<FunctionDefinition>>, ParseError> {
     let mut function_declarations = Vec::new();
     for (function_name, (location, function_scheme)) in function_types {
         match function_bodies.remove(&function_name) {
             None => {
                 return Err(ParseError::FunctionTypeWithoutBody(
-                    function_name.clone(),
+                    Rc::clone(&function_name),
                     location,
                 ));
             }
             Some(bodies) => function_declarations.push(Rc::new(FunctionDefinition {
                 location,
-                name: function_name.clone(),
+                name: Rc::clone(&function_name),
                 function_type: Some(function_scheme),
                 function_bodies: bodies,
             })),
@@ -130,8 +138,8 @@ fn contract_function_declarations(
     // Add the remaining functions that do not have a defined type.
     for (function_name, bodies) in function_bodies {
         function_declarations.push(Rc::new(FunctionDefinition {
-            location: bodies.get(0).unwrap().location.clone(),
-            name: function_name.clone(),
+            location: Rc::clone(&bodies.get(0).unwrap().location),
+            name: function_name,
             function_type: None,
             function_bodies: bodies,
         }));
@@ -142,23 +150,20 @@ fn contract_function_declarations(
 
 fn to_module(
     pair: Pair<Rule>,
-    module_name: String,
-    file_name: &String,
+    module_name: &Rc<String>,
+    file_name: &Rc<String>,
     line_starts: &Vec<usize>,
 ) -> Result<Module, ParseError> {
     match pair.as_rule() {
         Rule::ast => {
-            let (adt_definitions,
-                record_definitions,
-                function_declarations,
-                exports,
-                imports) = to_declaration_block_elements(pair.into_inner(), file_name, line_starts)?;
+            let (adt_definitions, record_definitions, function_declarations, exports, imports) =
+                to_declaration_block_elements(pair.into_inner(), file_name, line_starts)?;
             return Ok(Module {
-                name: module_name,
-                file_name: file_name.clone(),
+                name: Rc::clone(module_name),
+                file_name: Rc::clone(file_name),
                 exported_members: exports,
                 imports,
-                function_declarations,
+                function_definitions: function_declarations,
                 adt_definitions,
                 record_definitions,
             });
@@ -169,11 +174,20 @@ fn to_module(
 
 fn to_declaration_block_elements(
     pairs: Pairs<Rule>,
-    file_name: &String,
+    file_name: &Rc<String>,
     line_starts: &Vec<usize>,
-) -> Result<(Vec<Rc<ADTDefinition>>, Vec<Rc<RecordDefinition>>, Vec<Rc<FunctionDefinition>>, HashSet<ExportMember>, Vec<Import>), ParseError> {
+) -> Result<
+    (
+        Vec<Rc<ADTDefinition>>,
+        Vec<Rc<RecordDefinition>>,
+        Vec<Rc<FunctionDefinition>>,
+        HashSet<ExportMember>,
+        Vec<Rc<Import>>,
+    ),
+    ParseError,
+> {
     let mut function_types = HashMap::new();
-    let mut function_bodies = HashMap::new();
+    let mut function_bodies : HashMap<Rc<String>, Vec<Rc<FunctionBody>>>= HashMap::new();
 
     let mut adt_definitions = Vec::new();
     let mut record_definitions = Vec::new();
@@ -186,16 +200,22 @@ fn to_declaration_block_elements(
             Rule::type_definition => {
                 let child = pair.into_inner().next().unwrap();
                 match child.as_rule() {
-                    Rule::adt_definition => adt_definitions.push(Rc::new(to_adt_type(child, file_name, line_starts))),
-                    Rule::record_definition => record_definitions.push(Rc::new(to_record_type(child, file_name, line_starts))),
-                    r => unreachable!("{:?}", r)
+                    Rule::adt_definition => {
+                        adt_definitions.push(Rc::new(to_adt_type(child, file_name, line_starts)))
+                    }
+                    Rule::record_definition => record_definitions.push(Rc::new(to_record_type(
+                        child,
+                        file_name,
+                        line_starts,
+                    ))),
+                    r => unreachable!("{:?}", r),
                 }
             }
             Rule::function_body => {
                 let fb = Rc::new(to_function_body(file_name, pair, line_starts)?);
                 match function_bodies.get_mut(&fb.name) {
                     None => {
-                        function_bodies.insert(fb.name.clone(), vec![fb]);
+                        function_bodies.insert(Rc::clone(&fb.name), vec![fb]);
                     }
                     Some(bodies) => bodies.push(fb),
                 };
@@ -203,17 +223,17 @@ fn to_declaration_block_elements(
             Rule::function_type_definition => {
                 let (line, col) = line_col_number(line_starts, pair.as_span().start());
                 let mut elements = pair.into_inner();
-                let function_name = elements.next().unwrap().as_str().to_string();
+                let function_name = Rc::new(elements.next().unwrap().as_str().to_string());
                 let function_type = to_type(elements.next().unwrap());
                 function_types.insert(
-                    function_name.clone(),
+                    Rc::clone(&function_name),
                     (
-                        Location {
-                            file: file_name.clone(),
-                            function: function_name.clone(),
+                        Rc::new(Location {
+                            file: Rc::clone(file_name),
+                            function: Rc::clone(&function_name),
                             line,
                             col,
-                        },
+                        }),
                         Rc::new(TypeScheme {
                             bound_variables: function_type.collect_free_type_variables(),
                             enclosed_type: Rc::new(function_type),
@@ -230,18 +250,39 @@ fn to_declaration_block_elements(
                 match module_import.as_rule() {
                     Rule::module_import_full => {
                         let mut members = module_import.into_inner();
-                        let defined_module_name = members.next().unwrap().as_str().to_string();
-                        module_imports.push(Import::ImportModule(Location { file: file_name.clone(), function: "".to_owned(), line, col }, defined_module_name, members.next().map(|r| r.as_str().to_string())))
+                        let defined_module_name =
+                            Rc::new(members.next().unwrap().as_str().to_string());
+                        module_imports.push(Rc::new(Import::ImportModule(
+                            Rc::new(Location {
+                                file: Rc::clone(file_name),
+                                function: Rc::new("".to_owned()),
+                                line,
+                                col,
+                            }),
+                            defined_module_name,
+                            members.next().map(|r| Rc::new(r.as_str().to_string())),
+                        )))
                     }
                     Rule::module_import_members => {
                         let mut members = module_import.into_inner();
-                        let defined_module_name = members.next().unwrap().as_str().to_string();
-                        let imported_members = members.into_iter()
-                            .map(|m| m.as_str().to_string())
+                        let defined_module_name =
+                            Rc::new(members.next().unwrap().as_str().to_string());
+                        let imported_members = members
+                            .into_iter()
+                            .map(|m| Rc::new(m.as_str().to_string()))
                             .collect();
-                        module_imports.push(Import::ImportMembers(Location { file: file_name.clone(), function: "".to_owned(), line, col }, defined_module_name, imported_members))
+                        module_imports.push(Rc::new(Import::ImportMembers(
+                            Rc::new(Location {
+                                file: Rc::clone(file_name),
+                                function: Rc::new("".to_owned()),
+                                line,
+                                col,
+                            }),
+                            defined_module_name,
+                            imported_members,
+                        )))
                     }
-                    _ => unreachable!("Module import: {:?}", module_import)
+                    _ => unreachable!("Module import: {:?}", module_import),
                 }
             }
             _ => continue,
@@ -252,22 +293,23 @@ fn to_declaration_block_elements(
         record_definitions,
         contract_function_declarations(function_bodies, function_types)?,
         module_exports,
-        module_imports
+        module_imports,
     ))
 }
 
 fn to_adt_type(
     adt_definition: Pair<Rule>,
-    file_name: &String,
+    file_name: &Rc<String>,
     line_starts: &Vec<usize>,
 ) -> ADTDefinition {
-    let mut elements = adt_definition.clone().into_inner();
-    let name = elements.next().unwrap().as_str().to_string();
+    let (line, col) = line_col_number(line_starts, adt_definition.as_span().start());
+    let mut elements = adt_definition.into_inner();
+    let name = Rc::new(elements.next().unwrap().as_str().to_string());
     let type_variables = elements
         .next()
         .unwrap()
         .into_inner()
-        .map(|tv| tv.as_str().to_string())
+        .map(|tv| Rc::new(tv.as_str().to_string()))
         .collect();
 
     let constructors = elements
@@ -277,28 +319,26 @@ fn to_adt_type(
         .map(|alternative_rule| {
             let mut alternative_elements = alternative_rule.into_inner();
             let alternative_name =
-                alternative_elements.next().unwrap().as_str().to_string();
+                Rc::new(alternative_elements.next().unwrap().as_str().to_string());
             let alternative_elements = alternative_elements.map(to_type).map(Rc::new).collect();
             (
-                alternative_name.clone(),
-                ADTConstructor {
-                    name: alternative_name.clone(),
+                Rc::clone(&alternative_name),
+                Rc::new(ADTConstructor {
+                    name: Rc::clone(&alternative_name),
                     elements: alternative_elements,
-                },
+                }),
             )
         })
         .collect();
 
-    let (line, col) =
-        line_col_number(line_starts, adt_definition.clone().as_span().start());
     ADTDefinition {
-        name: name.clone(),
-        location: Location {
-            file: file_name.clone(),
-            function: name.clone(),
+        name: Rc::clone(&name),
+        location: Rc::new(Location {
+            file: Rc::clone(file_name),
+            function: Rc::clone(&name),
             line,
             col,
-        },
+        }),
         constructors,
         type_variables,
     }
@@ -306,16 +346,17 @@ fn to_adt_type(
 
 fn to_record_type(
     record_definition: Pair<Rule>,
-    file_name: &String,
+    file_name: &Rc<String>,
     line_starts: &Vec<usize>,
 ) -> RecordDefinition {
-    let mut elements = record_definition.clone().into_inner();
-    let name = elements.next().unwrap().as_str().to_string();
+    let (line, col) = line_col_number(line_starts, record_definition.as_span().start());
+    let mut elements = record_definition.into_inner();
+    let name = Rc::new(elements.next().unwrap().as_str().to_string());
     let type_variables = elements
         .next()
         .unwrap()
         .into_inner()
-        .map(|tv| tv.as_str().to_string())
+        .map(|tv| Rc::new(tv.as_str().to_string()))
         .collect();
     let fields = elements
         .next()
@@ -325,27 +366,25 @@ fn to_record_type(
             let mut field_elements = field_rule.into_inner();
             let field_name = field_elements.next().unwrap().as_str().to_string();
             let field_type = to_type(field_elements.next().unwrap());
-            (field_name, Rc::new(field_type))
+            (Rc::new(field_name), Rc::new(field_type))
         })
         .collect();
 
-    let (line, col) =
-        line_col_number(line_starts, record_definition.clone().as_span().start());
     RecordDefinition {
-        name: name.clone(),
-        location: Location {
-            file: file_name.clone(),
-            function: name.clone(),
+        name: Rc::clone(&name),
+        location: Rc::new(Location {
+            file: Rc::clone(file_name),
+            function: Rc::clone(&name),
             line,
             col,
-        },
+        }),
         fields,
         type_variables,
     }
 }
 
 fn to_function_body(
-    file_name: &String,
+    file_name: &Rc<String>,
     pair: Pair<Rule>,
     line_starts: &Vec<usize>,
 ) -> Result<FunctionBody, ParseError> {
@@ -353,20 +392,22 @@ fn to_function_body(
 
     let mut parents = pair.into_inner();
     let mut function_header_elements = parents.next().unwrap().into_inner();
-    let function_name = function_header_elements
-        .next()
-        .unwrap()
-        .as_str()
-        .to_string();
+    let function_name = Rc::new(
+        function_header_elements
+            .next()
+            .unwrap()
+            .as_str()
+            .to_string(),
+    );
 
     let mut match_expressions = Vec::new();
     for r in function_header_elements {
-        match_expressions.push(to_match_expression(
+        match_expressions.push(Rc::new(to_match_expression(
             r.into_inner().next().unwrap(),
             file_name,
             &function_name,
             line_starts,
-        ));
+        )));
     }
 
     let mut rules = Vec::new();
@@ -377,27 +418,30 @@ fn to_function_body(
         match r.as_rule() {
             // Guaranteed to only occur once.
             Rule::local_definitions => {
-                let (adt_definitions,
-                    record_definitions,
-                    function_definitions, _, _) =
+                let (adt_definitions, record_definitions, function_definitions, _, _) =
                     to_declaration_block_elements(r.into_inner(), file_name, line_starts)?;
                 local_function_definitions = function_definitions;
                 local_adt_definitions = adt_definitions;
                 local_record_definitions = record_definitions;
             }
-            _ => rules.push(to_function_rule(r, file_name, &function_name, line_starts)),
+            _ => rules.push(Rc::new(to_function_rule(
+                r,
+                file_name,
+                &function_name,
+                line_starts,
+            ))),
         }
     }
 
-    let location = Location {
-        file: file_name.clone(),
-        function: function_name.clone(),
+    let location = Rc::new(Location {
+        file: Rc::clone(file_name),
+        function: Rc::clone(&function_name),
         line,
         col,
-    };
+    });
     Ok(FunctionBody {
-        name: function_name.clone(),
-        location: location.clone(),
+        name: Rc::clone(&function_name),
+        location: Rc::clone(&location),
         match_expressions,
         rules,
         local_function_definitions,
@@ -408,8 +452,8 @@ fn to_function_body(
 
 fn to_expression(
     expression: Pair<Rule>,
-    file_name: &String,
-    function_name: &String,
+    file_name: &Rc<String>,
+    function_name: &Rc<String>,
     line_starts: &Vec<usize>,
 ) -> Expression {
     PREC_CLIMBER.climb(
@@ -420,30 +464,30 @@ fn to_expression(
         },
         |lhs: Expression, op: Pair<Rule>, rhs: Expression| {
             let (line, col) = line_col_number(line_starts, op.as_span().start());
-            let loc_info = Location {
-                file: file_name.clone(),
-                function: function_name.clone(),
+            let loc_info = Rc::new(Location {
+                file: Rc::clone(file_name),
+                function: Rc::clone(function_name),
                 line,
                 col,
-            };
+            });
             match op.as_rule() {
-                Rule::times => Times(loc_info, Box::new(lhs), Box::new(rhs)),
-                Rule::divide => Divide(loc_info, Box::new(lhs), Box::new(rhs)),
-                Rule::modulo => Modulo(loc_info, Box::new(lhs), Box::new(rhs)),
-                Rule::add => Add(loc_info, Box::new(lhs), Box::new(rhs)),
-                Rule::substract => Subtract(loc_info, Box::new(lhs), Box::new(rhs)),
-                Rule::shift_left => ShiftLeft(loc_info, Box::new(lhs), Box::new(rhs)),
-                Rule::shift_right => ShiftRight(loc_info, Box::new(lhs), Box::new(rhs)),
-                Rule::lesser => Lesser(loc_info, Box::new(lhs), Box::new(rhs)),
-                Rule::leq => Leq(loc_info, Box::new(lhs), Box::new(rhs)),
-                Rule::greater => Greater(loc_info, Box::new(lhs), Box::new(rhs)),
-                Rule::greq => Greq(loc_info, Box::new(lhs), Box::new(rhs)),
-                Rule::eq => Eq(loc_info, Box::new(lhs), Box::new(rhs)),
-                Rule::neq => Neq(loc_info, Box::new(lhs), Box::new(rhs)),
-                Rule::and => And(loc_info, Box::new(lhs), Box::new(rhs)),
-                Rule::or => Or(loc_info, Box::new(lhs), Box::new(rhs)),
+                Rule::times => Times(loc_info, Rc::new(lhs), Rc::new(rhs)),
+                Rule::divide => Divide(loc_info, Rc::new(lhs), Rc::new(rhs)),
+                Rule::modulo => Modulo(loc_info, Rc::new(lhs), Rc::new(rhs)),
+                Rule::add => Add(loc_info, Rc::new(lhs), Rc::new(rhs)),
+                Rule::substract => Subtract(loc_info, Rc::new(lhs), Rc::new(rhs)),
+                Rule::shift_left => ShiftLeft(loc_info, Rc::new(lhs), Rc::new(rhs)),
+                Rule::shift_right => ShiftRight(loc_info, Rc::new(lhs), Rc::new(rhs)),
+                Rule::lesser => Lesser(loc_info, Rc::new(lhs), Rc::new(rhs)),
+                Rule::leq => Leq(loc_info, Rc::new(lhs), Rc::new(rhs)),
+                Rule::greater => Greater(loc_info, Rc::new(lhs), Rc::new(rhs)),
+                Rule::greq => Greq(loc_info, Rc::new(lhs), Rc::new(rhs)),
+                Rule::eq => Eq(loc_info, Rc::new(lhs), Rc::new(rhs)),
+                Rule::neq => Neq(loc_info, Rc::new(lhs), Rc::new(rhs)),
+                Rule::and => And(loc_info, Rc::new(lhs), Rc::new(rhs)),
+                Rule::or => Or(loc_info, Rc::new(lhs), Rc::new(rhs)),
                 Rule::record_field_access => {
-                    RecordFieldAccess(loc_info, Box::new(lhs), Box::new(rhs))
+                    RecordFieldAccess(loc_info, Rc::new(lhs), Rc::new(rhs))
                 }
                 r => panic!("Prec climber unhandled rule: {:#?}", r),
             }
@@ -453,23 +497,23 @@ fn to_expression(
 
 fn to_term(
     pair: Pair<Rule>,
-    file_name: &String,
-    function_name: &String,
+    file_name: &Rc<String>,
+    function_name: &Rc<String>,
     line_starts: &Vec<usize>,
 ) -> Expression {
     let (line, col) = line_col_number(line_starts, pair.as_span().start());
-    let loc_info = Location {
-        file: file_name.clone(),
-        function: function_name.clone(),
+    let loc_info = Rc::new(Location {
+        file: Rc::clone(file_name),
+        function: Rc::clone(function_name),
         line,
         col,
-    };
+    });
     let sub = pair.into_inner().next().unwrap();
     match sub.as_rule() {
         Rule::bool_literal => BoolLiteral(loc_info, sub.as_str().parse::<bool>().unwrap()),
         Rule::string_literal => StringLiteral(
             loc_info,
-            sub.into_inner().next().unwrap().as_str().to_string(),
+            Rc::new(sub.into_inner().next().unwrap().as_str().to_string()),
         ),
         Rule::char_literal => {
             CharacterLiteral(loc_info, sub.as_str().to_string().chars().nth(1).unwrap())
@@ -480,11 +524,11 @@ fn to_term(
             let mut subs = sub.into_inner();
             let function = subs.next().unwrap().as_str();
             let arguments = subs
-                .map(|a| to_term(a, file_name, function_name, line_starts))
+                .map(|a| Rc::new(to_term(a, file_name, function_name, line_starts)))
                 .collect();
-            Call(loc_info, function.to_string(), arguments)
+            Call(loc_info, Rc::new(function.to_string()), arguments)
         }
-        Rule::qualifiable_identifier => Variable(loc_info, sub.as_str().to_string()),
+        Rule::qualifiable_identifier => Variable(loc_info, Rc::new(sub.as_str().to_string())),
         Rule::subexpr => to_expression(
             sub.into_inner().next().unwrap(),
             file_name,
@@ -493,7 +537,7 @@ fn to_term(
         ),
         Rule::negation => Negation(
             loc_info,
-            Box::new(to_expression(
+            Rc::new(to_expression(
                 sub.into_inner().next().unwrap(),
                 file_name,
                 function_name,
@@ -502,7 +546,7 @@ fn to_term(
         ),
         Rule::minus => Minus(
             loc_info,
-            Box::new(to_expression(
+            Rc::new(to_expression(
                 sub.into_inner().next().unwrap(),
                 file_name,
                 function_name,
@@ -512,23 +556,23 @@ fn to_term(
         Rule::tuple_literal => TupleLiteral(
             loc_info,
             sub.into_inner()
-                .map(|te| to_expression(te, file_name, function_name, line_starts))
+                .map(|te| Rc::new(to_expression(te, file_name, function_name, line_starts)))
                 .collect(),
         ),
         Rule::list_empty => EmptyListLiteral(loc_info),
         Rule::list_singleton => ShorthandListLiteral(
             loc_info,
-            vec![to_expression(
+            vec![Rc::new(to_expression(
                 sub.into_inner().nth(0).unwrap(),
                 file_name,
                 function_name,
                 line_starts,
-            )],
+            ))],
         ),
         Rule::list_shorthand => ShorthandListLiteral(
             loc_info,
             sub.into_inner()
-                .map(|te| to_expression(te, file_name, function_name, line_starts))
+                .map(|te| Rc::new(to_expression(te, file_name, function_name, line_starts)))
                 .collect(),
         ),
         Rule::list_longhand => {
@@ -537,8 +581,8 @@ fn to_term(
             let tail = children.next().unwrap();
             LonghandListLiteral(
                 loc_info,
-                Box::new(to_expression(head, file_name, function_name, line_starts)),
-                Box::new(to_expression(tail, file_name, function_name, line_starts)),
+                Rc::new(to_expression(head, file_name, function_name, line_starts)),
+                Rc::new(to_expression(tail, file_name, function_name, line_starts)),
             )
         }
         Rule::case_expression => {
@@ -552,12 +596,12 @@ fn to_term(
             let rules = children
                 .map(|match_rule| {
                     let (line, col) = line_col_number(line_starts, match_rule.as_span().start());
-                    let location = Location {
-                        file: file_name.clone(),
-                        function: function_name.clone(),
+                    let location = Rc::new(Location {
+                        file: Rc::clone(file_name),
+                        function: Rc::clone(function_name),
                         line,
                         col,
-                    };
+                    });
                     let mut scs = match_rule.into_inner();
                     let case_rule = to_match_expression(
                         scs.next().unwrap().into_inner().next().unwrap(),
@@ -567,22 +611,22 @@ fn to_term(
                     );
                     let result_rule =
                         to_expression(scs.next().unwrap(), file_name, function_name, line_starts);
-                    CaseRule {
+                    Rc::new(CaseRule {
                         loc_info: location,
-                        case_rule,
-                        result_rule,
-                    }
+                        case_rule: Rc::new(case_rule),
+                        result_rule: Rc::new(result_rule),
+                    })
                 })
                 .collect();
-            Case(loc_info, Box::new(expression), rules)
+            Case(loc_info, Rc::new(expression), rules)
         }
         Rule::adt_term => {
             let mut elements = sub.into_inner();
             let alternative = elements.next().unwrap().as_str().to_string();
             let arguments = elements
-                .map(|e| to_expression(e, file_name, function_name, line_starts))
+                .map(|e| Rc::new(to_expression(e, file_name, function_name, line_starts)))
                 .collect();
-            ADTTypeConstructor(loc_info, alternative, arguments)
+            ADTTypeConstructor(loc_info, Rc::new(alternative), arguments)
         }
 
         Rule::record_term => {
@@ -602,25 +646,25 @@ fn to_term(
                         function_name,
                         line_starts,
                     );
-                    (identifier, expression)
+                    (Rc::new(identifier), Rc::new(expression))
                 })
                 .collect();
 
-            Record(loc_info, record_name, field_expressions)
+            Record(loc_info, Rc::new(record_name), field_expressions)
         }
         Rule::lambda => {
             let mut elements = sub.into_inner();
-            let argument_match_expressions: Vec<MatchExpression> = elements
+            let argument_match_expressions: Vec<Rc<MatchExpression>> = elements
                 .next()
                 .unwrap()
                 .into_inner()
                 .map(|me| {
-                    to_match_expression(
+                    Rc::new(to_match_expression(
                         me.into_inner().next().unwrap(),
                         file_name,
                         function_name,
                         line_starts,
-                    )
+                    ))
                 })
                 .collect();
             let body = to_expression(
@@ -629,7 +673,7 @@ fn to_term(
                 function_name,
                 line_starts,
             );
-            Lambda(loc_info, argument_match_expressions, Box::new(body))
+            Lambda(loc_info, argument_match_expressions, Rc::new(body))
         }
 
         r => panic!("Reached term {:#?}", r),
@@ -638,8 +682,8 @@ fn to_term(
 
 fn to_function_rule(
     pair: Pair<Rule>,
-    file_name: &String,
-    function_name: &String,
+    file_name: &Rc<String>,
+    function_name: &Rc<String>,
     line_starts: &Vec<usize>,
 ) -> FunctionRule {
     match pair.as_rule() {
@@ -650,31 +694,31 @@ fn to_function_rule(
             let left = to_expression(rules.next().unwrap(), file_name, function_name, line_starts);
             let right = to_expression(rules.next().unwrap(), file_name, function_name, line_starts);
             FunctionRule::ConditionalRule(
-                Location {
-                    file: file_name.clone(),
-                    function: function_name.clone(),
+                Rc::new(Location {
+                    file: Rc::clone(file_name),
+                    function: Rc::clone(function_name),
                     line,
                     col,
-                },
-                left,
-                right,
+                }),
+                Rc::new(left),
+                Rc::new(right),
             )
         }
         Rule::function_expression_rule => {
             let (line, col) = line_col_number(line_starts, pair.as_span().start());
             FunctionRule::ExpressionRule(
-                Location {
-                    file: file_name.clone(),
-                    function: function_name.clone(),
+                Rc::new(Location {
+                    file: Rc::clone(file_name),
+                    function: Rc::clone(function_name),
                     line,
                     col,
-                },
-                to_expression(
+                }),
+                Rc::new(to_expression(
                     pair.into_inner().next().unwrap(),
                     file_name,
                     function_name,
                     line_starts,
-                ),
+                )),
             )
         }
         Rule::function_let_rule => {
@@ -693,14 +737,14 @@ fn to_function_rule(
                 line_starts,
             );
             FunctionRule::LetRule(
-                Location {
-                    file: file_name.clone(),
-                    function: function_name.clone(),
+                Rc::new(Location {
+                    file: Rc::clone(file_name),
+                    function: Rc::clone(function_name),
                     line,
                     col,
-                },
-                identifier,
-                expression,
+                }),
+                Rc::new(identifier),
+                Rc::new(expression),
             )
         }
         r => unreachable!("to_function_rule reached: {:#?}", r),
@@ -709,27 +753,34 @@ fn to_function_rule(
 
 fn to_match_expression(
     match_expression: Pair<Rule>,
-    file_name: &String,
-    function_name: &String,
+    file_name: &Rc<String>,
+    function_name: &Rc<String>,
     line_starts: &Vec<usize>,
 ) -> MatchExpression {
     let (line, col) = line_col_number(line_starts, match_expression.as_span().start());
-    let loc_info = Location {
-        file: file_name.clone(),
-        function: function_name.clone(),
+    let loc_info = Rc::new(Location {
+        file: Rc::clone(file_name),
+        function: Rc::clone(function_name),
         line,
         col,
-    };
+    });
     match match_expression.as_rule() {
         Rule::identifier => {
-            MatchExpression::Identifier(loc_info, match_expression.as_str().to_string())
+            MatchExpression::Identifier(loc_info, Rc::new(match_expression.as_str().to_string()))
         }
         Rule::match_wildcard => MatchExpression::Wildcard(loc_info),
         Rule::tuple_match => MatchExpression::Tuple(
-            loc_info,
+            Rc::clone(&loc_info),
             match_expression
                 .into_inner()
-                .map(|e| to_match_expression(e, file_name, function_name, line_starts))
+                .map(|e| {
+                    Rc::new(to_match_expression(
+                        e,
+                        file_name,
+                        function_name,
+                        line_starts,
+                    ))
+                })
                 .collect(),
         ),
         Rule::sub_match => to_match_expression(
@@ -740,19 +791,26 @@ fn to_match_expression(
         ),
         Rule::list_match_empty => MatchExpression::ShorthandList(loc_info, vec![]),
         Rule::list_match_singleton => MatchExpression::ShorthandList(
-            loc_info,
-            vec![to_match_expression(
+            Rc::clone(&loc_info),
+            vec![Rc::new(to_match_expression(
                 match_expression.into_inner().next().unwrap(),
                 file_name,
                 function_name,
                 line_starts,
-            )],
+            ))],
         ),
         Rule::list_match_shorthand => MatchExpression::ShorthandList(
-            loc_info,
+            Rc::clone(&loc_info),
             match_expression
                 .into_inner()
-                .map(|e| to_match_expression(e, file_name, function_name, line_starts))
+                .map(|e| {
+                    Rc::new(to_match_expression(
+                        e,
+                        file_name,
+                        function_name,
+                        line_starts,
+                    ))
+                })
                 .collect(),
         ),
         Rule::list_match_longhand => {
@@ -761,14 +819,14 @@ fn to_match_expression(
                 to_match_expression(inner.next().unwrap(), file_name, function_name, line_starts);
             let tail =
                 to_match_expression(inner.next().unwrap(), file_name, function_name, line_starts);
-            MatchExpression::LonghandList(loc_info, Box::new(head), Box::new(tail))
+            MatchExpression::LonghandList(loc_info, Rc::new(head), Rc::new(tail))
         }
         Rule::number => MatchExpression::IntLiteral(
-            loc_info,
+            Rc::clone(&loc_info),
             match_expression.as_str().parse::<isize>().unwrap(),
         ),
         Rule::char_literal => MatchExpression::CharLiteral(
-            loc_info,
+            Rc::clone(&loc_info),
             match_expression
                 .as_str()
                 .to_string()
@@ -777,16 +835,18 @@ fn to_match_expression(
                 .unwrap(),
         ),
         Rule::string_literal => MatchExpression::StringLiteral(
-            loc_info,
-            match_expression
-                .into_inner()
-                .next()
-                .unwrap()
-                .as_str()
-                .to_string(),
+            Rc::clone(&loc_info),
+            Rc::new(
+                match_expression
+                    .into_inner()
+                    .next()
+                    .unwrap()
+                    .as_str()
+                    .to_string(),
+            ),
         ),
         Rule::bool_literal => MatchExpression::BoolLiteral(
-            loc_info,
+            Rc::clone(&loc_info),
             match_expression.as_str().parse::<bool>().unwrap(),
         ),
         Rule::adt_match => {
@@ -794,10 +854,17 @@ fn to_match_expression(
             let alternative_name = elements.next().unwrap().as_str().to_string();
 
             MatchExpression::ADT(
-                loc_info,
-                alternative_name,
+                Rc::clone(&loc_info),
+                Rc::new(alternative_name),
                 elements
-                    .map(|m| to_match_expression(m, file_name, function_name, line_starts))
+                    .map(|m| {
+                        Rc::new(to_match_expression(
+                            m,
+                            file_name,
+                            function_name,
+                            line_starts,
+                        ))
+                    })
                     .collect(),
             )
         }
@@ -806,9 +873,9 @@ fn to_match_expression(
             let mut children = match_expression.into_inner();
             let name = children.next().unwrap().as_str().to_string();
             MatchExpression::Record(
-                loc_info,
-                name,
-                children.map(|e| e.as_str().to_string()).collect(),
+                Rc::clone(&loc_info),
+                Rc::new(name),
+                children.map(|e| Rc::new(e.as_str().to_string())).collect(),
             )
         }
 
@@ -827,7 +894,7 @@ fn to_type(pair: Pair<Rule>) -> Type {
         Rule::list_type => Type::List(Rc::new(to_type(pair.into_inner().next().unwrap()))),
         Rule::custom_type_single => {
             let name = pair.into_inner().next().unwrap().as_str().to_string();
-            Type::UserType(name, vec![])
+            Type::UserType(Rc::new(name), vec![])
         }
         Rule::custom_type => {
             let mut elements = pair.into_inner();
@@ -837,9 +904,9 @@ fn to_type(pair: Pair<Rule>) -> Type {
             while let Some(e) = elements.next() {
                 type_arguments.push(Rc::new(to_type(e)))
             }
-            Type::UserType(name, type_arguments)
+            Type::UserType(Rc::new(name), type_arguments)
         }
-        Rule::type_variable => Type::Variable(pair.as_str().to_string()),
+        Rule::type_variable => Type::Variable(Rc::new(pair.as_str().to_string())),
         Rule::function_type => {
             let types: Vec<Rc<Type>> = pair.into_inner().map(|t| Rc::new(to_type(t))).collect();
 

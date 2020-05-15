@@ -1,14 +1,18 @@
-use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::path::{PathBuf};
-
-use crate::{ADTConstructor, ADTDefinition, FunctionDefinition, Import, Location, Module, parser, RecordDefinition};
-use crate::inferencer::{ExternalDefinitions, infer, InferencerOptions, TypedModule};
-use crate::module_system::ModuleError::ModuleNotFound;
-use crate::parser::parse;
-use std::rc::Rc;
-use std::fmt::{Display, Formatter};
 use core::fmt;
+use std::borrow::Borrow;
+use std::collections::{HashMap, HashSet};
+use std::fmt::{Display, Formatter};
+use std::fs;
+use std::path::PathBuf;
+use std::rc::Rc;
+
+use crate::ast::{
+    ADTConstructor, ADTDefinition, FunctionDefinition, Import, Location, Module, RecordDefinition,
+};
+use crate::inferencer::{infer, ExternalDefinitions, InferencerOptions, TypedModule};
+use crate::module_system::ModuleError::ModuleNotFound;
+use crate::parser;
+use crate::parser::parse;
 
 #[derive(Debug)]
 pub enum Error {
@@ -22,30 +26,45 @@ impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Error::FileError(e) => write!(f, "{}", e),
-            Error::ParseError(pes)
-            => write!(f, "{}", pes.iter().map(|pe| pe.to_string()).collect::<Vec<String>>()
-                    .join("\n")),
-            Error::InferenceError(ies)
-            => write!(f, "{}", ies.iter().map(|pe| pe.to_string()).collect::<Vec<String>>()
-                .join("\n")),
-            Error::ModuleError(mes)
-            => write!(f, "{}", mes.iter().map(|pe| pe.to_string()).collect::<Vec<String>>()
-                .join("\n")),
+            Error::ParseError(pes) => write!(
+                f,
+                "{}",
+                pes.iter()
+                    .map(|pe| pe.to_string())
+                    .collect::<Vec<String>>()
+                    .join("\n")
+            ),
+            Error::InferenceError(ies) => write!(
+                f,
+                "{}",
+                ies.iter()
+                    .map(|pe| pe.to_string())
+                    .collect::<Vec<String>>()
+                    .join("\n")
+            ),
+            Error::ModuleError(mes) => write!(
+                f,
+                "{}",
+                mes.iter()
+                    .map(|pe| pe.to_string())
+                    .collect::<Vec<String>>()
+                    .join("\n")
+            ),
         }
     }
 }
 
 #[derive(Debug)]
 pub enum ModuleError {
-    ModuleNotFound(String),
+    ModuleNotFound(Rc<String>),
 
     LocalDefinitionAlsoInImportedModule(),
     DefinitionInMultipleImportedModules(),
 
     ModuleAliasMultiplyDefined(),
 
-    FunctionNotDefinedInModule(Location, String, String),
-    TypeNotDefinedInModule(Location, String, String),
+    FunctionNotDefinedInModule(Rc<Location>, Rc<String>, Rc<String>),
+    TypeNotDefinedInModule(Rc<Location>, Rc<String>, Rc<String>),
 }
 
 impl Display for ModuleError {
@@ -53,11 +72,21 @@ impl Display for ModuleError {
         write!(f, "Module error: ")?;
         match self {
             ModuleNotFound(name) => write!(f, "Module '{}' not found", name),
-            ModuleError::LocalDefinitionAlsoInImportedModule() => write!(f, "Local definition also in imported module"),
-            ModuleError::DefinitionInMultipleImportedModules() => write!(f, "DefinitionInMultipleImportedModules"),
+            ModuleError::LocalDefinitionAlsoInImportedModule() => {
+                write!(f, "Local definition also in imported module")
+            }
+            ModuleError::DefinitionInMultipleImportedModules() => {
+                write!(f, "DefinitionInMultipleImportedModules")
+            }
             ModuleError::ModuleAliasMultiplyDefined() => write!(f, "ModuleAliasMultiplyDefined"),
-            ModuleError::FunctionNotDefinedInModule(_, module, function) => write!(f, "Function '{}' not found in module '{}'", function, module),
-            ModuleError::TypeNotDefinedInModule(_,module, type_name) => write!(f, "Type '{}' not found in module '{}'", type_name, module),
+            ModuleError::FunctionNotDefinedInModule(_, module, function) => write!(
+                f,
+                "Function '{}' not found in module '{}'",
+                function, module
+            ),
+            ModuleError::TypeNotDefinedInModule(_, module, type_name) => {
+                write!(f, "Type '{}' not found in module '{}'", type_name, module)
+            }
         }
     }
 }
@@ -87,23 +116,32 @@ impl Display for ModuleError {
 
 #[derive(Debug, Clone)]
 enum ModuleName {
-    ModuleName(String),
-    ModuleFileName(String),
+    ModuleName(Rc<String>),
+    ModuleFileName(Rc<String>),
 }
 
 impl ModuleName {
-    fn name(&self) -> String {
+    fn name(&self) -> Rc<String> {
         match self {
-            ModuleName::ModuleName(n) => n.clone(),
-            ModuleName::ModuleFileName(n) => n.clone(),
+            ModuleName::ModuleName(n) => Rc::clone(n),
+            ModuleName::ModuleFileName(n) => Rc::clone(n),
         }
     }
 }
 
-pub fn compile_modules(main_module: String, infer_options: &InferencerOptions) -> Result<TypedModule, Error> {
-    let infer_stack: Vec<Module> = parse_modules(vec![ModuleName::ModuleFileName(main_module.clone())], PathBuf::from(&main_module).parent().unwrap().to_path_buf())?;
+pub fn compile_modules(
+    main_module: String,
+    infer_options: &InferencerOptions,
+) -> Result<(TypedModule, HashMap<Rc<String>, Rc<TypedModule>>), Error> {
+    let infer_stack: Vec<Module> = parse_modules(
+        vec![ModuleName::ModuleFileName(Rc::new(main_module.clone()))],
+        PathBuf::from(&main_module.clone())
+            .parent()
+            .unwrap()
+            .to_path_buf(),
+    )?;
 
-    let mut inferred_modules_by_name: HashMap<String, Rc<TypedModule>> = HashMap::new();
+    let mut inferred_modules_by_name: HashMap<Rc<String>, Rc<TypedModule>> = HashMap::new();
 
     let mut infer_stack_peekable = infer_stack.into_iter().peekable();
     while let Some(module) = infer_stack_peekable.next() {
@@ -113,46 +151,89 @@ pub fn compile_modules(main_module: String, infer_options: &InferencerOptions) -
         let mut errors = Vec::new();
 
         // 1. Retrieve all dependencies
-        let mut imported_records: HashMap<String, Rc<RecordDefinition>> = HashMap::new();
-        let mut imported_adts: HashMap<String, Rc<ADTDefinition>> = HashMap::new();
-        let mut imported_functions: HashMap<String, Rc<FunctionDefinition>> = HashMap::new();
+        let mut imported_records: HashMap<Rc<String>, Rc<RecordDefinition>> = HashMap::new();
+        let mut imported_adts: HashMap<Rc<String>, Rc<ADTDefinition>> = HashMap::new();
+        let mut imported_functions: HashMap<Rc<String>, Rc<FunctionDefinition>> = HashMap::new();
 
         for import in &module.imports {
             let imported_module_name = import_to_module(&import);
-            let typed_module = Rc::clone(inferred_modules_by_name.get(&imported_module_name).unwrap());
+            let typed_module =
+                Rc::clone(inferred_modules_by_name.get(&imported_module_name).unwrap());
 
-            match import {
+            match import.borrow() {
                 Import::ImportMembers(loc, _, members) => {
                     for m in members {
                         if m.chars().next().unwrap().is_ascii_uppercase() {
-                            if let Some(record_definition) = typed_module.record_name_to_definition.get(m) {
+                            if let Some(record_definition) =
+                                typed_module.record_name_to_definition.get(m)
+                            {
                                 imported_records.insert(m.clone(), Rc::clone(record_definition));
-                            } else if let Some(adt_definition) = typed_module.adt_name_to_definition.get(m) {
+                            } else if let Some(adt_definition) =
+                                typed_module.adt_name_to_definition.get(m)
+                            {
                                 imported_adts.insert(m.clone(), Rc::clone(adt_definition));
                             } else {
-                                errors.push(ModuleError::TypeNotDefinedInModule(loc.clone(), imported_module_name.clone(), m.clone()));
+                                errors.push(ModuleError::TypeNotDefinedInModule(
+                                    Rc::clone(loc),
+                                    imported_module_name.clone(),
+                                    m.clone(),
+                                ));
                             }
                         } else {
-                            if let Some(function) = typed_module.function_name_to_declaration.get(m) {
+                            if let Some(function) = typed_module.function_name_to_definition.get(m)
+                            {
                                 imported_functions.insert(m.clone(), Rc::clone(function));
                             } else {
-                                errors.push(ModuleError::FunctionNotDefinedInModule(loc.clone(), imported_module_name.clone(), m.clone()));
+                                errors.push(ModuleError::FunctionNotDefinedInModule(
+                                    Rc::clone(loc),
+                                    imported_module_name.clone(),
+                                    m.clone(),
+                                ));
                             }
                         }
                     }
                 }
                 Import::ImportModule(_, _, None) => {
-                    imported_adts.extend(typed_module.adt_name_to_definition.iter().map(|(n, d)| (n.clone(), Rc::clone(d))));
-                    imported_records.extend(typed_module.record_name_to_definition.iter().map(|(n, d)| (n.clone(), Rc::clone(d))));
-                    imported_functions.extend(typed_module.function_name_to_declaration.iter().map(|(n, d)| (n.clone(), Rc::clone(d))));
+                    imported_adts.extend(
+                        typed_module
+                            .adt_name_to_definition
+                            .iter()
+                            .map(|(n, d)| (n.clone(), Rc::clone(d))),
+                    );
+                    imported_records.extend(
+                        typed_module
+                            .record_name_to_definition
+                            .iter()
+                            .map(|(n, d)| (n.clone(), Rc::clone(d))),
+                    );
+                    imported_functions.extend(
+                        typed_module
+                            .function_name_to_definition
+                            .iter()
+                            .map(|(n, d)| (n.clone(), Rc::clone(d))),
+                    );
                 }
                 Import::ImportModule(_, _, Some(alias)) => {
-                    imported_adts.extend(typed_module.adt_name_to_definition.iter()
-                        .map(|(name, d)| (prefix_module_name(alias.clone(), &name), prefix_constructor_names(alias.clone(), Rc::clone(d)))));
-                    imported_records.extend(typed_module.record_name_to_definition.iter()
-                        .map(|(name, d)| (prefix_module_name(alias.clone(), &name), Rc::clone(d))));
-                    imported_functions.extend(typed_module.function_name_to_declaration.iter()
-                        .map(|(name, d)| (prefix_module_name(alias.clone(), &name), Rc::clone(d))));
+                    imported_adts.extend(typed_module.adt_name_to_definition.iter().map(
+                        |(name, d)| {
+                            (
+                                prefix_module_name(alias, &name),
+                                prefix_constructor_names(alias, Rc::clone(d)),
+                            )
+                        },
+                    ));
+                    imported_records.extend(
+                        typed_module
+                            .record_name_to_definition
+                            .iter()
+                            .map(|(name, d)| (prefix_module_name(alias, &name), Rc::clone(d))),
+                    );
+                    imported_functions.extend(
+                        typed_module
+                            .function_name_to_definition
+                            .iter()
+                            .map(|(name, d)| (prefix_module_name(alias, &name), Rc::clone(d))),
+                    );
                 }
             }
         }
@@ -172,7 +253,7 @@ pub fn compile_modules(main_module: String, infer_options: &InferencerOptions) -
             Ok(module) => {
                 let module = add_external_definitions(module, external_definitions);
                 if infer_stack_peekable.peek().is_none() {
-                    return Ok(module);
+                    return Ok((module, inferred_modules_by_name));
                 }
                 inferred_modules_by_name.insert(module.module_name.clone(), Rc::new(module));
             }
@@ -183,14 +264,23 @@ pub fn compile_modules(main_module: String, infer_options: &InferencerOptions) -
     unreachable!()
 }
 
-fn parse_modules(mut parse_stack: Vec<ModuleName>, working_directory: PathBuf) -> Result<Vec<Module>, Error> {
+fn parse_modules(
+    mut parse_stack: Vec<ModuleName>,
+    working_directory: PathBuf,
+) -> Result<Vec<Module>, Error> {
     let mut infer_stack: Vec<Module> = Vec::new();
     let mut parsed_modules = HashSet::new();
     while let Some(module) = parse_stack.pop() {
         let module_file_name = module_file_name(&working_directory, module.clone());
-        let file_contents = fs::read_to_string(module_file_name.clone()).map_err(|_| Error::ModuleError(vec![ModuleNotFound(module.clone().name())]))?;
-        println!("Parsing module {}", module.name());
-        let parsed_module = parse(&module_file_name.to_str().unwrap().to_string(), module.name(), &file_contents)?;
+        let file_contents = fs::read_to_string(module_file_name.clone())
+            .map_err(|_| Error::ModuleError(vec![ModuleNotFound(module.name())]))?;
+        print!("Parsing module {}..", module.name());
+        let parsed_module = parse(
+            module_file_name.to_str().unwrap().to_string(),
+            module.name(),
+            file_contents,
+        )?;
+        println!(" OK!");
 
         for i in &parsed_module.imports {
             if parsed_modules.insert(import_to_module(i)) {
@@ -200,7 +290,6 @@ fn parse_modules(mut parse_stack: Vec<ModuleName>, working_directory: PathBuf) -
 
         infer_stack.insert(0, parsed_module);
     }
-    println!("Infer stack: {}", infer_stack.iter().map(|m| m.name.clone()).collect::<Vec<String>>().join(", "));
     Ok(infer_stack)
 }
 
@@ -215,15 +304,16 @@ fn module_file_name(working_directory: &PathBuf, module_name: ModuleName) -> Pat
             module_path_buffer
         }
         ModuleName::ModuleFileName(file_name) => {
-            PathBuf::from(file_name)
+            let file_name_string = file_name.to_string();
+            PathBuf::from(file_name_string)
         }
     }
 }
 
-fn import_to_module(import: &Import) -> String {
+fn import_to_module(import: &Import) -> Rc<String> {
     match import {
-        Import::ImportMembers(_, module_name, _) => module_name.clone(),
-        Import::ImportModule(_, module_name, _) => module_name.clone(),
+        Import::ImportMembers(_, module_name, _) => Rc::clone(module_name),
+        Import::ImportModule(_, module_name, _) => Rc::clone(module_name),
     }
 }
 
@@ -239,35 +329,59 @@ impl From<parser::ParseError> for Error {
     }
 }
 
-fn prefix_module_name(mut module: String, identifier: &String) -> String {
-    module.push_str("::");
-    module.push_str(identifier);
-    return module;
+fn prefix_module_name(module: &Rc<String>, identifier: &String) -> Rc<String> {
+    let mut prefixed_module = String::new();
+    prefixed_module.push_str(module.as_ref());
+    prefixed_module.push_str("::");
+    prefixed_module.push_str(identifier);
+    return Rc::new(prefixed_module);
 }
 
-fn prefix_constructor_names(module: String, adt_definition: Rc<ADTDefinition>) -> Rc<ADTDefinition> {
+fn prefix_constructor_names(
+    module: &Rc<String>,
+    adt_definition: Rc<ADTDefinition>,
+) -> Rc<ADTDefinition> {
     Rc::new(ADTDefinition {
-        constructors: adt_definition.constructors.iter()
+        constructors: adt_definition
+            .constructors
+            .iter()
             .map(|(n, c)| {
-                let prefixed_name = prefix_module_name(module.clone(), &n);
-                (prefixed_name.clone(), ADTConstructor {
-                    name: prefixed_name.clone(),
-                    elements: c.elements.iter().map(Rc::clone).collect(),
-                })
+                let prefixed_name = prefix_module_name(module, &n);
+                (
+                    Rc::clone(&prefixed_name),
+                    Rc::new(ADTConstructor {
+                        name: Rc::clone(&prefixed_name),
+                        elements: c.elements.iter().map(Rc::clone).collect(),
+                    }),
+                )
             })
             .collect(),
         name: adt_definition.name.clone(),
         location: adt_definition.location.clone(),
-        type_variables: adt_definition.type_variables.clone()
+        type_variables: adt_definition.type_variables.clone(),
     })
 }
 
-fn add_external_definitions(module: TypedModule, external_definitions: ExternalDefinitions) -> TypedModule {
+fn add_external_definitions(
+    module: TypedModule,
+    external_definitions: ExternalDefinitions,
+) -> TypedModule {
     TypedModule {
-        record_name_to_definition: module.record_name_to_definition.into_iter().chain(external_definitions.record_name_to_definition.into_iter()).collect(),
-        adt_name_to_definition: module.adt_name_to_definition.into_iter().chain(external_definitions.adt_name_to_definition.into_iter()).collect(),
-        function_name_to_declaration: module.function_name_to_declaration.into_iter().chain(external_definitions.function_name_to_definition.into_iter()).collect()
-        ,
+        record_name_to_definition: module
+            .record_name_to_definition
+            .into_iter()
+            .chain(external_definitions.record_name_to_definition.into_iter())
+            .collect(),
+        adt_name_to_definition: module
+            .adt_name_to_definition
+            .into_iter()
+            .chain(external_definitions.adt_name_to_definition.into_iter())
+            .collect(),
+        function_name_to_definition: module
+            .function_name_to_definition
+            .into_iter()
+            .chain(external_definitions.function_name_to_definition.into_iter())
+            .collect(),
         ..module
     }
 }

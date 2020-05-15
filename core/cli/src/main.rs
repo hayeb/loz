@@ -1,10 +1,10 @@
-use std::{env};
+use std::env;
 
 use clap::{App, Arg};
 
-use loz_compiler::inferencer::{InferencerOptions};
-use loz_compiler::module_system::{compile_modules};
-use loz_compiler::interpreter::{interpret};
+use loz_compiler::inferencer::InferencerOptions;
+use loz_compiler::interpreter::interpret;
+use loz_compiler::module_system::compile_modules;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -42,7 +42,7 @@ fn main() {
         is_main_module: true,
     };
     match compile_modules(filename.to_string(), &infer_options) {
-        Ok(typed_module) => match interpret(&typed_module) {
+        Ok((typed_module, _inferred_modules_by_name)) => match interpret(&typed_module) {
             Ok(value) => println!("{}", value),
             Err(error) => println!("{}", error),
         },

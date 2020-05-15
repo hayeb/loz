@@ -7,6 +7,7 @@ use crate::{
     body_references, Expression, FunctionBody, FunctionDefinition, FunctionRule, Location,
     MatchExpression,
 };
+use std::borrow::Borrow;
 use std::rc::Rc;
 
 #[derive(Debug, Clone)]
@@ -23,33 +24,35 @@ impl RunState {
         return self.frames.remove(self.frames.len() - 1);
     }
 
-    fn retrieve_variable_value(&self, name: &String, loc: &Location) -> Value {
+    fn retrieve_variable_value(&self, name: &String, loc: &Location) -> Rc<Value> {
         for f in self.frames.iter().rev() {
             let val = f.variables.get(name);
             if let Some(v) = val {
-                return v.clone();
+                return Rc::clone(v);
             }
 
             if let Some(d) = f.declared_functions.get(name) {
                 let closures = d
                     .function_bodies
                     .iter()
-                    .map(|fb| FunctionClosure {
-                        closed_variables: body_references(fb, true)
-                            .iter()
-                            .map(|(v, loc)| (v.clone(), self.retrieve_variable_value(v, loc)))
-                            .collect(),
-                        body: Rc::clone(fb),
+                    .map(|fb| {
+                        Rc::new(FunctionClosure {
+                            closed_variables: body_references(fb, true)
+                                .iter()
+                                .map(|(v, loc)| (v.clone(), self.retrieve_variable_value(v, loc)))
+                                .collect(),
+                            body: Rc::clone(fb),
+                        })
                     })
                     .collect();
 
-                return Value::Lambda(Vec::new(), closures);
+                return Rc::new(Value::Lambda(Vec::new(), closures));
             }
         }
         panic!("No value for variable {} at {}", name, loc);
     }
 
-    fn get_function_definition(&self, name: &str) -> Option<Rc<FunctionDefinition>> {
+    fn get_function_definition(&self, name: &Rc<String>) -> Option<Rc<FunctionDefinition>> {
         for f in self.frames.iter().rev() {
             if let Some(function_definition) = f.declared_functions.get(name) {
                 return Some(Rc::clone(function_definition));
@@ -60,10 +63,10 @@ impl RunState {
 
     fn determine_closure(
         &self,
-        args: &Vec<MatchExpression>,
-        references: &HashSet<(String, Location)>,
-    ) -> HashMap<String, Value> {
-        let introduced_match_variables: HashSet<String> = args
+        args: &Vec<Rc<MatchExpression>>,
+        references: &HashSet<(Rc<String>, Rc<Location>)>,
+    ) -> HashMap<Rc<String>, Rc<Value>> {
+        let introduced_match_variables: HashSet<Rc<String>> = args
             .iter()
             .flat_map(|me| me.variables().into_iter())
             .collect();
@@ -77,8 +80,8 @@ impl RunState {
 
 #[derive(Debug, Clone)]
 struct Frame {
-    variables: HashMap<String, Value>,
-    declared_functions: HashMap<String, Rc<FunctionDefinition>>,
+    variables: HashMap<Rc<String>, Rc<Value>>,
+    declared_functions: HashMap<Rc<String>, Rc<FunctionDefinition>>,
 }
 
 impl Frame {
@@ -88,7 +91,7 @@ impl Frame {
             declared_functions: HashMap::new(),
         }
     }
-    fn with_variables(variables: HashMap<String, Value>) -> Self {
+    fn with_variables(variables: HashMap<Rc<String>, Rc<Value>>) -> Self {
         Frame {
             variables,
             declared_functions: HashMap::new(),
@@ -102,11 +105,11 @@ pub enum Value {
     Int(isize),
     Float(f64),
     Char(char),
-    String(String),
-    Tuple(Vec<Value>),
-    List(Vec<Value>),
-    ADTValue(String, Vec<Value>),
-    RecordValue(Vec<(String, Value)>),
+    String(Rc<String>),
+    Tuple(Vec<Rc<Value>>),
+    List(Vec<Rc<Value>>),
+    ADTValue(Rc<String>, Vec<Rc<Value>>),
+    RecordValue(Vec<(Rc<String>, Rc<Value>)>),
 
     /* We keep currently curried-in values in the lambda itself.
       We keep a Vec of function bodies. In the following case:
@@ -124,14 +127,14 @@ pub enum Value {
       there will be multiple function bodies in the list.
     */
     Lambda(
-        Vec<Value>, // Curried-in values (evaluated expressions)
-        Vec<FunctionClosure>,
+        Vec<Rc<Value>>, // Curried-in values (evaluated expressions)
+        Vec<Rc<FunctionClosure>>,
     ),
 }
 
 #[derive(Debug, Clone)]
 pub struct FunctionClosure {
-    closed_variables: HashMap<String, Value>,
+    closed_variables: HashMap<Rc<String>, Rc<Value>>,
     body: Rc<FunctionBody>,
 }
 
@@ -161,7 +164,9 @@ impl Display for Value {
                     .collect::<Vec<String>>()
                     .join(", ")
             ),
-            Value::ADTValue(constructor, arguments) if arguments.len() == 0 => write!(f, "{}", constructor),
+            Value::ADTValue(constructor, arguments) if arguments.len() == 0 => {
+                write!(f, "{}", constructor)
+            }
             Value::ADTValue(constructor, arguments) => write!(
                 f,
                 "{} {}",
@@ -193,11 +198,11 @@ impl Display for Value {
 
 #[derive(Debug, Clone)]
 pub enum InterpreterError {
-    NoApplicableFunctionRule(String),
-    NoApplicableFunctionBody(String),
+    NoApplicableFunctionRule(Rc<String>),
+    NoApplicableFunctionBody(Rc<String>),
     DivisionByZero,
-    ExpressionDoesNotMatch(MatchExpression, Value),
-    NoMatchingCaseRule(Value),
+    ExpressionDoesNotMatch(MatchExpression, Rc<Value>),
+    NoMatchingCaseRule(Rc<Value>),
 }
 
 impl Display for InterpreterError {
@@ -218,35 +223,39 @@ impl Display for InterpreterError {
     }
 }
 
-pub fn interpret(ast: &TypedModule) -> Result<Value, InterpreterError> {
+pub fn interpret(ast: &TypedModule) -> Result<Rc<Value>, InterpreterError> {
     let result = evaluate(
         &Expression::Call(
-            Location {
-                file: "?".to_string(),
-                function: "main".to_string(),
+            Rc::new(Location {
+                file: Rc::clone(&ast.module_file_name),
+                function: Rc::new("main".to_string()),
                 line: 1,
                 col: 1,
-            },
-            "main".to_string(),
+            }),
+            Rc::new("main".to_string()),
             vec![],
         ),
         &mut RunState {
             frames: vec![Frame {
                 variables: HashMap::new(),
-                declared_functions: ast.function_name_to_declaration.iter().map(|(n, d)| (n.clone(), Rc::clone(d)) ).collect(),
+                declared_functions: ast
+                    .function_name_to_definition
+                    .iter()
+                    .map(|(n, d)| (n.clone(), Rc::clone(d)))
+                    .collect(),
             }],
         },
     )?;
     Ok(result)
 }
 
-fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterError> {
+fn evaluate(e: &Expression, state: &mut RunState) -> Result<Rc<Value>, InterpreterError> {
     match e {
-        Expression::BoolLiteral(_, b) => Ok(Value::Bool(*b)),
-        Expression::StringLiteral(_, s) => Ok(Value::String(s.clone())),
-        Expression::CharacterLiteral(_, c) => Ok(Value::Char(*c)),
-        Expression::IntegerLiteral(_, n) => Ok(Value::Int(*n)),
-        Expression::FloatLiteral(_, f) => Ok(Value::Float(*f)),
+        Expression::BoolLiteral(_, b) => Ok(Rc::new(Value::Bool(*b))),
+        Expression::StringLiteral(_, s) => Ok(Rc::new(Value::String(Rc::clone(s)))),
+        Expression::CharacterLiteral(_, c) => Ok(Rc::new(Value::Char(*c))),
+        Expression::IntegerLiteral(_, n) => Ok(Rc::new(Value::Int(*n))),
+        Expression::FloatLiteral(_, f) => Ok(Rc::new(Value::Float(*f))),
 
         Expression::Call(loc, f, args) => eval_function_call(f, args, state, loc),
 
@@ -255,7 +264,7 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterEr
             for e in arguments {
                 evaluated_arguments.push(evaluate(e, state)?);
             }
-            Ok(Value::ADTValue(name.clone(), evaluated_arguments))
+            Ok(Rc::new(Value::ADTValue(name.clone(), evaluated_arguments)))
         }
 
         Expression::Record(_, _, field_expressions) => {
@@ -263,7 +272,7 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterEr
             for (name, expression) in field_expressions.iter() {
                 result.push((name.clone(), evaluate(expression, state)?));
             }
-            Ok(Value::RecordValue(result))
+            Ok(Rc::new(Value::RecordValue(result)))
         }
 
         Expression::TupleLiteral(_, elements) => {
@@ -271,25 +280,30 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterEr
             for e in elements {
                 evaluated_elements.push(evaluate(e, state)?);
             }
-            Ok(Value::Tuple(evaluated_elements))
+            Ok(Rc::new(Value::Tuple(evaluated_elements)))
         }
-        Expression::EmptyListLiteral(_) => Ok(Value::List(vec![])),
+        Expression::EmptyListLiteral(_) => Ok(Rc::new(Value::List(vec![]))),
         Expression::ShorthandListLiteral(_, elements) => {
             let mut evaluated_elements = Vec::new();
             for e in elements {
                 evaluated_elements.push(evaluate(e, state)?);
             }
-            Ok(Value::List(evaluated_elements))
+            Ok(Rc::new(Value::List(evaluated_elements)))
         }
         Expression::LonghandListLiteral(_, head, tail) => {
             let evaluated_head = evaluate(head, state)?;
             let evaluated_tail = evaluate(tail, state)?;
 
             let mut results = vec![evaluated_head];
-            match evaluated_tail {
+            match evaluated_tail.borrow() {
                 Value::List(values) => {
-                    results.extend(values);
-                    Ok(Value::List(results))
+                    results.extend(
+                        values
+                            .iter()
+                            .map(|v| Rc::clone(v))
+                            .collect::<Vec<Rc<Value>>>(),
+                    );
+                    Ok(Rc::new(Value::List(results)))
                 }
                 v => unreachable!("tail evaluated to '{:?}' instead of Value::List", v),
             }
@@ -316,88 +330,100 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterEr
         }
 
         Expression::Variable(loc, v) => Ok(state.retrieve_variable_value(v, loc)),
-        Expression::Negation(_, e) => Ok(Value::Bool(!eval_bool(e, state)?)),
-        Expression::Minus(_, e) => Ok(Value::Int(-eval_int(e, state)?)),
-        Expression::Times(_, e1, e2) => match (evaluate(e1, state)?, evaluate(e2, state)?) {
-            (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x * y)),
-            (Value::Int(x), Value::Float(y)) => Ok(Value::Float(x as f64 * y)),
-            (Value::Float(x), Value::Int(y)) => Ok(Value::Float(x * y as f64)),
-            (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x * y)),
-            _ => unreachable!(),
-        },
-        Expression::Divide(_, e1, e2) => {
-            let divider = evaluate(e2, state)?;
-            if let Value::Int(0) = divider {
-                return Err(DivisionByZero);
-            }
-            match (evaluate(e1, state)?, divider) {
-                (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x / y)),
-                (Value::Int(x), Value::Float(y)) => Ok(Value::Float(x as f64 / y)),
-                (Value::Float(x), Value::Int(y)) => Ok(Value::Float(x / y as f64)),
-                (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x / y)),
+        Expression::Negation(_, e) => Ok(Rc::new(Value::Bool(!eval_bool(e, state)?))),
+        Expression::Minus(_, e) => Ok(Rc::new(Value::Int(-eval_int(e, state)?))),
+        Expression::Times(_, e1, e2) => {
+            match (evaluate(e1, state)?.borrow(), evaluate(e2, state)?.borrow()) {
+                (Value::Int(x), Value::Int(y)) => Ok(Rc::new(Value::Int(*x * *y))),
+                (Value::Int(x), Value::Float(y)) => Ok(Rc::new(Value::Float(*x as f64 * *y))),
+                (Value::Float(x), Value::Int(y)) => Ok(Rc::new(Value::Float(*x * *y as f64))),
+                (Value::Float(x), Value::Float(y)) => Ok(Rc::new(Value::Float(*x * *y))),
                 _ => unreachable!(),
             }
         }
-        Expression::Modulo(_, e1, e2) => {
-            Ok(Value::Int(eval_int(e1, state)? % eval_int(e2, state)?))
-        }
-        Expression::Add(_, e1, e2) => match (evaluate(e1, state)?, evaluate(e2, state)?) {
-            (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x + y)),
-            (Value::Int(x), Value::Float(y)) => Ok(Value::Float(x as f64 + y)),
-            (Value::Float(x), Value::Int(y)) => Ok(Value::Float(x + y as f64)),
-            (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x + y)),
-            (Value::String(mut l), Value::String(r)) => {
-                l.push_str(r.as_str());
-                Ok(Value::String(l))
+        Expression::Divide(_, e1, e2) => {
+            let divider = evaluate(e2, state)?;
+            if let Value::Int(0) = *divider {
+                return Err(DivisionByZero);
             }
-            (l, r) => unreachable!("Addition between results {:?} and {:?}", l, r),
-        },
-        Expression::Subtract(_, e1, e2) => match (evaluate(e1, state)?, evaluate(e2, state)?) {
-            (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x - y)),
-            (Value::Int(x), Value::Float(y)) => Ok(Value::Float(x as f64 - y)),
-            (Value::Float(x), Value::Int(y)) => Ok(Value::Float(x - y as f64)),
-            (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x - y)),
-            _ => unreachable!(),
-        },
-        Expression::ShiftLeft(_, e1, e2) => {
-            Ok(Value::Int(eval_int(e1, state)? << eval_int(e2, state)?))
+            match (evaluate(e1, state)?.borrow(), divider.borrow()) {
+                (Value::Int(x), Value::Int(y)) => Ok(Rc::new(Value::Int(x / y))),
+                (Value::Int(x), Value::Float(y)) => Ok(Rc::new(Value::Float(*x as f64 / *y))),
+                (Value::Float(x), Value::Int(y)) => Ok(Rc::new(Value::Float(x / *y as f64))),
+                (Value::Float(x), Value::Float(y)) => Ok(Rc::new(Value::Float(x / y))),
+                _ => unreachable!(),
+            }
         }
+        Expression::Modulo(_, e1, e2) => Ok(Rc::new(Value::Int(
+            eval_int(e1, state)? % eval_int(e2, state)?,
+        ))),
+        Expression::Add(_, e1, e2) => {
+            match (evaluate(e1, state)?.borrow(), evaluate(e2, state)?.borrow()) {
+                (Value::Int(x), Value::Int(y)) => Ok(Rc::new(Value::Int(x + y))),
+                (Value::Int(x), Value::Float(y)) => Ok(Rc::new(Value::Float(*x as f64 + y))),
+                (Value::Float(x), Value::Int(y)) => Ok(Rc::new(Value::Float(x + *y as f64))),
+                (Value::Float(x), Value::Float(y)) => Ok(Rc::new(Value::Float(x + y))),
+                (Value::String(l), Value::String(r)) => {
+                    let mut s = String::new();
+                    s.push_str(&l.to_string());
+                    s.push_str(&r.to_string());
+                    Ok(Rc::new(Value::String(Rc::new(s))))
+                }
+                (l, r) => unreachable!("Addition between results {:?} and {:?}", l, r),
+            }
+        }
+        Expression::Subtract(_, e1, e2) => {
+            match (evaluate(e1, state)?.borrow(), evaluate(e2, state)?.borrow()) {
+                (Value::Int(x), Value::Int(y)) => Ok(Rc::new(Value::Int(x - y))),
+                (Value::Int(x), Value::Float(y)) => Ok(Rc::new(Value::Float(*x as f64 - y))),
+                (Value::Float(x), Value::Int(y)) => Ok(Rc::new(Value::Float(x - *y as f64))),
+                (Value::Float(x), Value::Float(y)) => Ok(Rc::new(Value::Float(x - y))),
+                _ => unreachable!(),
+            }
+        }
+        Expression::ShiftLeft(_, e1, e2) => Ok(Rc::new(Value::Int(
+            eval_int(e1, state)? << eval_int(e2, state)?,
+        ))),
 
-        Expression::ShiftRight(_, e1, e2) => {
-            Ok(Value::Int(eval_int(e1, state)? >> eval_int(e2, state)?))
-        }
+        Expression::ShiftRight(_, e1, e2) => Ok(Rc::new(Value::Int(
+            eval_int(e1, state)? >> eval_int(e2, state)?,
+        ))),
 
-        Expression::Greater(_, e1, e2) => {
-            Ok(Value::Bool(eval_int(e1, state)? > eval_int(e2, state)?))
-        }
+        Expression::Greater(_, e1, e2) => Ok(Rc::new(Value::Bool(
+            eval_int(e1, state)? > eval_int(e2, state)?,
+        ))),
 
-        Expression::Greq(_, e1, e2) => {
-            Ok(Value::Bool(eval_int(e1, state)? >= eval_int(e2, state)?))
-        }
+        Expression::Greq(_, e1, e2) => Ok(Rc::new(Value::Bool(
+            eval_int(e1, state)? >= eval_int(e2, state)?,
+        ))),
 
-        Expression::Leq(_, e1, e2) => Ok(Value::Bool(eval_int(e1, state)? <= eval_int(e2, state)?)),
+        Expression::Leq(_, e1, e2) => Ok(Rc::new(Value::Bool(
+            eval_int(e1, state)? <= eval_int(e2, state)?,
+        ))),
 
-        Expression::Lesser(_, e1, e2) => {
-            Ok(Value::Bool(eval_int(e1, state)? < eval_int(e2, state)?))
-        }
+        Expression::Lesser(_, e1, e2) => Ok(Rc::new(Value::Bool(
+            eval_int(e1, state)? < eval_int(e2, state)?,
+        ))),
 
-        Expression::Eq(_, e1, e2) => {
-            Ok(Value::Bool(eq(evaluate(e1, state)?, evaluate(e2, state)?)))
-        }
-        Expression::Neq(_, e1, e2) => {
-            Ok(Value::Bool(!eq(evaluate(e1, state)?, evaluate(e2, state)?)))
-        }
-        Expression::And(_, e1, e2) => {
-            Ok(Value::Bool(eval_bool(e1, state)? && eval_bool(e2, state)?))
-        }
+        Expression::Eq(_, e1, e2) => Ok(Rc::new(Value::Bool(eq(
+            evaluate(e1, state)?,
+            evaluate(e2, state)?,
+        )))),
+        Expression::Neq(_, e1, e2) => Ok(Rc::new(Value::Bool(!eq(
+            evaluate(e1, state)?,
+            evaluate(e2, state)?,
+        )))),
+        Expression::And(_, e1, e2) => Ok(Rc::new(Value::Bool(
+            eval_bool(e1, state)? && eval_bool(e2, state)?,
+        ))),
 
-        Expression::Or(_, e1, e2) => {
-            Ok(Value::Bool(eval_bool(e1, state)? || eval_bool(e2, state)?))
-        }
+        Expression::Or(_, e1, e2) => Ok(Rc::new(Value::Bool(
+            eval_bool(e1, state)? || eval_bool(e2, state)?,
+        ))),
 
         Expression::RecordFieldAccess(_, record_expression, field_accessor) => {
             let record_value = evaluate(record_expression, state)?;
-            if let Value::RecordValue(fields) = record_value {
+            if let Value::RecordValue(fields) = record_value.borrow() {
                 if let Expression::Variable(_, field) = &**field_accessor {
                     return Ok(fields
                         .into_iter()
@@ -411,38 +437,43 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Value, InterpreterEr
         }
         Expression::Lambda(loc, args, body) => {
             let lambda_body = FunctionBody {
-                name: "".to_string(),
+                name: Rc::new("".to_string()),
                 location: loc.clone(),
                 match_expressions: args.clone(),
-                rules: vec![FunctionRule::ExpressionRule(loc.clone(), *body.clone())],
+                rules: vec![Rc::new(FunctionRule::ExpressionRule(
+                    loc.clone(),
+                    body.clone(),
+                ))],
                 local_function_definitions: vec![],
                 local_adt_definitions: vec![],
-                local_record_definitions: vec![]
+                local_record_definitions: vec![],
             };
 
             let closure = FunctionClosure {
                 closed_variables: state.determine_closure(args, &body.references(true)),
                 body: Rc::new(lambda_body),
             };
-            Ok(Value::Lambda(Vec::new(), vec![closure]))
+            Ok(Rc::new(Value::Lambda(Vec::new(), vec![Rc::new(closure)])))
         }
     }
 }
 
-fn eq(l: Value, r: Value) -> bool {
-    match (l, r) {
+fn eq(l: Rc<Value>, r: Rc<Value>) -> bool {
+    match (l.borrow(), r.borrow()) {
         (Value::Bool(l), Value::Bool(r)) => l == r,
         (Value::Int(l), Value::Int(r)) => l == r,
         (Value::Float(l), Value::Float(r)) => l == r,
         (Value::Char(l), Value::Char(r)) => l == r,
         (Value::String(l), Value::String(r)) => l == r,
-        (Value::Tuple(l), Value::Tuple(r)) => {
-            l.into_iter().zip(r).fold(true, |b, (l, r)| b && eq(l, r))
-        }
+        (Value::Tuple(l), Value::Tuple(r)) => l
+            .into_iter()
+            .zip(r)
+            .fold(true, |b, (l, r)| b && eq(Rc::clone(l), Rc::clone(r))),
 
-        (Value::List(l), Value::List(r)) => {
-            l.into_iter().zip(r).fold(true, |b, (l, r)| b && eq(l, r))
-        }
+        (Value::List(l), Value::List(r)) => l
+            .into_iter()
+            .zip(r)
+            .fold(true, |b, (l, r)| b && eq(Rc::clone(l), Rc::clone(r))),
 
         (
             Value::ADTValue(l_constructor, l_arguments),
@@ -452,28 +483,25 @@ fn eq(l: Value, r: Value) -> bool {
                 && l_arguments
                     .into_iter()
                     .zip(r_arguments)
-                    .fold(true, |b, (l, r)| b && eq(l, r))
+                    .fold(true, |b, (l, r)| b && eq(Rc::clone(l), Rc::clone(r)))
         }
 
         (Value::RecordValue(l_values), Value::RecordValue(r_values)) => l_values
             .into_iter()
-            .map(|t| t.1)
-            .zip(r_values.into_iter().map(|t| t.1))
+            .map(|(_, value)| Rc::clone(value))
+            .zip(r_values.into_iter().map(|(_, value)| Rc::clone(value)))
             .all(|(l, r)| eq(l, r)),
-
-        // This case is prevented by the type inferencer.
-        (Value::Lambda(_, _), Value::Lambda(_, _)) => unreachable!(),
 
         (l, r) => unreachable!("eq {} and {}", l, r),
     }
 }
 
 fn eval_function_call(
-    f: &String,
-    args: &Vec<Expression>,
+    f: &Rc<String>,
+    args: &Vec<Rc<Expression>>,
     state: &mut RunState,
     loc: &Location,
-) -> Result<Value, InterpreterError> {
+) -> Result<Rc<Value>, InterpreterError> {
     let r = match state.get_function_definition(f) {
         Some(d) => eval_declared_function(&d, args, state),
         None => eval_lambda(f, state.retrieve_variable_value(f, loc), args, state),
@@ -482,12 +510,12 @@ fn eval_function_call(
 }
 
 fn eval_lambda(
-    f: &String,
-    lambda: Value,
-    args: &Vec<Expression>,
+    f: &Rc<String>,
+    lambda: Rc<Value>,
+    args: &Vec<Rc<Expression>>,
     state: &mut RunState,
-) -> Result<Value, InterpreterError> {
-    let (curried_argument_values, closures) = match lambda {
+) -> Result<Rc<Value>, InterpreterError> {
+    let (curried_argument_values, closures) = match lambda.borrow() {
         Value::Lambda(curried_argument_values, closures) => (curried_argument_values, closures),
         v => unreachable!("{}", v),
     };
@@ -496,33 +524,46 @@ fn eval_lambda(
         < closures.get(0).unwrap().body.match_expressions.len()
     {
         // Handle currying
-        let mut argument_values = Vec::new();
+        let mut argument_values: Vec<Rc<Value>> = Vec::new();
         for a in args {
             argument_values.push(evaluate(a, state)?);
         }
 
-        let mut all_argument_values = Vec::new();
-        all_argument_values.extend(curried_argument_values);
+        let mut all_argument_values: Vec<Rc<Value>> = Vec::new();
+        all_argument_values.extend(
+            curried_argument_values
+                .iter()
+                .map(|v| Rc::clone(v))
+                .collect::<Vec<Rc<Value>>>(),
+        );
         all_argument_values.extend(argument_values);
-        return Ok(Value::Lambda(all_argument_values, closures));
+        return Ok(Rc::new(Value::Lambda(
+            all_argument_values,
+            closures.iter().map(|c| Rc::clone(c)).collect(),
+        )));
     }
 
-    let mut all_args = Vec::new();
-    all_args.extend(curried_argument_values);
+    let mut all_args: Vec<Rc<Value>> = Vec::new();
+    all_args.extend(
+        curried_argument_values
+            .iter()
+            .map(Rc::clone)
+            .collect::<Vec<Rc<Value>>>(),
+    );
 
     for a in args {
         all_args.push(evaluate(a, state)?);
     }
 
-    eval_function_closures(f.clone(), &closures, &all_args, state)
+    eval_function_closures(f, closures, &all_args, state)
 }
 
 fn eval_function_closures(
-    f: String,
-    bodies: &Vec<FunctionClosure>,
-    args: &Vec<Value>,
+    f: &Rc<String>,
+    bodies: &Vec<Rc<FunctionClosure>>,
+    args: &Vec<Rc<Value>>,
     state: &mut RunState,
-) -> Result<Value, InterpreterError> {
+) -> Result<Rc<Value>, InterpreterError> {
     for closure in bodies {
         let mut body_frame = Frame::new();
 
@@ -546,7 +587,7 @@ fn eval_function_closures(
             }
 
             for (v, value) in &closure.closed_variables {
-                body_frame.variables.insert(v.clone(), value.clone());
+                body_frame.variables.insert(v.clone(), Rc::clone(value));
             }
 
             state.frames.push(body_frame);
@@ -557,14 +598,14 @@ fn eval_function_closures(
             return result;
         }
     }
-    Err(NoApplicableFunctionBody(f))
+    Err(NoApplicableFunctionBody(Rc::clone(f)))
 }
 
 fn eval_declared_function(
     d: &FunctionDefinition,
-    args: &Vec<Expression>,
+    args: &Vec<Rc<Expression>>,
     state: &mut RunState,
-) -> Result<Value, InterpreterError> {
+) -> Result<Rc<Value>, InterpreterError> {
     // Inferencer insures all bodies have the same number of arguments, so we just use the first.
     if d.function_bodies.get(0).unwrap().match_expressions.len() > args.len() {
         // Handle currying
@@ -576,16 +617,18 @@ fn eval_declared_function(
         let closures = d
             .function_bodies
             .iter()
-            .map(|fb| FunctionClosure {
-                closed_variables: body_references(fb, true)
-                    .iter()
-                    .map(|(v, loc)| (v.clone(), state.retrieve_variable_value(v, loc)))
-                    .collect(),
-                body: fb.clone(),
+            .map(|fb| {
+                Rc::new(FunctionClosure {
+                    closed_variables: body_references(fb, true)
+                        .iter()
+                        .map(|(v, loc)| (v.clone(), state.retrieve_variable_value(v, loc)))
+                        .collect(),
+                    body: fb.clone(),
+                })
             })
             .collect();
 
-        return Ok(Value::Lambda(argument_values, closures));
+        return Ok(Rc::new(Value::Lambda(argument_values, closures)));
     }
 
     let mut arg_values = Vec::new();
@@ -596,21 +639,23 @@ fn eval_declared_function(
     let closures = d
         .function_bodies
         .iter()
-        .map(|b| FunctionClosure {
-            closed_variables: HashMap::new(),
-            body: b.clone(),
+        .map(|b| {
+            Rc::new(FunctionClosure {
+                closed_variables: HashMap::new(),
+                body: b.clone(),
+            })
         })
         .collect();
-    eval_function_closures(d.name.clone(), &closures, &arg_values, state)
+    eval_function_closures(&d.name, &closures, &arg_values, state)
 }
 
 fn eval_function_body(
-    name: &String,
+    name: &Rc<String>,
     body: &FunctionBody,
     state: &mut RunState,
-) -> Result<Value, InterpreterError> {
+) -> Result<Rc<Value>, InterpreterError> {
     for rule in &body.rules {
-        match rule {
+        match rule.borrow() {
             FunctionRule::ConditionalRule(_, condition_expression, result_expression) => {
                 if eval_bool(&condition_expression, state)? {
                     return evaluate(&result_expression, state);
@@ -627,17 +672,17 @@ fn eval_function_body(
         }
     }
 
-    Err(InterpreterError::NoApplicableFunctionRule(name.clone()))
+    Err(InterpreterError::NoApplicableFunctionRule(Rc::clone(name)))
 }
 
 fn collect_match_variables(
-    match_expression: &MatchExpression,
-    evaluated_expression: &Value,
-) -> Result<HashMap<String, Value>, InterpreterError> {
-    match (match_expression, evaluated_expression) {
-        (MatchExpression::Identifier(_loc_info, identifier), value) => {
+    match_expression: &Rc<MatchExpression>,
+    evaluated_expression: &Rc<Value>,
+) -> Result<HashMap<Rc<String>, Rc<Value>>, InterpreterError> {
+    match (match_expression.borrow(), evaluated_expression.borrow()) {
+        (MatchExpression::Identifier(_loc_info, identifier), _) => {
             let mut map = HashMap::new();
-            map.insert(identifier.clone(), value.clone());
+            map.insert(Rc::clone(identifier), Rc::clone(evaluated_expression));
             Ok(map)
         }
         (MatchExpression::IntLiteral(loc_info, _n), Value::Int(n)) => {
@@ -646,7 +691,7 @@ fn collect_match_variables(
             }
             Err(InterpreterError::ExpressionDoesNotMatch(
                 MatchExpression::IntLiteral(loc_info.clone(), _n.clone()),
-                Value::Int(n.clone()),
+                Rc::clone(evaluated_expression),
             ))
         }
         (MatchExpression::CharLiteral(loc_info, _c), Value::Char(c)) => {
@@ -655,7 +700,7 @@ fn collect_match_variables(
             }
             Err(InterpreterError::ExpressionDoesNotMatch(
                 MatchExpression::CharLiteral(loc_info.clone(), _c.clone()),
-                Value::Char(c.clone()),
+                Rc::clone(evaluated_expression),
             ))
         }
         (MatchExpression::StringLiteral(loc_info, _s), Value::String(s)) => {
@@ -664,7 +709,7 @@ fn collect_match_variables(
             }
             Err(InterpreterError::ExpressionDoesNotMatch(
                 MatchExpression::StringLiteral(loc_info.clone(), _s.clone()),
-                Value::String(s.clone()),
+                Rc::clone(evaluated_expression),
             ))
         }
         (MatchExpression::BoolLiteral(loc_info, _b), Value::Bool(b)) => {
@@ -673,7 +718,7 @@ fn collect_match_variables(
             }
             Err(InterpreterError::ExpressionDoesNotMatch(
                 MatchExpression::BoolLiteral(loc_info.clone(), _b.clone()),
-                Value::Bool(b.clone()),
+                Rc::clone(evaluated_expression),
             ))
         }
 
@@ -688,7 +733,7 @@ fn collect_match_variables(
             if elements.len() != values.len() {
                 return Err(InterpreterError::ExpressionDoesNotMatch(
                     MatchExpression::ShorthandList(loc_info.clone(), elements.clone()),
-                    Value::List(values.clone()),
+                    Rc::clone(evaluated_expression),
                 ));
             }
 
@@ -702,14 +747,14 @@ fn collect_match_variables(
             if values.is_empty() {
                 return Err(InterpreterError::ExpressionDoesNotMatch(
                     MatchExpression::LonghandList(loc_info.clone(), head.clone(), tail.clone()),
-                    Value::List(values.clone()),
+                    Rc::clone(evaluated_expression),
                 ));
             }
 
-            let mut head_variables = collect_match_variables(head, values.iter().next().unwrap())?;
+            let mut head_variables = collect_match_variables(&head, values.iter().next().unwrap())?;
             let tail_variables = collect_match_variables(
-                tail,
-                &Value::List(values.iter().skip(1).cloned().collect()),
+                &tail,
+                &Rc::new(Value::List(values.iter().skip(1).map(Rc::clone).collect())),
             )?;
             head_variables.extend(tail_variables);
 
@@ -726,7 +771,7 @@ fn collect_match_variables(
                         match_name.clone(),
                         match_arguments.clone(),
                     ),
-                    Value::ADTValue(name.clone(), arguments.clone()),
+                    Rc::clone(evaluated_expression),
                 ));
             }
 
@@ -761,15 +806,15 @@ fn collect_match_variables(
 }
 
 fn eval_bool(e: &Expression, state: &mut RunState) -> Result<bool, InterpreterError> {
-    match evaluate(e, state) {
-        Ok(Value::Bool(b)) => Ok(b),
+    match evaluate(e, state)?.borrow() {
+        Value::Bool(b) => Ok(b.clone()),
         _ => unreachable!("evaluate wrong type (expected bool)"),
     }
 }
 
 fn eval_int(e: &Expression, state: &mut RunState) -> Result<isize, InterpreterError> {
-    match evaluate(e, state) {
-        Ok(Value::Int(n)) => Ok(n),
+    match evaluate(e, state)?.borrow() {
+        Value::Int(n) => Ok(n.clone()),
         e => unreachable!("evaluate wrong type (expected int): {:?}", e),
     }
 }

@@ -1,5 +1,5 @@
 [package]
-name = "loz_compiler"
+name = "loz-compiler"
 version = "0.1.0"
 authors = ["Haye Böhm <haye.bohm@gmail.com>"]
 edition = "2018"

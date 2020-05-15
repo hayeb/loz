@@ -1,10 +1,10 @@
-use std::{fs, io};
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
+use std::{fs, io};
 
-use loz_compiler::module_system;
 use loz_compiler::inferencer::{InferencerOptions, TypedModule};
 use loz_compiler::interpreter::{interpret, InterpreterError, Value};
+use loz_compiler::module_system;
 use loz_compiler::module_system::{compile_modules, Error};
 
 #[test]
@@ -16,7 +16,7 @@ fn test_ok_files() -> Result<(), io::Error> {
 fn test_parse_err_files() -> Result<(), io::Error> {
     compile_files("tests/programs/parse_err", |res| match res {
         Err(Error::ParseError(_)) => true,
-        _ => false
+        _ => false,
     })
 }
 
@@ -24,17 +24,18 @@ fn test_parse_err_files() -> Result<(), io::Error> {
 fn test_type_err_files() -> Result<(), io::Error> {
     compile_files("tests/programs/type_err", |res| match res {
         Err(Error::InferenceError(_)) => true,
-        _ => false
+        _ => false,
     })
 }
 
-fn compile_files(directory: &str, f: impl Fn(&Result<TypedModule, module_system::Error>) -> bool) -> Result<(), io::Error> {
+fn compile_files(
+    directory: &str,
+    f: impl Fn(&Result<TypedModule, module_system::Error>) -> bool,
+) -> Result<(), io::Error> {
     for entry in fs::read_dir(Path::new(directory))? {
         let entry = entry?;
         let mut path = entry.path();
-        if path.to_str().unwrap().ends_with(".res")
-            || path.to_str().unwrap().ends_with(".skip")
-        {
+        if path.to_str().unwrap().ends_with(".res") || path.to_str().unwrap().ends_with(".skip") {
             continue;
         }
 
@@ -47,10 +48,13 @@ fn compile_files(directory: &str, f: impl Fn(&Result<TypedModule, module_system:
             path.clone().to_str().unwrap()
         );
 
-        let res = compile_modules(path.clone().to_str().unwrap().to_string(), &InferencerOptions {
-            print_types: false,
-            is_main_module: true,
-        });
+        let res = compile_modules(
+            path.clone().to_str().unwrap().to_string(),
+            &InferencerOptions {
+                print_types: false,
+                is_main_module: true,
+            },
+        );
         println!("Result: {:?}", res);
         assert!(f(&res));
 
