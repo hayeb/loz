@@ -1,0 +1,2 @@
+f :: Char Char -> Char
+f _ _ = 'c'

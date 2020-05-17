@@ -1,0 +1,6 @@
+import B
+
+f :: Int Int -> Int
+f a b = b * a
+
+main = f 3 15
