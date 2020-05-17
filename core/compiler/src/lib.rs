@@ -19,10 +19,8 @@ pub mod inferencer;
 pub mod interpreter;
 pub mod module_system;
 pub mod parser;
-pub mod rewriter;
 pub mod printer;
-
-
+pub mod rewriter;
 
 impl Type {
     pub fn collect_free_type_variables(&self) -> HashSet<Rc<String>> {

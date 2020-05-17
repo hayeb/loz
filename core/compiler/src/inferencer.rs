@@ -71,7 +71,7 @@ pub enum InferenceErrorType {
 pub struct TypedModule {
     pub module_name: Rc<String>,
     pub module_file_name: Rc<String>,
-    pub imported_modules: Vec<Rc<Import>>,
+    pub imports: Vec<Rc<Import>>,
     pub function_name_to_definition: HashMap<Rc<String>, Rc<FunctionDefinition>>,
     pub adt_name_to_definition: HashMap<Rc<String>, Rc<ADTDefinition>>,
     pub record_name_to_definition: HashMap<Rc<String>, Rc<RecordDefinition>>,
@@ -202,7 +202,7 @@ pub fn infer(
     Ok(TypedModule {
         module_name: Rc::clone(&module.name),
         module_file_name: Rc::clone(&module.file_name),
-        imported_modules: module.imports.iter().map(|i| Rc::clone(i)).collect(),
+        imports: module.imports.iter().map(|i| Rc::clone(i)).collect(),
         function_name_to_definition: module
             .function_definitions
             .iter()

@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Error, Formatter};
 
-use crate::inferencer::TypedModule;
 use crate::interpreter::InterpreterError::{DivisionByZero, NoApplicableFunctionBody};
+use crate::rewriter::RuntimeModule;
 use crate::{
     body_references, Expression, FunctionBody, FunctionDefinition, FunctionRule, Location,
     MatchExpression,
@@ -49,7 +49,10 @@ impl RunState {
                 return Rc::new(Value::Lambda(Vec::new(), closures));
             }
         }
-        panic!("No value for variable {} at {}", name, loc);
+        panic!(
+            "No value for variable '{}' at '{}'. Available frames:\n {:#?}",
+            name, loc, self.frames
+        );
     }
 
     fn get_function_definition(&self, name: &Rc<String>) -> Option<Rc<FunctionDefinition>> {
@@ -223,25 +226,28 @@ impl Display for InterpreterError {
     }
 }
 
-pub fn interpret(ast: &TypedModule) -> Result<Rc<Value>, InterpreterError> {
+pub fn interpret(runtime_module: Rc<RuntimeModule>) -> Result<Rc<Value>, InterpreterError> {
+    let mut main_function_name = String::new();
+    main_function_name.push_str(&runtime_module.name);
+    main_function_name.push_str("::main");
     let result = evaluate(
         &Expression::Call(
             Rc::new(Location {
-                file: Rc::clone(&ast.module_file_name),
+                file: Rc::clone(&runtime_module.name),
                 function: Rc::new("main".to_string()),
                 line: 1,
                 col: 1,
             }),
-            Rc::new("main".to_string()),
+            Rc::new(main_function_name),
             vec![],
         ),
         &mut RunState {
             frames: vec![Frame {
                 variables: HashMap::new(),
-                declared_functions: ast
-                    .function_name_to_definition
+                declared_functions: runtime_module
+                    .functions
                     .iter()
-                    .map(|(n, d)| (n.clone(), Rc::clone(d)))
+                    .map(|(n, d)| (Rc::clone(n), Rc::clone(d)))
                     .collect(),
             }],
         },
@@ -360,7 +366,7 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Rc<Value>, Interpret
         Expression::Add(_, e1, e2) => {
             match (evaluate(e1, state)?.borrow(), evaluate(e2, state)?.borrow()) {
                 (Value::Int(x), Value::Int(y)) => Ok(Rc::new(Value::Int(x + y))),
-                (Value::Int(x), Value::Float(y)) => Ok(Rc::new(Value::Float(*x as f64 + y))),
+                (Value::Int(x), Value::Float(y)) => Ok(Rc::new(Value::Float(*x as f64 + *y))),
                 (Value::Float(x), Value::Int(y)) => Ok(Rc::new(Value::Float(x + *y as f64))),
                 (Value::Float(x), Value::Float(y)) => Ok(Rc::new(Value::Float(x + y))),
                 (Value::String(l), Value::String(r)) => {
@@ -375,7 +381,7 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Rc<Value>, Interpret
         Expression::Subtract(_, e1, e2) => {
             match (evaluate(e1, state)?.borrow(), evaluate(e2, state)?.borrow()) {
                 (Value::Int(x), Value::Int(y)) => Ok(Rc::new(Value::Int(x - y))),
-                (Value::Int(x), Value::Float(y)) => Ok(Rc::new(Value::Float(*x as f64 - y))),
+                (Value::Int(x), Value::Float(y)) => Ok(Rc::new(Value::Float(*x as f64 - *y))),
                 (Value::Float(x), Value::Int(y)) => Ok(Rc::new(Value::Float(x - *y as f64))),
                 (Value::Float(x), Value::Float(y)) => Ok(Rc::new(Value::Float(x - y))),
                 _ => unreachable!(),

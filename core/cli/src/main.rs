@@ -3,8 +3,10 @@ use std::env;
 use clap::{App, Arg};
 
 use loz_compiler::inferencer::InferencerOptions;
-use loz_compiler::interpreter::interpret;
+use loz_compiler::interpreter::{interpret, InterpreterError, Value};
 use loz_compiler::module_system::compile_modules;
+use loz_compiler::rewriter::rewrite;
+use std::rc::Rc;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -41,11 +43,22 @@ fn main() {
         print_types: matches.is_present("print_inferred_types"),
         is_main_module: true,
     };
-    match compile_modules(filename.to_string(), &infer_options) {
-        Ok((typed_module, _inferred_modules_by_name)) => match interpret(&typed_module) {
-            Ok(value) => println!("{}", value),
-            Err(error) => println!("{}", error),
-        },
-        Err(error) => println!("{}", error),
+
+    let (typed_main_module, typed_modules) =
+        match compile_modules(filename.to_string(), &infer_options) {
+            Ok((typed_module, _inferred_modules_by_name)) => {
+                (typed_module, _inferred_modules_by_name)
+            }
+            Err(error) => {
+                println!("{}", error);
+                return;
+            }
+        };
+
+    let runtime_module = rewrite(typed_main_module, typed_modules);
+
+    match interpret(runtime_module) {
+        Ok(v) => println!("{}", v),
+        Err(e) => eprintln!("Runtime error: {}", e),
     }
 }

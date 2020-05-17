@@ -187,7 +187,7 @@ fn to_declaration_block_elements(
     ParseError,
 > {
     let mut function_types = HashMap::new();
-    let mut function_bodies : HashMap<Rc<String>, Vec<Rc<FunctionBody>>>= HashMap::new();
+    let mut function_bodies: HashMap<Rc<String>, Vec<Rc<FunctionBody>>> = HashMap::new();
 
     let mut adt_definitions = Vec::new();
     let mut record_definitions = Vec::new();
