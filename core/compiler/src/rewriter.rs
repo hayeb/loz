@@ -254,6 +254,10 @@ impl RewriteState {
             return Rc::new(qualified_name);
         }
         for m in imported_modules {
+            // If the module is alias as import we should not consider it for rewriting here.
+            if module_aliases.values().any(|e| e == &m.module_name) {
+                continue;
+            }
             let local_name = prefix_name(function_name, &m.module_name);
             for (n, _) in &m.function_name_to_definition {
                 println!("Function name: {}", n);

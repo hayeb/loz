@@ -31,6 +31,14 @@ fn test_type_err_files() -> Result<(), io::Error> {
     })
 }
 
+#[test]
+fn test_module_err_files() -> Result<(), io::Error> {
+    compile_files("tests/programs/module_err", |res| match res {
+        Err(Error::ModuleError(_)) => true,
+        _ => false,
+    })
+}
+
 fn compile_files(
     directory: &str,
     f: impl Fn(

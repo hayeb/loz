@@ -1,3 +1,4 @@
 import B as BBB
+import C
 
-main = BBB::fib 12
+main = (BBB::fib 12, fib 1)

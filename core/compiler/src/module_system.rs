@@ -146,7 +146,7 @@ pub fn compile_modules(
     let mut infer_stack_peekable = infer_stack.into_iter().peekable();
     while let Some(module) = infer_stack_peekable.next() {
         let module_name = module.name.clone();
-        println!("Inferring module: {}", module_name);
+        print!("Inferring module: {}.. ", module_name);
 
         let mut errors = Vec::new();
 
@@ -155,23 +155,34 @@ pub fn compile_modules(
         let mut imported_adts: HashMap<Rc<String>, Rc<ADTDefinition>> = HashMap::new();
         let mut imported_functions: HashMap<Rc<String>, Rc<FunctionDefinition>> = HashMap::new();
 
+        let mut existing_module_names: HashSet<Rc<String>> = HashSet::new();
+
         for import in &module.imports {
             let imported_module_name = import_to_module(&import);
             let typed_module =
                 Rc::clone(inferred_modules_by_name.get(&imported_module_name).unwrap());
 
             match import.borrow() {
-                Import::ImportMembers(loc, _, members) => {
+                Import::ImportMembers(loc, n, members) => {
+                    existing_module_names.insert(Rc::clone(n));
                     for m in members {
                         if m.chars().next().unwrap().is_ascii_uppercase() {
                             if let Some(record_definition) =
                                 typed_module.record_name_to_definition.get(m)
                             {
-                                imported_records.insert(m.clone(), Rc::clone(record_definition));
+                                if let Some(existing) =
+                                    imported_records.insert(m.clone(), Rc::clone(record_definition))
+                                {
+                                    errors.push(ModuleError::DefinitionInMultipleImportedModules())
+                                }
                             } else if let Some(adt_definition) =
                                 typed_module.adt_name_to_definition.get(m)
                             {
-                                imported_adts.insert(m.clone(), Rc::clone(adt_definition));
+                                if let Some(existing) =
+                                    imported_adts.insert(m.clone(), Rc::clone(adt_definition))
+                                {
+                                    errors.push(ModuleError::DefinitionInMultipleImportedModules())
+                                }
                             } else {
                                 errors.push(ModuleError::TypeNotDefinedInModule(
                                     Rc::clone(loc),
@@ -182,7 +193,11 @@ pub fn compile_modules(
                         } else {
                             if let Some(function) = typed_module.function_name_to_definition.get(m)
                             {
-                                imported_functions.insert(m.clone(), Rc::clone(function));
+                                if let Some(existing) =
+                                    imported_functions.insert(m.clone(), Rc::clone(function))
+                                {
+                                    errors.push(ModuleError::DefinitionInMultipleImportedModules())
+                                }
                             } else {
                                 errors.push(ModuleError::FunctionNotDefinedInModule(
                                     Rc::clone(loc),
@@ -193,27 +208,52 @@ pub fn compile_modules(
                         }
                     }
                 }
-                Import::ImportModule(_, _, None) => {
-                    imported_adts.extend(
-                        typed_module
-                            .adt_name_to_definition
-                            .iter()
-                            .map(|(n, d)| (n.clone(), Rc::clone(d))),
-                    );
-                    imported_records.extend(
-                        typed_module
-                            .record_name_to_definition
-                            .iter()
-                            .map(|(n, d)| (n.clone(), Rc::clone(d))),
-                    );
-                    imported_functions.extend(
-                        typed_module
-                            .function_name_to_definition
-                            .iter()
-                            .map(|(n, d)| (n.clone(), Rc::clone(d))),
-                    );
+                Import::ImportModule(_, n, None) => {
+                    if !existing_module_names.insert(Rc::clone(n)) {
+                        errors.push(ModuleError::ModuleAliasMultiplyDefined())
+                    }
+                    let added_adts: HashMap<Rc<String>, Rc<ADTDefinition>> = typed_module
+                        .adt_name_to_definition
+                        .iter()
+                        .map(|(n, d)| (n.clone(), Rc::clone(d)))
+                        .collect();
+
+                    for (n, d) in added_adts.iter() {
+                        if let Some(existing_adt) = imported_adts.get(n) {
+                            errors.push(ModuleError::DefinitionInMultipleImportedModules())
+                        }
+                    }
+                    imported_adts.extend(added_adts);
+
+                    let added_records: HashMap<Rc<String>, Rc<RecordDefinition>> = typed_module
+                        .record_name_to_definition
+                        .iter()
+                        .map(|(n, d)| (n.clone(), Rc::clone(d)))
+                        .collect();
+
+                    for (n, d) in added_records.iter() {
+                        if let Some(existing_record) = imported_records.get(n) {
+                            errors.push(ModuleError::DefinitionInMultipleImportedModules())
+                        }
+                    }
+                    imported_records.extend(added_records);
+
+                    let added_functions: HashMap<Rc<String>, Rc<FunctionDefinition>> = typed_module
+                        .function_name_to_definition
+                        .iter()
+                        .map(|(n, d)| (n.clone(), Rc::clone(d)))
+                        .collect();
+                    for (n, d) in added_functions.iter() {
+                        if let Some(existing_function) = imported_functions.get(n) {
+                            errors.push(ModuleError::DefinitionInMultipleImportedModules())
+                        }
+                    }
+                    imported_functions.extend(added_functions);
                 }
                 Import::ImportModule(_, _, Some(alias)) => {
+                    if !existing_module_names.insert(Rc::clone(alias)) {
+                        errors.push(ModuleError::ModuleAliasMultiplyDefined())
+                    }
                     imported_adts.extend(typed_module.adt_name_to_definition.iter().map(
                         |(name, d)| {
                             (
@@ -237,6 +277,9 @@ pub fn compile_modules(
                 }
             }
         }
+        if errors.len() > 0 {
+            return Err(Error::ModuleError(errors));
+        }
 
         let external_definitions = ExternalDefinitions {
             adt_name_to_definition: imported_adts,
@@ -251,6 +294,7 @@ pub fn compile_modules(
 
         match infer(module, module_inference_options, &external_definitions) {
             Ok(module) => {
+                println!("OK!");
                 if infer_stack_peekable.peek().is_none() {
                     return Ok((module, inferred_modules_by_name));
                 }

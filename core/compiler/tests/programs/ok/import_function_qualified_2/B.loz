@@ -1,5 +1,3 @@
-export fib
-
 fib :: Int -> Int
 fib 1 = 1
 fib 2 = 1
