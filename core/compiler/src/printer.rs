@@ -1,15 +1,47 @@
 use std::fmt::{Display, Formatter};
 
 use crate::ast::{Location, Type, TypeScheme};
-use crate::module_system::{ModuleError, ModuleErrorType};
+use crate::module_system::{Error, ModuleError, ModuleErrorType};
 use std::fmt;
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::FileError(e) => write!(f, "{}", e),
+            Error::ParseError(pes) => write!(
+                f,
+                "{}",
+                pes.iter()
+                    .map(|pe| pe.to_string())
+                    .collect::<Vec<String>>()
+                    .join("\n")
+            ),
+            Error::InferenceError(ies) => write!(
+                f,
+                "{}",
+                ies.iter()
+                    .map(|pe| pe.to_string())
+                    .collect::<Vec<String>>()
+                    .join("\n")
+            ),
+            Error::ModuleError(mes) => write!(
+                f,
+                "{}",
+                mes.iter()
+                    .map(|pe| pe.to_string())
+                    .collect::<Vec<String>>()
+                    .join("\n")
+            ),
+        }
+    }
+}
 
 impl Display for Location {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
         write!(
             f,
             "{}::{}[{}:{}]",
-            self.file, self.function, self.line, self.col
+            self.module, self.function, self.line, self.col
         )
     }
 }

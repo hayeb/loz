@@ -133,12 +133,16 @@ impl Display for InferenceError {
 
 fn write_error_context(f: &mut Formatter<'_>, context: &Location) -> Result<(), Error> {
     if context.function.is_empty() {
-        write!(f, "{}@[{}:{}]:\n", context.file, context.line, context.col)
+        write!(
+            f,
+            "{}@[{}:{}]:\n",
+            context.module, context.line, context.col
+        )
     } else {
         write!(
             f,
             "{}::{}@[{}:{}]:\n",
-            context.file, context.function, context.line, context.col
+            context.module, context.function, context.line, context.col
         )
     }
 }
@@ -780,7 +784,7 @@ impl InferencerState {
             if let None = self.get_type_scheme(&Rc::new(String::from("main"))) {
                 return Err(vec![InferenceError::from_loc(
                     &Rc::new(Location {
-                        file: Rc::clone(file_name),
+                        module: Rc::clone(file_name),
                         function: Rc::new("".to_string()),
                         line: 1,
                         col: 1,

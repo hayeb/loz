@@ -233,7 +233,7 @@ pub fn interpret(runtime_module: Rc<RuntimeModule>) -> Result<Rc<Value>, Interpr
     let result = evaluate(
         &Expression::Call(
             Rc::new(Location {
-                file: Rc::clone(&runtime_module.name),
+                module: Rc::clone(&runtime_module.name),
                 function: Rc::new("main".to_string()),
                 line: 1,
                 col: 1,

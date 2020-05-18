@@ -1,9 +1,8 @@
-use std::fmt::{Display, Formatter};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::{fs, io};
 
 use loz_compiler::inferencer::{InferencerOptions, TypedModule};
-use loz_compiler::interpreter::{interpret, InterpreterError, Value};
+use loz_compiler::interpreter::interpret;
 use loz_compiler::module_system;
 use loz_compiler::module_system::{compile_modules, Error};
 use loz_compiler::rewriter::rewrite;
@@ -72,7 +71,7 @@ fn compile_files(
         assert!(f(&res));
 
         if let Ok((ast, typed_modules)) = res {
-            let mut result_value_path = path.clone().to_str().unwrap().to_string();
+            let result_value_path = path.clone().to_str().unwrap().to_string();
 
             if Path::new(&format!("{}.skip", result_value_path)).exists() {
                 println!("Skipping execution...");

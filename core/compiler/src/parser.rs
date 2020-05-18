@@ -157,7 +157,7 @@ fn to_module(
     match pair.as_rule() {
         Rule::ast => {
             let (adt_definitions, record_definitions, function_declarations, exports, imports) =
-                to_declaration_block_elements(pair.into_inner(), file_name, line_starts)?;
+                to_declaration_block_elements(pair.into_inner(), module_name, line_starts)?;
             return Ok(Module {
                 name: Rc::clone(module_name),
                 file_name: Rc::clone(file_name),
@@ -174,7 +174,7 @@ fn to_module(
 
 fn to_declaration_block_elements(
     pairs: Pairs<Rule>,
-    file_name: &Rc<String>,
+    module_name: &Rc<String>,
     line_starts: &Vec<usize>,
 ) -> Result<
     (
@@ -201,18 +201,18 @@ fn to_declaration_block_elements(
                 let child = pair.into_inner().next().unwrap();
                 match child.as_rule() {
                     Rule::adt_definition => {
-                        adt_definitions.push(Rc::new(to_adt_type(child, file_name, line_starts)))
+                        adt_definitions.push(Rc::new(to_adt_type(child, module_name, line_starts)))
                     }
                     Rule::record_definition => record_definitions.push(Rc::new(to_record_type(
                         child,
-                        file_name,
+                        module_name,
                         line_starts,
                     ))),
                     r => unreachable!("{:?}", r),
                 }
             }
             Rule::function_body => {
-                let fb = Rc::new(to_function_body(file_name, pair, line_starts)?);
+                let fb = Rc::new(to_function_body(module_name, pair, line_starts)?);
                 match function_bodies.get_mut(&fb.name) {
                     None => {
                         function_bodies.insert(Rc::clone(&fb.name), vec![fb]);
@@ -229,7 +229,7 @@ fn to_declaration_block_elements(
                     Rc::clone(&function_name),
                     (
                         Rc::new(Location {
-                            file: Rc::clone(file_name),
+                            module: Rc::clone(module_name),
                             function: Rc::clone(&function_name),
                             line,
                             col,
@@ -254,7 +254,7 @@ fn to_declaration_block_elements(
                             Rc::new(members.next().unwrap().as_str().to_string());
                         module_imports.push(Rc::new(Import::ImportModule(
                             Rc::new(Location {
-                                file: Rc::clone(file_name),
+                                module: Rc::clone(module_name),
                                 function: Rc::new("".to_owned()),
                                 line,
                                 col,
@@ -273,7 +273,7 @@ fn to_declaration_block_elements(
                             .collect();
                         module_imports.push(Rc::new(Import::ImportMembers(
                             Rc::new(Location {
-                                file: Rc::clone(file_name),
+                                module: Rc::clone(module_name),
                                 function: Rc::new("".to_owned()),
                                 line,
                                 col,
@@ -299,7 +299,7 @@ fn to_declaration_block_elements(
 
 fn to_adt_type(
     adt_definition: Pair<Rule>,
-    file_name: &Rc<String>,
+    module_name: &Rc<String>,
     line_starts: &Vec<usize>,
 ) -> ADTDefinition {
     let (line, col) = line_col_number(line_starts, adt_definition.as_span().start());
@@ -334,7 +334,7 @@ fn to_adt_type(
     ADTDefinition {
         name: Rc::clone(&name),
         location: Rc::new(Location {
-            file: Rc::clone(file_name),
+            module: Rc::clone(module_name),
             function: Rc::clone(&name),
             line,
             col,
@@ -346,7 +346,7 @@ fn to_adt_type(
 
 fn to_record_type(
     record_definition: Pair<Rule>,
-    file_name: &Rc<String>,
+    module_name: &Rc<String>,
     line_starts: &Vec<usize>,
 ) -> RecordDefinition {
     let (line, col) = line_col_number(line_starts, record_definition.as_span().start());
@@ -373,7 +373,7 @@ fn to_record_type(
     RecordDefinition {
         name: Rc::clone(&name),
         location: Rc::new(Location {
-            file: Rc::clone(file_name),
+            module: Rc::clone(module_name),
             function: Rc::clone(&name),
             line,
             col,
@@ -384,7 +384,7 @@ fn to_record_type(
 }
 
 fn to_function_body(
-    file_name: &Rc<String>,
+    module_name: &Rc<String>,
     pair: Pair<Rule>,
     line_starts: &Vec<usize>,
 ) -> Result<FunctionBody, ParseError> {
@@ -404,7 +404,7 @@ fn to_function_body(
     for r in function_header_elements {
         match_expressions.push(Rc::new(to_match_expression(
             r.into_inner().next().unwrap(),
-            file_name,
+            module_name,
             &function_name,
             line_starts,
         )));
@@ -419,14 +419,14 @@ fn to_function_body(
             // Guaranteed to only occur once.
             Rule::local_definitions => {
                 let (adt_definitions, record_definitions, function_definitions, _, _) =
-                    to_declaration_block_elements(r.into_inner(), file_name, line_starts)?;
+                    to_declaration_block_elements(r.into_inner(), module_name, line_starts)?;
                 local_function_definitions = function_definitions;
                 local_adt_definitions = adt_definitions;
                 local_record_definitions = record_definitions;
             }
             _ => rules.push(Rc::new(to_function_rule(
                 r,
-                file_name,
+                module_name,
                 &function_name,
                 line_starts,
             ))),
@@ -434,7 +434,7 @@ fn to_function_body(
     }
 
     let location = Rc::new(Location {
-        file: Rc::clone(file_name),
+        module: Rc::clone(module_name),
         function: Rc::clone(&function_name),
         line,
         col,
@@ -452,20 +452,20 @@ fn to_function_body(
 
 fn to_expression(
     expression: Pair<Rule>,
-    file_name: &Rc<String>,
+    module_name: &Rc<String>,
     function_name: &Rc<String>,
     line_starts: &Vec<usize>,
 ) -> Expression {
     PREC_CLIMBER.climb(
         expression.into_inner(),
         |pair: Pair<Rule>| match pair.as_rule() {
-            Rule::term => to_term(pair, file_name, function_name, line_starts),
+            Rule::term => to_term(pair, module_name, function_name, line_starts),
             _ => unreachable!("prec_climber reached: {:?}", pair),
         },
         |lhs: Expression, op: Pair<Rule>, rhs: Expression| {
             let (line, col) = line_col_number(line_starts, op.as_span().start());
             let loc_info = Rc::new(Location {
-                file: Rc::clone(file_name),
+                module: Rc::clone(module_name),
                 function: Rc::clone(function_name),
                 line,
                 col,
@@ -497,13 +497,13 @@ fn to_expression(
 
 fn to_term(
     pair: Pair<Rule>,
-    file_name: &Rc<String>,
+    module_name: &Rc<String>,
     function_name: &Rc<String>,
     line_starts: &Vec<usize>,
 ) -> Expression {
     let (line, col) = line_col_number(line_starts, pair.as_span().start());
     let loc_info = Rc::new(Location {
-        file: Rc::clone(file_name),
+        module: Rc::clone(module_name),
         function: Rc::clone(function_name),
         line,
         col,
@@ -524,14 +524,14 @@ fn to_term(
             let mut subs = sub.into_inner();
             let function = subs.next().unwrap().as_str();
             let arguments = subs
-                .map(|a| Rc::new(to_term(a, file_name, function_name, line_starts)))
+                .map(|a| Rc::new(to_term(a, module_name, function_name, line_starts)))
                 .collect();
             Call(loc_info, Rc::new(function.to_string()), arguments)
         }
         Rule::qualifiable_identifier => Variable(loc_info, Rc::new(sub.as_str().to_string())),
         Rule::subexpr => to_expression(
             sub.into_inner().next().unwrap(),
-            file_name,
+            module_name,
             function_name,
             line_starts,
         ),
@@ -539,7 +539,7 @@ fn to_term(
             loc_info,
             Rc::new(to_expression(
                 sub.into_inner().next().unwrap(),
-                file_name,
+                module_name,
                 function_name,
                 line_starts,
             )),
@@ -548,7 +548,7 @@ fn to_term(
             loc_info,
             Rc::new(to_expression(
                 sub.into_inner().next().unwrap(),
-                file_name,
+                module_name,
                 function_name,
                 line_starts,
             )),
@@ -556,7 +556,7 @@ fn to_term(
         Rule::tuple_literal => TupleLiteral(
             loc_info,
             sub.into_inner()
-                .map(|te| Rc::new(to_expression(te, file_name, function_name, line_starts)))
+                .map(|te| Rc::new(to_expression(te, module_name, function_name, line_starts)))
                 .collect(),
         ),
         Rule::list_empty => EmptyListLiteral(loc_info),
@@ -564,7 +564,7 @@ fn to_term(
             loc_info,
             vec![Rc::new(to_expression(
                 sub.into_inner().nth(0).unwrap(),
-                file_name,
+                module_name,
                 function_name,
                 line_starts,
             ))],
@@ -572,7 +572,7 @@ fn to_term(
         Rule::list_shorthand => ShorthandListLiteral(
             loc_info,
             sub.into_inner()
-                .map(|te| Rc::new(to_expression(te, file_name, function_name, line_starts)))
+                .map(|te| Rc::new(to_expression(te, module_name, function_name, line_starts)))
                 .collect(),
         ),
         Rule::list_longhand => {
@@ -581,15 +581,15 @@ fn to_term(
             let tail = children.next().unwrap();
             LonghandListLiteral(
                 loc_info,
-                Rc::new(to_expression(head, file_name, function_name, line_starts)),
-                Rc::new(to_expression(tail, file_name, function_name, line_starts)),
+                Rc::new(to_expression(head, module_name, function_name, line_starts)),
+                Rc::new(to_expression(tail, module_name, function_name, line_starts)),
             )
         }
         Rule::case_expression => {
             let mut children = sub.into_inner();
             let expression = to_term(
                 children.next().unwrap(),
-                file_name,
+                module_name,
                 function_name,
                 line_starts,
             );
@@ -597,7 +597,7 @@ fn to_term(
                 .map(|match_rule| {
                     let (line, col) = line_col_number(line_starts, match_rule.as_span().start());
                     let location = Rc::new(Location {
-                        file: Rc::clone(file_name),
+                        module: Rc::clone(module_name),
                         function: Rc::clone(function_name),
                         line,
                         col,
@@ -605,12 +605,12 @@ fn to_term(
                     let mut scs = match_rule.into_inner();
                     let case_rule = to_match_expression(
                         scs.next().unwrap().into_inner().next().unwrap(),
-                        file_name,
+                        module_name,
                         function_name,
                         line_starts,
                     );
                     let result_rule =
-                        to_expression(scs.next().unwrap(), file_name, function_name, line_starts);
+                        to_expression(scs.next().unwrap(), module_name, function_name, line_starts);
                     Rc::new(CaseRule {
                         loc_info: location,
                         case_rule: Rc::new(case_rule),
@@ -624,7 +624,7 @@ fn to_term(
             let mut elements = sub.into_inner();
             let alternative = elements.next().unwrap().as_str().to_string();
             let arguments = elements
-                .map(|e| Rc::new(to_expression(e, file_name, function_name, line_starts)))
+                .map(|e| Rc::new(to_expression(e, module_name, function_name, line_starts)))
                 .collect();
             ADTTypeConstructor(loc_info, Rc::new(alternative), arguments)
         }
@@ -642,7 +642,7 @@ fn to_term(
                         .to_string();
                     let expression = to_expression(
                         field_expression_elements.next().unwrap(),
-                        file_name,
+                        module_name,
                         function_name,
                         line_starts,
                     );
@@ -661,7 +661,7 @@ fn to_term(
                 .map(|me| {
                     Rc::new(to_match_expression(
                         me.into_inner().next().unwrap(),
-                        file_name,
+                        module_name,
                         function_name,
                         line_starts,
                     ))
@@ -669,7 +669,7 @@ fn to_term(
                 .collect();
             let body = to_expression(
                 elements.next().unwrap(),
-                file_name,
+                module_name,
                 function_name,
                 line_starts,
             );
@@ -682,7 +682,7 @@ fn to_term(
 
 fn to_function_rule(
     pair: Pair<Rule>,
-    file_name: &Rc<String>,
+    module_name: &Rc<String>,
     function_name: &Rc<String>,
     line_starts: &Vec<usize>,
 ) -> FunctionRule {
@@ -691,11 +691,21 @@ fn to_function_rule(
             let pair = pair.into_inner().next().unwrap();
             let (line, col) = line_col_number(line_starts, pair.as_span().start());
             let mut rules = pair.into_inner();
-            let left = to_expression(rules.next().unwrap(), file_name, function_name, line_starts);
-            let right = to_expression(rules.next().unwrap(), file_name, function_name, line_starts);
+            let left = to_expression(
+                rules.next().unwrap(),
+                module_name,
+                function_name,
+                line_starts,
+            );
+            let right = to_expression(
+                rules.next().unwrap(),
+                module_name,
+                function_name,
+                line_starts,
+            );
             FunctionRule::ConditionalRule(
                 Rc::new(Location {
-                    file: Rc::clone(file_name),
+                    module: Rc::clone(module_name),
                     function: Rc::clone(function_name),
                     line,
                     col,
@@ -708,14 +718,14 @@ fn to_function_rule(
             let (line, col) = line_col_number(line_starts, pair.as_span().start());
             FunctionRule::ExpressionRule(
                 Rc::new(Location {
-                    file: Rc::clone(file_name),
+                    module: Rc::clone(module_name),
                     function: Rc::clone(function_name),
                     line,
                     col,
                 }),
                 Rc::new(to_expression(
                     pair.into_inner().next().unwrap(),
-                    file_name,
+                    module_name,
                     function_name,
                     line_starts,
                 )),
@@ -726,19 +736,19 @@ fn to_function_rule(
             let mut inner_rules = pair.into_inner();
             let identifier = to_match_expression(
                 inner_rules.next().unwrap().into_inner().next().unwrap(),
-                file_name,
+                module_name,
                 function_name,
                 line_starts,
             );
             let expression = to_expression(
                 inner_rules.next().unwrap(),
-                file_name,
+                module_name,
                 function_name,
                 line_starts,
             );
             FunctionRule::LetRule(
                 Rc::new(Location {
-                    file: Rc::clone(file_name),
+                    module: Rc::clone(module_name),
                     function: Rc::clone(function_name),
                     line,
                     col,
@@ -753,13 +763,13 @@ fn to_function_rule(
 
 fn to_match_expression(
     match_expression: Pair<Rule>,
-    file_name: &Rc<String>,
+    module_name: &Rc<String>,
     function_name: &Rc<String>,
     line_starts: &Vec<usize>,
 ) -> MatchExpression {
     let (line, col) = line_col_number(line_starts, match_expression.as_span().start());
     let loc_info = Rc::new(Location {
-        file: Rc::clone(file_name),
+        module: Rc::clone(module_name),
         function: Rc::clone(function_name),
         line,
         col,
@@ -776,7 +786,7 @@ fn to_match_expression(
                 .map(|e| {
                     Rc::new(to_match_expression(
                         e,
-                        file_name,
+                        module_name,
                         function_name,
                         line_starts,
                     ))
@@ -785,7 +795,7 @@ fn to_match_expression(
         ),
         Rule::sub_match => to_match_expression(
             match_expression.into_inner().next().unwrap(),
-            file_name,
+            module_name,
             function_name,
             line_starts,
         ),
@@ -794,7 +804,7 @@ fn to_match_expression(
             Rc::clone(&loc_info),
             vec![Rc::new(to_match_expression(
                 match_expression.into_inner().next().unwrap(),
-                file_name,
+                module_name,
                 function_name,
                 line_starts,
             ))],
@@ -806,7 +816,7 @@ fn to_match_expression(
                 .map(|e| {
                     Rc::new(to_match_expression(
                         e,
-                        file_name,
+                        module_name,
                         function_name,
                         line_starts,
                     ))
@@ -815,10 +825,18 @@ fn to_match_expression(
         ),
         Rule::list_match_longhand => {
             let mut inner = match_expression.into_inner();
-            let head =
-                to_match_expression(inner.next().unwrap(), file_name, function_name, line_starts);
-            let tail =
-                to_match_expression(inner.next().unwrap(), file_name, function_name, line_starts);
+            let head = to_match_expression(
+                inner.next().unwrap(),
+                module_name,
+                function_name,
+                line_starts,
+            );
+            let tail = to_match_expression(
+                inner.next().unwrap(),
+                module_name,
+                function_name,
+                line_starts,
+            );
             MatchExpression::LonghandList(loc_info, Rc::new(head), Rc::new(tail))
         }
         Rule::number => MatchExpression::IntLiteral(
@@ -860,7 +878,7 @@ fn to_match_expression(
                     .map(|m| {
                         Rc::new(to_match_expression(
                             m,
-                            file_name,
+                            module_name,
                             function_name,
                             line_starts,
                         ))

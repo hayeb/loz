@@ -3,10 +3,9 @@ use std::env;
 use clap::{App, Arg};
 
 use loz_compiler::inferencer::InferencerOptions;
-use loz_compiler::interpreter::{interpret, InterpreterError, Value};
+use loz_compiler::interpreter::interpret;
 use loz_compiler::module_system::compile_modules;
 use loz_compiler::rewriter::rewrite;
-use std::rc::Rc;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 

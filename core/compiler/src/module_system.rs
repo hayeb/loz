@@ -1,7 +1,5 @@
-use core::fmt;
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
-use std::fmt::{Display, Formatter};
 use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -19,38 +17,6 @@ pub enum Error {
     ParseError(Vec<crate::parser::ParseError>),
     InferenceError(Vec<crate::inferencer::InferenceError>),
     ModuleError(Vec<ModuleError>),
-}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::FileError(e) => write!(f, "{}", e),
-            Error::ParseError(pes) => write!(
-                f,
-                "{}",
-                pes.iter()
-                    .map(|pe| pe.to_string())
-                    .collect::<Vec<String>>()
-                    .join("\n")
-            ),
-            Error::InferenceError(ies) => write!(
-                f,
-                "{}",
-                ies.iter()
-                    .map(|pe| pe.to_string())
-                    .collect::<Vec<String>>()
-                    .join("\n")
-            ),
-            Error::ModuleError(mes) => write!(
-                f,
-                "{}",
-                mes.iter()
-                    .map(|pe| pe.to_string())
-                    .collect::<Vec<String>>()
-                    .join("\n")
-            ),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -118,7 +84,10 @@ impl ModuleName {
     fn name(&self) -> Rc<String> {
         match self {
             ModuleName::ModuleName(n) => Rc::clone(n),
-            ModuleName::ModuleFileName(n) => Rc::clone(n),
+            ModuleName::ModuleFileName(n) => {
+                let pb = PathBuf::from(n.to_string());
+                return Rc::new(String::from(pb.file_stem().unwrap().to_str().unwrap()));
+            }
         }
     }
 }
@@ -131,7 +100,7 @@ pub fn compile_modules(
         vec![(
             ModuleName::ModuleFileName(Rc::new(main_module.clone())),
             Rc::new(Location {
-                file: Rc::new(main_module.clone()),
+                module: Rc::new(main_module.clone()),
                 function: Rc::new("".to_string()),
                 line: 1,
                 col: 1,
@@ -180,8 +149,8 @@ pub fn compile_modules(
                                         ModuleErrorType::DefinitionInMultipleImportedModules(
                                             "Record".to_string(),
                                             Rc::clone(m),
-                                            Rc::clone(&existing.location.file),
-                                            Rc::clone(&record_definition.location.file),
+                                            Rc::clone(&existing.location.module),
+                                            Rc::clone(&record_definition.location.module),
                                         ),
                                     ))
                                 }
@@ -196,8 +165,8 @@ pub fn compile_modules(
                                         ModuleErrorType::DefinitionInMultipleImportedModules(
                                             "ADT".to_string(),
                                             Rc::clone(m),
-                                            Rc::clone(&existing.location.file),
-                                            Rc::clone(&adt_definition.location.file),
+                                            Rc::clone(&existing.location.module),
+                                            Rc::clone(&adt_definition.location.module),
                                         ),
                                     ))
                                 }
@@ -221,8 +190,8 @@ pub fn compile_modules(
                                         ModuleErrorType::DefinitionInMultipleImportedModules(
                                             "Function".to_string(),
                                             Rc::clone(m),
-                                            Rc::clone(&existing.location.file),
-                                            Rc::clone(&function.location.file),
+                                            Rc::clone(&existing.location.module),
+                                            Rc::clone(&function.location.module),
                                         ),
                                     ))
                                 }
@@ -260,8 +229,8 @@ pub fn compile_modules(
                                 ModuleErrorType::DefinitionInMultipleImportedModules(
                                     "ADT".to_string(),
                                     Rc::clone(n),
-                                    Rc::clone(&existing_adt.location.file),
-                                    Rc::clone(&d.location.file),
+                                    Rc::clone(&existing_adt.location.module),
+                                    Rc::clone(&d.location.module),
                                 ),
                             ))
                         }
@@ -281,8 +250,8 @@ pub fn compile_modules(
                                 ModuleErrorType::DefinitionInMultipleImportedModules(
                                     "Record".to_string(),
                                     Rc::clone(n),
-                                    Rc::clone(&existing_record.location.file),
-                                    Rc::clone(&d.location.file),
+                                    Rc::clone(&existing_record.location.module),
+                                    Rc::clone(&d.location.module),
                                 ),
                             ))
                         }
@@ -301,8 +270,8 @@ pub fn compile_modules(
                                 ModuleErrorType::DefinitionInMultipleImportedModules(
                                     "Function".to_string(),
                                     Rc::clone(n),
-                                    Rc::clone(&existing_function.location.file),
-                                    Rc::clone(&d.location.file),
+                                    Rc::clone(&existing_function.location.module),
+                                    Rc::clone(&d.location.module),
                                 ),
                             ))
                         }

@@ -3,8 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::ast::{
-    ADTDefinition, CaseRule, Expression, FunctionBody, FunctionDefinition, FunctionRule, Import,
-    MatchExpression, RecordDefinition,
+    CaseRule, Expression, FunctionBody, FunctionDefinition, FunctionRule, Import, MatchExpression,
 };
 use crate::inferencer::TypedModule;
 
@@ -14,7 +13,6 @@ pub struct RuntimeModule {
 }
 
 struct RewriteState {
-    used_functions: HashSet<Rc<String>>,
     original_modules: HashMap<Rc<String>, Rc<TypedModule>>,
     rewritten_modules: HashMap<Rc<String>, Rc<TypedModule>>,
 
@@ -40,7 +38,6 @@ Rewriting steps:
 impl RewriteState {
     fn new(original_modules: HashMap<Rc<String>, Rc<TypedModule>>) -> Self {
         RewriteState {
-            used_functions: HashSet::new(),
             original_modules,
             rewritten_modules: HashMap::new(),
 
@@ -108,91 +105,6 @@ impl RewriteState {
         self.rewritten_modules
             .insert(Rc::clone(&module.module_name), Rc::clone(&rewritten_module));
         return rewritten_module;
-    }
-
-    fn rewrite_adt_definition(
-        &self,
-        adt_definition: &Rc<ADTDefinition>,
-        current_module_name: &Rc<String>,
-        imported_modules: &Vec<Rc<TypedModule>>,
-    ) -> Rc<ADTDefinition> {
-        Rc::new(ADTDefinition {
-            name: Rc::clone(&adt_definition.name),
-            location: Rc::clone(&adt_definition.location),
-            type_variables: adt_definition
-                .type_variables
-                .iter()
-                .map(Rc::clone)
-                .collect(),
-            constructors: adt_definition
-                .constructors
-                .iter()
-                .map(|(constructor_name, constructor_definition)| {
-                    (
-                        prefix_name(constructor_name, current_module_name),
-                        Rc::clone(constructor_definition),
-                    )
-                })
-                .collect(),
-        })
-    }
-
-    fn rewrite_adt_constructor_name(
-        &self,
-        type_constructor_name: &Rc<String>,
-        current_module_name: &Rc<String>,
-        imported_modules: &Vec<Rc<TypedModule>>,
-    ) -> Rc<String> {
-        for m in imported_modules {
-            let local_name = prefix_name(type_constructor_name, &m.module_name);
-            for (_, adtd) in &m.adt_name_to_definition {
-                for (n, _) in &adtd.constructors {
-                    if n == &local_name {
-                        return local_name;
-                    }
-                }
-            }
-        }
-
-        // Not found in imported modules.. Must be a adt constructor in the current module.
-        prefix_name(type_constructor_name, current_module_name)
-    }
-
-    fn rewrite_record_name(
-        &self,
-        type_constructor_name: &Rc<String>,
-        current_module_name: &Rc<String>,
-        imported_modules: &Vec<Rc<TypedModule>>,
-    ) -> Rc<String> {
-        for m in imported_modules {
-            let local_name = prefix_name(type_constructor_name, &m.module_name);
-            for (n, _) in &m.record_name_to_definition {
-                if n == &local_name {
-                    return local_name;
-                }
-            }
-        }
-
-        // Not found in imported modules.. Must be a record definition in the current module.
-        prefix_name(type_constructor_name, current_module_name)
-    }
-
-    fn rewrite_record_definition(
-        &self,
-        record_definition: &Rc<RecordDefinition>,
-        current_module_name: &Rc<String>,
-        imported_modules: &Vec<Rc<TypedModule>>,
-    ) -> Rc<RecordDefinition> {
-        Rc::new(RecordDefinition {
-            name: Rc::clone(&record_definition.name),
-            location: Rc::clone(&record_definition.location),
-            type_variables: record_definition.type_variables.clone(),
-            fields: record_definition
-                .fields
-                .iter()
-                .map(|(n, t)| (prefix_name(n, current_module_name), Rc::clone(t)))
-                .collect(),
-        })
     }
 
     fn rewrite_function_definition(
@@ -337,14 +249,12 @@ impl RewriteState {
             local_adt_definitions: function_body
                 .local_adt_definitions
                 .iter()
-                .map(|adtd| {
-                    self.rewrite_adt_definition(adtd, current_module_name, imported_modules)
-                })
+                .map(Rc::clone)
                 .collect(),
             local_record_definitions: function_body
                 .local_record_definitions
                 .iter()
-                .map(|rd| self.rewrite_record_definition(rd, current_module_name, imported_modules))
+                .map(Rc::clone)
                 .collect(),
         });
         self.variables_stack.pop();

@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Location {
-    pub file: Rc<String>,
+    pub module: Rc<String>,
     pub function: Rc<String>,
     pub line: usize,
     pub col: usize,
