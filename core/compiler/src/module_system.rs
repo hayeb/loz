@@ -10,7 +10,6 @@ use crate::ast::{
     ADTConstructor, ADTDefinition, FunctionDefinition, Import, Location, Module, RecordDefinition,
 };
 use crate::inferencer::{infer, ExternalDefinitions, InferencerOptions, TypedModule};
-use crate::module_system::ModuleError::ModuleNotFound;
 use crate::parser;
 use crate::parser::parse;
 
@@ -55,40 +54,35 @@ impl Display for Error {
 }
 
 #[derive(Debug)]
-pub enum ModuleError {
-    ModuleNotFound(Rc<String>),
-
-    LocalDefinitionAlsoInImportedModule(),
-    DefinitionInMultipleImportedModules(),
-
-    ModuleAliasMultiplyDefined(),
-
-    FunctionNotDefinedInModule(Rc<Location>, Rc<String>, Rc<String>),
-    TypeNotDefinedInModule(Rc<Location>, Rc<String>, Rc<String>),
+pub struct ModuleError {
+    pub location: Rc<Location>,
+    pub error: ModuleErrorType,
 }
 
-impl Display for ModuleError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "Module error: ")?;
-        match self {
-            ModuleNotFound(name) => write!(f, "Module '{}' not found", name),
-            ModuleError::LocalDefinitionAlsoInImportedModule() => {
-                write!(f, "Local definition also in imported module")
-            }
-            ModuleError::DefinitionInMultipleImportedModules() => {
-                write!(f, "DefinitionInMultipleImportedModules")
-            }
-            ModuleError::ModuleAliasMultiplyDefined() => write!(f, "ModuleAliasMultiplyDefined"),
-            ModuleError::FunctionNotDefinedInModule(_, module, function) => write!(
-                f,
-                "Function '{}' not found in module '{}'",
-                function, module
-            ),
-            ModuleError::TypeNotDefinedInModule(_, module, type_name) => {
-                write!(f, "Type '{}' not found in module '{}'", type_name, module)
-            }
-        }
+impl ModuleError {
+    fn from_loc(loc: &Rc<Location>, e: ModuleErrorType) -> Self {
+        return ModuleError {
+            location: Rc::clone(loc),
+            error: e,
+        };
     }
+}
+
+#[derive(Debug)]
+pub enum ModuleErrorType {
+    ModuleNotFound(Rc<String>),
+
+    DefinitionInMultipleImportedModules(
+        String,     // Type of definition: Function, record, adt, ...
+        Rc<String>, // Name of definition
+        Rc<String>, // First module with definition
+        Rc<String>, // Current module that also contains the same definition
+    ),
+
+    ModuleAliasMultiplyDefined(Rc<String>, Rc<Location>),
+
+    FunctionNotDefinedInModule(Rc<String>, Rc<String>),
+    TypeNotDefinedInModule(Rc<String>, Rc<String>),
 }
 
 /*
@@ -134,7 +128,15 @@ pub fn compile_modules(
     infer_options: &InferencerOptions,
 ) -> Result<(TypedModule, HashMap<Rc<String>, Rc<TypedModule>>), Error> {
     let infer_stack: Vec<Module> = parse_modules(
-        vec![ModuleName::ModuleFileName(Rc::new(main_module.clone()))],
+        vec![(
+            ModuleName::ModuleFileName(Rc::new(main_module.clone())),
+            Rc::new(Location {
+                file: Rc::new(main_module.clone()),
+                function: Rc::new("".to_string()),
+                line: 1,
+                col: 1,
+            }),
+        )],
         PathBuf::from(&main_module.clone())
             .parent()
             .unwrap()
@@ -146,7 +148,7 @@ pub fn compile_modules(
     let mut infer_stack_peekable = infer_stack.into_iter().peekable();
     while let Some(module) = infer_stack_peekable.next() {
         let module_name = module.name.clone();
-        print!("Inferring module: {}.. ", module_name);
+        println!("Inferring module: {}.. ", module_name);
 
         let mut errors = Vec::new();
 
@@ -155,7 +157,7 @@ pub fn compile_modules(
         let mut imported_adts: HashMap<Rc<String>, Rc<ADTDefinition>> = HashMap::new();
         let mut imported_functions: HashMap<Rc<String>, Rc<FunctionDefinition>> = HashMap::new();
 
-        let mut existing_module_names: HashSet<Rc<String>> = HashSet::new();
+        let mut existing_module_names: HashMap<Rc<String>, Rc<Location>> = HashMap::new();
 
         for import in &module.imports {
             let imported_module_name = import_to_module(&import);
@@ -164,7 +166,7 @@ pub fn compile_modules(
 
             match import.borrow() {
                 Import::ImportMembers(loc, n, members) => {
-                    existing_module_names.insert(Rc::clone(n));
+                    existing_module_names.insert(Rc::clone(n), Rc::clone(loc));
                     for m in members {
                         if m.chars().next().unwrap().is_ascii_uppercase() {
                             if let Some(record_definition) =
@@ -173,7 +175,15 @@ pub fn compile_modules(
                                 if let Some(existing) =
                                     imported_records.insert(m.clone(), Rc::clone(record_definition))
                                 {
-                                    errors.push(ModuleError::DefinitionInMultipleImportedModules())
+                                    errors.push(ModuleError::from_loc(
+                                        loc,
+                                        ModuleErrorType::DefinitionInMultipleImportedModules(
+                                            "Record".to_string(),
+                                            Rc::clone(m),
+                                            Rc::clone(&existing.location.file),
+                                            Rc::clone(&record_definition.location.file),
+                                        ),
+                                    ))
                                 }
                             } else if let Some(adt_definition) =
                                 typed_module.adt_name_to_definition.get(m)
@@ -181,13 +191,23 @@ pub fn compile_modules(
                                 if let Some(existing) =
                                     imported_adts.insert(m.clone(), Rc::clone(adt_definition))
                                 {
-                                    errors.push(ModuleError::DefinitionInMultipleImportedModules())
+                                    errors.push(ModuleError::from_loc(
+                                        loc,
+                                        ModuleErrorType::DefinitionInMultipleImportedModules(
+                                            "ADT".to_string(),
+                                            Rc::clone(m),
+                                            Rc::clone(&existing.location.file),
+                                            Rc::clone(&adt_definition.location.file),
+                                        ),
+                                    ))
                                 }
                             } else {
-                                errors.push(ModuleError::TypeNotDefinedInModule(
-                                    Rc::clone(loc),
-                                    imported_module_name.clone(),
-                                    m.clone(),
+                                errors.push(ModuleError::from_loc(
+                                    loc,
+                                    ModuleErrorType::TypeNotDefinedInModule(
+                                        imported_module_name.clone(),
+                                        m.clone(),
+                                    ),
                                 ));
                             }
                         } else {
@@ -196,21 +216,36 @@ pub fn compile_modules(
                                 if let Some(existing) =
                                     imported_functions.insert(m.clone(), Rc::clone(function))
                                 {
-                                    errors.push(ModuleError::DefinitionInMultipleImportedModules())
+                                    errors.push(ModuleError::from_loc(
+                                        loc,
+                                        ModuleErrorType::DefinitionInMultipleImportedModules(
+                                            "Function".to_string(),
+                                            Rc::clone(m),
+                                            Rc::clone(&existing.location.file),
+                                            Rc::clone(&function.location.file),
+                                        ),
+                                    ))
                                 }
                             } else {
-                                errors.push(ModuleError::FunctionNotDefinedInModule(
-                                    Rc::clone(loc),
-                                    imported_module_name.clone(),
-                                    m.clone(),
+                                errors.push(ModuleError::from_loc(
+                                    loc,
+                                    ModuleErrorType::FunctionNotDefinedInModule(
+                                        imported_module_name.clone(),
+                                        m.clone(),
+                                    ),
                                 ));
                             }
                         }
                     }
                 }
-                Import::ImportModule(_, n, None) => {
-                    if !existing_module_names.insert(Rc::clone(n)) {
-                        errors.push(ModuleError::ModuleAliasMultiplyDefined())
+                Import::ImportModule(loc, n, None) => {
+                    if let Some(existing) =
+                        existing_module_names.insert(Rc::clone(n), Rc::clone(loc))
+                    {
+                        errors.push(ModuleError::from_loc(
+                            loc,
+                            ModuleErrorType::ModuleAliasMultiplyDefined(Rc::clone(n), existing),
+                        ))
                     }
                     let added_adts: HashMap<Rc<String>, Rc<ADTDefinition>> = typed_module
                         .adt_name_to_definition
@@ -220,7 +255,15 @@ pub fn compile_modules(
 
                     for (n, d) in added_adts.iter() {
                         if let Some(existing_adt) = imported_adts.get(n) {
-                            errors.push(ModuleError::DefinitionInMultipleImportedModules())
+                            errors.push(ModuleError::from_loc(
+                                loc,
+                                ModuleErrorType::DefinitionInMultipleImportedModules(
+                                    "ADT".to_string(),
+                                    Rc::clone(n),
+                                    Rc::clone(&existing_adt.location.file),
+                                    Rc::clone(&d.location.file),
+                                ),
+                            ))
                         }
                     }
                     imported_adts.extend(added_adts);
@@ -233,7 +276,15 @@ pub fn compile_modules(
 
                     for (n, d) in added_records.iter() {
                         if let Some(existing_record) = imported_records.get(n) {
-                            errors.push(ModuleError::DefinitionInMultipleImportedModules())
+                            errors.push(ModuleError::from_loc(
+                                loc,
+                                ModuleErrorType::DefinitionInMultipleImportedModules(
+                                    "Record".to_string(),
+                                    Rc::clone(n),
+                                    Rc::clone(&existing_record.location.file),
+                                    Rc::clone(&d.location.file),
+                                ),
+                            ))
                         }
                     }
                     imported_records.extend(added_records);
@@ -245,14 +296,27 @@ pub fn compile_modules(
                         .collect();
                     for (n, d) in added_functions.iter() {
                         if let Some(existing_function) = imported_functions.get(n) {
-                            errors.push(ModuleError::DefinitionInMultipleImportedModules())
+                            errors.push(ModuleError::from_loc(
+                                loc,
+                                ModuleErrorType::DefinitionInMultipleImportedModules(
+                                    "Function".to_string(),
+                                    Rc::clone(n),
+                                    Rc::clone(&existing_function.location.file),
+                                    Rc::clone(&d.location.file),
+                                ),
+                            ))
                         }
                     }
                     imported_functions.extend(added_functions);
                 }
-                Import::ImportModule(_, _, Some(alias)) => {
-                    if !existing_module_names.insert(Rc::clone(alias)) {
-                        errors.push(ModuleError::ModuleAliasMultiplyDefined())
+                Import::ImportModule(loc, _, Some(alias)) => {
+                    if let Some(existing) =
+                        existing_module_names.insert(Rc::clone(alias), Rc::clone(loc))
+                    {
+                        errors.push(ModuleError::from_loc(
+                            loc,
+                            ModuleErrorType::ModuleAliasMultiplyDefined(Rc::clone(alias), existing),
+                        ))
                     }
                     imported_adts.extend(typed_module.adt_name_to_definition.iter().map(
                         |(name, d)| {
@@ -294,7 +358,6 @@ pub fn compile_modules(
 
         match infer(module, module_inference_options, &external_definitions) {
             Ok(module) => {
-                println!("OK!");
                 if infer_stack_peekable.peek().is_none() {
                     return Ok((module, inferred_modules_by_name));
                 }
@@ -308,15 +371,19 @@ pub fn compile_modules(
 }
 
 fn parse_modules(
-    mut parse_stack: Vec<ModuleName>,
+    mut parse_stack: Vec<(ModuleName, Rc<Location>)>,
     working_directory: PathBuf,
 ) -> Result<Vec<Module>, Error> {
     let mut infer_stack: Vec<Module> = Vec::new();
     let mut parsed_modules = HashSet::new();
-    while let Some(module) = parse_stack.pop() {
+    while let Some((module, loc)) = parse_stack.pop() {
         let module_file_name = module_file_name(&working_directory, module.clone());
-        let file_contents = fs::read_to_string(module_file_name.clone())
-            .map_err(|_| Error::ModuleError(vec![ModuleNotFound(module.name())]))?;
+        let file_contents = fs::read_to_string(module_file_name.clone()).map_err(|_| {
+            Error::ModuleError(vec![ModuleError::from_loc(
+                &loc,
+                ModuleErrorType::ModuleNotFound(module.name()),
+            )])
+        })?;
         print!("Parsing module {}..", module.name());
         let parsed_module = parse(
             module_file_name.to_str().unwrap().to_string(),
@@ -327,7 +394,13 @@ fn parse_modules(
 
         for i in &parsed_module.imports {
             if parsed_modules.insert(import_to_module(i)) {
-                parse_stack.insert(0, ModuleName::ModuleName(import_to_module(i)));
+                parse_stack.insert(
+                    0,
+                    (
+                        ModuleName::ModuleName(import_to_module(i)),
+                        import_to_location(i),
+                    ),
+                );
             }
         }
 
@@ -357,6 +430,13 @@ fn import_to_module(import: &Import) -> Rc<String> {
     match import {
         Import::ImportMembers(_, module_name, _) => Rc::clone(module_name),
         Import::ImportModule(_, module_name, _) => Rc::clone(module_name),
+    }
+}
+
+fn import_to_location(import: &Import) -> Rc<Location> {
+    match import {
+        Import::ImportMembers(loc, _, _) => Rc::clone(loc),
+        Import::ImportModule(loc, _, _) => Rc::clone(loc),
     }
 }
 

@@ -1,6 +1,8 @@
 use std::fmt::{Display, Formatter};
 
 use crate::ast::{Location, Type, TypeScheme};
+use crate::module_system::{ModuleError, ModuleErrorType};
+use std::fmt;
 
 impl Display for Location {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
@@ -70,6 +72,41 @@ impl Display for TypeScheme {
             )
         } else {
             write!(f, "{}", self.enclosed_type)
+        }
+    }
+}
+impl Display for ModuleError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.location, self.error)
+    }
+}
+impl Display for ModuleErrorType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            ModuleErrorType::ModuleNotFound(name) => write!(f, "Module '{}' not found", name),
+            ModuleErrorType::DefinitionInMultipleImportedModules(
+                dt,
+                name,
+                original_module,
+                current_module,
+            ) => write!(
+                f,
+                "{} '{}' imported from module '{}' but also earlier from module '{}'",
+                dt, name, current_module, original_module
+            ),
+            ModuleErrorType::ModuleAliasMultiplyDefined(alias, loc_b) => write!(
+                f,
+                "Module alias '{}' defined earlier at [{}:{}]",
+                alias, loc_b.line, loc_b.col
+            ),
+            ModuleErrorType::FunctionNotDefinedInModule(module, function) => write!(
+                f,
+                "Function '{}' not found in module '{}'",
+                function, module
+            ),
+            ModuleErrorType::TypeNotDefinedInModule(module, type_name) => {
+                write!(f, "Type '{}' not found in module '{}'", type_name, module)
+            }
         }
     }
 }
