@@ -1,0 +1,16 @@
+:: Maybe a = Nothing | Just a
+
+fromJust :: (Maybe a) -> a
+fromJust (Just a) = a
+
+isJust :: (Maybe a) -> Bool
+isJust (Just _) = true
+isJust Nothing = false
+
+isNothing :: (Maybe a) -> Bool
+isNothing Nothing = true
+isNothing (Just a) = false
+
+mapMaybe :: (Maybe a) (a -> b) -> Maybe b
+mapMaybe (Just a) f = Just (f a)
+mapMaybe Nothing f = Nothing

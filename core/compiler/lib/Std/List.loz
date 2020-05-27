@@ -1,0 +1,59 @@
+import Std.Maybe
+
+appendList :: [a] [a] -> [a]
+appendList [] l = l
+appendList [h:t] l = [h : appendList t l]
+
+mapList :: [a] (a -> b) -> [b]
+mapList [] _ = []
+mapList [a : as] f = [f a : mapList as f]
+
+flatten :: [[a]] -> [a]
+flatten [] = []
+flatten [h : t] = appendList h (flatten t)
+
+isEmpty :: [a] -> Bool
+isEmpty [] = true
+isEmpty _ = false
+
+hd :: [a] -> Maybe a
+hd [] = Nothing
+hd [a:_] = Just a
+
+tl :: [a] -> Maybe [a]
+tl [] = Nothing
+tl [_:as] = Just as
+
+last :: [a] -> Maybe a
+last [] = Nothing
+last [a] = Just a
+last [a : as] = last as
+
+init :: [a] -> [a]
+init [] = []
+init [a] = []
+init [a : as] = [a : init as]
+
+take :: Int [a] -> [a]
+take n list
+| n <= 0 = []
+= _take n list
+where
+    _take n [] = []
+    _take n [x:xs]
+    | n <= 1 = [x]
+    = [x : take (n - 1) xs]
+.
+
+takeWhile :: (a -> Bool) [a] -> [a]
+takeWhile f [] = []
+takeWhile f [a:as]
+| f a = takeWhile [a : takeWhile f as]
+= []
+
+drop :: Int [a] -> [a]
+drop _ [] = []
+drop n [a:as]
+| n == 0 = [a:as]
+= drop (n - 1) as
+

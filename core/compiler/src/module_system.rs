@@ -8,6 +8,7 @@ use crate::ast::{
     ADTConstructor, ADTDefinition, FunctionDefinition, Import, Location, Module, RecordDefinition,
 };
 use crate::inferencer::{infer, ExternalDefinitions, InferencerOptions, TypedModule};
+use crate::module_system::ModuleErrorType::ModuleNotFound;
 use crate::parser;
 use crate::parser::parse;
 
@@ -92,10 +93,25 @@ impl ModuleName {
     }
 }
 
+pub struct CompilerOptions {
+    pub current_directory: PathBuf,
+    pub loz_home: PathBuf,
+
+    pub extra_module_search_path: Vec<PathBuf>,
+
+    pub print_ast: bool,
+    pub print_types: bool,
+    pub execute: bool,
+}
+
 pub fn compile_modules(
     main_module: String,
-    infer_options: &InferencerOptions,
+    compiler_options: &CompilerOptions,
 ) -> Result<(TypedModule, HashMap<Rc<String>, Rc<TypedModule>>), Error> {
+    let module_search_path = build_module_search_path(
+        compiler_options.current_directory.clone(),
+        compiler_options.extra_module_search_path.clone(),
+    );
     let infer_stack: Vec<Module> = parse_modules(
         vec![(
             ModuleName::ModuleFileName(Rc::new(main_module.clone())),
@@ -106,10 +122,7 @@ pub fn compile_modules(
                 col: 1,
             }),
         )],
-        PathBuf::from(&main_module.clone())
-            .parent()
-            .unwrap()
-            .to_path_buf(),
+        module_search_path,
     )?;
 
     let mut inferred_modules_by_name: HashMap<Rc<String>, Rc<TypedModule>> = HashMap::new();
@@ -320,10 +333,10 @@ pub fn compile_modules(
             function_name_to_definition: imported_functions,
         };
 
-        let mut module_inference_options = infer_options.clone();
-
-        // Last module is the main module
-        module_inference_options.is_main_module = infer_stack_peekable.peek().is_none();
+        let module_inference_options = InferencerOptions {
+            print_types: compiler_options.print_types,
+            is_main_module: infer_stack_peekable.peek().is_none(),
+        };
 
         match infer(module, module_inference_options, &external_definitions) {
             Ok(module) => {
@@ -341,25 +354,15 @@ pub fn compile_modules(
 
 fn parse_modules(
     mut parse_stack: Vec<(ModuleName, Rc<Location>)>,
-    working_directory: PathBuf,
+    module_search_path: Vec<PathBuf>,
 ) -> Result<Vec<Module>, Error> {
     let mut infer_stack: Vec<Module> = Vec::new();
     let mut parsed_modules = HashSet::new();
     while let Some((module, loc)) = parse_stack.pop() {
-        let module_file_name = module_file_name(&working_directory, module.clone());
-        let file_contents = fs::read_to_string(module_file_name.clone()).map_err(|_| {
-            Error::ModuleError(vec![ModuleError::from_loc(
-                &loc,
-                ModuleErrorType::ModuleNotFound(module.name()),
-            )])
-        })?;
-        print!("Parsing module {}..", module.name());
-        let parsed_module = parse(
-            module_file_name.to_str().unwrap().to_string(),
-            module.name(),
-            file_contents,
-        )?;
-        println!(" OK!");
+        let (module_file_name, module_contents) =
+            resolve_module(&module_search_path, module.clone(), &loc)?;
+        println!("Parsing module {}..", module.name());
+        let parsed_module = parse(module_file_name, module.name(), module_contents)?;
 
         for i in &parsed_module.imports {
             if parsed_modules.insert(import_to_module(i)) {
@@ -378,21 +381,42 @@ fn parse_modules(
     Ok(infer_stack)
 }
 
-fn module_file_name(working_directory: &PathBuf, module_name: ModuleName) -> PathBuf {
-    match module_name {
-        ModuleName::ModuleName(name) => {
-            let mut module_path_buffer = working_directory.clone();
-            for module_name_component in name.split(".") {
-                module_path_buffer.push(module_name_component);
+fn resolve_module(
+    module_search_path: &Vec<PathBuf>,
+    module_name: ModuleName,
+    module_location: &Rc<Location>,
+) -> Result<(String, String), Error> {
+    for search_directory in module_search_path {
+        match &module_name {
+            ModuleName::ModuleName(name) => {
+                let mut module_path_buffer = search_directory.clone();
+                for module_name_component in name.split(".") {
+                    module_path_buffer.push(module_name_component);
+                }
+                module_path_buffer.set_extension("loz");
+                if module_path_buffer.is_file() {
+                    return Ok((
+                        module_path_buffer.to_str().unwrap().to_string(),
+                        fs::read_to_string(module_path_buffer).map_err(|e| Error::FileError(e))?,
+                    ));
+                }
             }
-            module_path_buffer.set_extension("loz");
-            module_path_buffer
-        }
-        ModuleName::ModuleFileName(file_name) => {
-            let file_name_string = file_name.to_string();
-            PathBuf::from(file_name_string)
+            ModuleName::ModuleFileName(file_name) => {
+                let file_name_string = file_name.to_string();
+                let module_path_buffer = PathBuf::from(file_name_string);
+                if module_path_buffer.is_file() {
+                    return Ok((
+                        module_path_buffer.to_str().unwrap().to_string(),
+                        fs::read_to_string(module_path_buffer).map_err(|e| Error::FileError(e))?,
+                    ));
+                }
+            }
         }
     }
+    Err(Error::ModuleError(vec![ModuleError::from_loc(
+        module_location,
+        ModuleNotFound(module_name.name()),
+    )]))
 }
 
 fn import_to_module(import: &Import) -> Rc<String> {
@@ -452,4 +476,13 @@ fn prefix_constructor_names(
         location: adt_definition.location.clone(),
         type_variables: adt_definition.type_variables.clone(),
     })
+}
+
+fn build_module_search_path(cwd: PathBuf, module_path_entries: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut search_path = Vec::new();
+    search_path.push(cwd);
+    for m in module_path_entries {
+        search_path.push(m)
+    }
+    search_path
 }

@@ -227,7 +227,7 @@ operation = _{
     | add | substract
     | shift_left | shift_right
 
-    | lesser | leq | greater | greq
+    | leq | greq | lesser | greater
 
     | eq | neq
 
@@ -285,7 +285,7 @@ name = _{
     (capital_identifier | identifier)
 }
 
-module_name = _{
+module_name = @{
     (name) ~ ("." ~ name)*
 }
 

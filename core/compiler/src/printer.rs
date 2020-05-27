@@ -57,7 +57,7 @@ impl Display for Type {
             Type::UserType(t, type_arguments) if type_arguments.len() == 0 => write!(f, "{}", t),
             Type::UserType(t, type_arguments) => write!(
                 f,
-                "{} {}",
+                "({} {})",
                 t,
                 type_arguments
                     .into_iter()

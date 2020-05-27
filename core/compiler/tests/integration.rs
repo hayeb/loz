@@ -1,12 +1,13 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::{fs, io};
 
 use loz_compiler::inferencer::{InferencerOptions, TypedModule};
 use loz_compiler::interpreter::interpret;
 use loz_compiler::module_system;
-use loz_compiler::module_system::{compile_modules, Error};
+use loz_compiler::module_system::{compile_modules, CompilerOptions, Error};
 use loz_compiler::rewriter::rewrite;
 use std::collections::HashMap;
+use std::process::exit;
 use std::rc::Rc;
 
 #[test]
@@ -62,9 +63,13 @@ fn compile_files(
 
         let res = compile_modules(
             path.clone().to_str().unwrap().to_string(),
-            &InferencerOptions {
+            &CompilerOptions {
+                current_directory: path.parent().unwrap().to_path_buf(),
+                loz_home: std::env::current_dir().unwrap(),
+                extra_module_search_path: vec![PathBuf::from("lib/")],
+                print_ast: false,
                 print_types: false,
-                is_main_module: true,
+                execute: false,
             },
         );
         println!("Result: {:#?}", res);

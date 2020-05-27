@@ -222,10 +222,16 @@ impl Expression {
             Expression::RecordFieldAccess(_, l, r) => {
                 Expression::dual_references(l, r, include_variables)
             }
-            Expression::Lambda(_, _, e) => {
+            Expression::Lambda(_, me, e) => {
                 let fs = e.references(include_variables);
-                // TODO: Remove introduced identifiers by lambda arguments
-                fs
+                let introduced_variables: HashSet<Rc<String>> = me
+                    .iter()
+                    .flat_map(|me| me.variables().into_iter())
+                    .collect();
+
+                fs.into_iter()
+                    .filter(|(n, _)| !introduced_variables.contains(n))
+                    .collect()
             }
         }
     }

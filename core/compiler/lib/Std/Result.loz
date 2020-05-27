@@ -1,0 +1,17 @@
+:: Result a e = Ok a | Error e
+
+isOk :: (Result a e) -> Bool
+isOk (Ok _) = true
+isOk _ = false
+
+isError :: (Result a e) -> Bool
+isError (Error _) = true
+isError _ = false
+
+mapOk :: (Result a e) (a -> b) -> Result b e
+mapOk (Ok a) f = Ok (f a)
+mapOk (Error e) _ = (Error e)
+
+mapErr :: (Result a e) (e -> f) -> Result a f
+mapErr (Error e) f = Error (f e)
+mapErr (Ok a) _ = Ok a
