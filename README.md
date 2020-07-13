@@ -45,7 +45,7 @@ Does NOT support laziness and does NOT use graph/term rewriting as basis for eva
     g n = f (n - 1)
     ```
 * ✔ Implement reading code from multiple files
-* Implement simple module system
+* ✔ Implement simple module system
     ```
     import lib/types.loz
   
@@ -63,7 +63,7 @@ Does NOT support laziness and does NOT use graph/term rewriting as basis for eva
 * ✔ I'm using ```clone()``` more than I'd like, due to not bothering with lifetimes
 * Benchmark
 * Probably use different parser
-* Build test suite 
+* ✔ Build test suite 
 * Fix weird crash with "a-b"
 
 

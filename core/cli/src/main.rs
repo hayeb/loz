@@ -3,10 +3,10 @@ use std::path::PathBuf;
 
 use clap::{App, Arg};
 
-use loz_compiler::interpreter::interpret;
 use loz_compiler::module_system::{compile_modules, CompilerOptions};
 use loz_compiler::rewriter::rewrite;
 use std::process::exit;
+use loz_compiler::generator::generate;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -107,8 +107,5 @@ fn main() {
 
     let runtime_module = rewrite(typed_main_module, typed_modules);
 
-    match interpret(runtime_module) {
-        Ok(v) => println!("{}", v),
-        Err(e) => eprintln!("Runtime error: {}", e),
-    }
+    println!("Generated code: \n\n{}", generate(runtime_module))
 }

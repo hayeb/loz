@@ -25,7 +25,6 @@ impl RunState {
     }
 
     fn retrieve_variable_value(&self, name: &String, loc: &Location) -> Rc<Value> {
-        println!("Retrieving variable value {}", name);
         for f in self.frames.iter().rev() {
             let val = f.variables.get(name);
             if let Some(v) = val {
@@ -37,7 +36,6 @@ impl RunState {
                     .function_bodies
                     .iter()
                     .map(|fb| {
-                        println!("Function body: {:?}", fb);
                         Rc::new(FunctionClosure {
                             closed_variables: body_references(fb, true)
                                 .iter()
@@ -73,12 +71,10 @@ impl RunState {
         args: &Vec<Rc<MatchExpression>>,
         references: &HashSet<(Rc<String>, Rc<Location>)>,
     ) -> HashMap<Rc<String>, Rc<Value>> {
-        println!("Determining closure..");
         let introduced_match_variables: HashSet<Rc<String>> = args
             .iter()
             .flat_map(|me| me.variables().into_iter())
             .collect();
-        println!("Determined introduced match variables..");
         references
             .into_iter()
             .filter(|(v, _)| !introduced_match_variables.contains(v))
@@ -233,7 +229,6 @@ impl Display for InterpreterError {
 }
 
 pub fn interpret(runtime_module: Rc<RuntimeModule>) -> Result<Rc<Value>, InterpreterError> {
-    println!("Executing runtime module..");
     let mut main_function_name = String::new();
     main_function_name.push_str(&runtime_module.name);
     main_function_name.push_str("::main");
@@ -263,7 +258,6 @@ pub fn interpret(runtime_module: Rc<RuntimeModule>) -> Result<Rc<Value>, Interpr
 }
 
 fn evaluate(e: &Expression, state: &mut RunState) -> Result<Rc<Value>, InterpreterError> {
-    println!("Evaluating at {}", e.locate());
     match e {
         Expression::BoolLiteral(_, b) => Ok(Rc::new(Value::Bool(*b))),
         Expression::StringLiteral(_, s) => Ok(Rc::new(Value::String(Rc::clone(s)))),
@@ -450,7 +444,6 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Rc<Value>, Interpret
             unreachable!()
         }
         Expression::Lambda(loc, args, body) => {
-            println!("Evaluating lambda at {}", loc);
             let lambda_body = FunctionBody {
                 name: Rc::new("".to_string()),
                 location: loc.clone(),
@@ -468,7 +461,6 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Rc<Value>, Interpret
                 closed_variables: state.determine_closure(args, &body.references(true)),
                 body: Rc::new(lambda_body),
             };
-            println!("Evaluated lambda at {}", loc);
             Ok(Rc::new(Value::Lambda(Vec::new(), vec![Rc::new(closure)])))
         }
     }
@@ -518,7 +510,6 @@ fn eval_function_call(
     state: &mut RunState,
     loc: &Location,
 ) -> Result<Rc<Value>, InterpreterError> {
-    println!("Executing function: {}", f);
     let r = match state.get_function_definition(f) {
         Some(d) => eval_declared_function(&d, args, state),
         None => eval_lambda(f, state.retrieve_variable_value(f, loc), args, state),

@@ -2,13 +2,13 @@ use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use crate::ast::{
-    CaseRule, Expression, FunctionBody, FunctionDefinition, FunctionRule, Import, MatchExpression,
-};
+use crate::ast::{CaseRule, Expression, FunctionBody, FunctionDefinition, FunctionRule, Import, MatchExpression, Type};
 use crate::inferencer::TypedModule;
 
 pub struct RuntimeModule {
     pub name: Rc<String>,
+    pub main_function_name: Rc<String>,
+    pub main_function_type: Rc<Type>,
     pub functions: HashMap<Rc<String>, Rc<FunctionDefinition>>,
 }
 
@@ -172,24 +172,23 @@ impl RewriteState {
             }
             let local_name = prefix_name(function_name, &m.module_name);
             for (n, _) in &m.function_name_to_definition {
-                println!("Function name: {}", n);
                 if n == &local_name {
-                    println!(
-                        "Rewriting function reference {} in module {} to {}",
-                        function_name, current_module_name, local_name
-                    );
+                    //println!(
+                    //    "Rewriting function reference {} in module {} to {}",
+                    //    function_name, current_module_name, local_name
+                    //);
                     return local_name;
                 }
             }
         }
 
         // Not found in imported modules.. Must be a record definition in the current module.
-        println!(
-            "Rewriting function reference {} in module {} to {}",
-            function_name,
-            current_module_name,
-            prefix_name(function_name, current_module_name)
-        );
+        //println!(
+        //    "Rewriting function reference {} in module {} to {}",
+        //    function_name,
+        //    current_module_name,
+        //    prefix_name(function_name, current_module_name)
+        //);
         prefix_name(function_name, current_module_name)
     }
 
@@ -598,6 +597,7 @@ pub fn rewrite(
 ) -> Rc<RuntimeModule> {
     println!("Building runtime module..");
     let mut state = RewriteState::new(modules_by_name);
+    let main_function = Rc::clone(main_module.function_name_to_definition.get(&String::from("main")).unwrap());
     let rewritten_main_module = state.rewrite_module(Rc::new(main_module));
     let mut functions = HashMap::new();
     functions.extend(
@@ -616,6 +616,8 @@ pub fn rewrite(
 
     Rc::new(RuntimeModule {
         name: Rc::clone(&rewritten_main_module.module_name),
+        main_function_name: Rc::clone(&main_function.name),
+        main_function_type: Rc::clone(&main_function.function_type.as_ref().unwrap().enclosed_type),
         functions,
     })
 }

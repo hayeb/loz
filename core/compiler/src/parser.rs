@@ -249,7 +249,6 @@ fn to_declaration_block_elements(
                 let module_import = pair.into_inner().next().unwrap();
                 match module_import.as_rule() {
                     Rule::module_import_full => {
-                        println!("Module import full: {:#?}", module_import);
                         let mut members = module_import.into_inner();
                         let defined_module_name =
                             Rc::new(members.next().unwrap().as_str().to_string());
