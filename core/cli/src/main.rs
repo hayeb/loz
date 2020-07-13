@@ -1,12 +1,14 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 
 use clap::{App, Arg};
 
 use loz_compiler::module_system::{compile_modules, CompilerOptions};
 use loz_compiler::rewriter::rewrite;
-use std::process::exit;
+use std::process::{exit, Command};
 use loz_compiler::generator::generate;
+use std::fs::File;
+use std::io::Write;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -105,7 +107,41 @@ fn main() {
             }
         };
 
+    let module_name = typed_main_module.module_name.clone();
     let runtime_module = rewrite(typed_main_module, typed_modules);
+    let generated_code = generate(runtime_module);
 
-    println!("Generated code: \n\n{}", generate(runtime_module))
+    // 1. Write code to temporary file
+    let output_file_name = format!("target/{}.ll", module_name);
+    let llvm_ir_path = Path::new(&output_file_name);
+    let mut llvm_ir_file = match File::create(&llvm_ir_path) {
+        Err(e) => {
+            eprintln!("Error creating file {} for generator output: {}", llvm_ir_path.display(), e);
+            exit(17)
+        }
+        Ok(f) => f
+    };
+
+    println!("Writing {} bytes to LLVM IR file...", generated_code.len());
+    if let Err(e) = llvm_ir_file.write_all(generated_code.as_bytes()) {
+        println!("Error writing to LLVM IR file {}: {}", llvm_ir_path.display(), e);
+        exit(5)
+    }
+
+    println!("Compiling code using LLVM...");
+    let c = match Command::new("clang")
+        .arg(llvm_ir_path)
+        .arg("-o")
+        .arg(format!("target/{}.exe", module_name))
+        .output() {
+        Err(e) => {
+            println!("Error status running clang on IR: {}", e);
+            exit(10)
+        },
+        Ok(r) => r
+    };
+
+    if !c.status.success() {
+        println!("Errorcode {} compiling code with clang: \n{}", c.status.code().unwrap(), String::from_utf8(c.stderr).unwrap())
+    }
 }

@@ -2,7 +2,7 @@
    LOZ Type         | C-Type (for refence)  | LLVM Type |
    -----------------|-----------------------|-----------|
    Bool             | bool                  | i1        |
-   Char             | ????                  | u32       |
+   Char             | ????                  | i32       |
    String           | *char                 | *i8           |
    Int              | int_64_t              | i64
    Float            | float                 | float
@@ -37,7 +37,7 @@ const C_INT_FORMAT_STRING_NAME: &'static str = "@c_int_format_string";
 const C_FLOAT_FORMAT_STRING: &'static str = "%f";
 const C_FLOAT_FORMAT_STRING_NAME: &'static str = "@c_float_format_string";
 
-const C_CHAR_FORMAT_STRING: &'static str = "%c";
+const C_CHAR_FORMAT_STRING: &'static str = "'%s'";
 const C_CHAR_FORMAT_STRING_NAME: &'static str = "@c_char_format_string";
 
 const C_BOOL_FORMAT_STRING_TRUE: &'static str = "True";
@@ -82,7 +82,7 @@ fn to_llvm_type(loz_type: &Rc<Type>) -> String {
         Type::String => "i8*".to_string(),
         Type::Int => "i64".to_string(),
         Type::Float => "double".to_string(),
-        Type::Char => "i8".to_string(),
+        Type::Char => "i8*".to_string(),
         _ => unimplemented!()
     }
 }
@@ -226,6 +226,13 @@ impl GeneratorState {
                     format!("call i32 (i8*, ...) @printf(i8* {}, {} {})", var, to_llvm_type(loz_type), to_print)
                 ]
             }
+            Type::Char => {
+                let var = self.var();
+                vec![
+                    resolve_string_constant(&var, C_CHAR_FORMAT_STRING_NAME, C_CHAR_FORMAT_STRING.len()),
+                    format!("call i32 (i8*, ...) @printf(i8* {}, {} {})", var, to_llvm_type(loz_type), to_print)
+                ]
+            }
             Type::Bool => {
                 let var = self.var();
                 vec![format!("{} = call i8* @format_bool(i1 {})", var , to_print),
@@ -320,27 +327,33 @@ impl GeneratorState {
         let e_code = match e.borrow() {
             Expression::BoolLiteral(_, true) => {
                 self.put(result.clone(), "true".to_string());
-                None
+                vec![]
             }
 
             Expression::BoolLiteral(_, false) => {
                 self.put(result.clone(), "false".to_string());
-                None
+                vec![]
             }
             Expression::IntegerLiteral(_, i) => {
                 self.put(result.clone(), i.to_string());
-                None
+                vec![]
             }
             Expression::StringLiteral(_, string) => {
                 let global_var = self.var().replace("%", "@");
                 self.string_constants.insert(global_var.clone(), string.to_string());
-                Some(format!("getelementptr [{} x i8],[{} x i8]* {}, i64 0, i64 0", string.len() + 1, string.len() + 1, global_var))
+                vec![format!("{} = getelementptr [{} x i8],[{} x i8]* {}, i64 0, i64 0", result, string.len() + 1, string.len() + 1, global_var)]
             }
-            Expression::CharacterLiteral(_, _) => unimplemented!(),
+            Expression::CharacterLiteral(_, c) => {
+                let global_var = self.var().replace("%", "@");
+                let mut buffer = [0; 4];
+                let char_result = c.encode_utf8(&mut buffer);
+                self.string_constants.insert(global_var.clone(), result.to_string());
+                vec![format!("{} = getelementptr [{} x i8],[{} x i8]* {}, i64 0, i64 0", result, char_result.len() + 1, char_result.len() + 1, global_var)]
+            }
 
             Expression::FloatLiteral(_, f) => {
                 self.put(result.clone(), f.to_string());
-                None
+                vec![]
             }
             Expression::TupleLiteral(_, _) => unimplemented!(),
             Expression::EmptyListLiteral(_) => unimplemented!(),
@@ -351,7 +364,12 @@ impl GeneratorState {
             Expression::Case(_, _, _) => unimplemented!(),
             Expression::Call(_, _, _) => unimplemented!(),
             Expression::Variable(_, _) => unimplemented!(),
-            Expression::Negation(_, _) => unimplemented!(),
+            Expression::Negation(_, e) => {
+                let (var, mut code) = self.generate_expr(e);
+                code.push(format!("{} = xor {} true", result ,var));
+                code
+
+            }
             Expression::Minus(_, _) => unimplemented!(),
             Expression::Times(_, _, _) => unimplemented!(),
             Expression::Divide(_, _, _) => unimplemented!(),
@@ -372,16 +390,7 @@ impl GeneratorState {
             Expression::Lambda(_, _, _) => unimplemented!(),
         };
 
-        if let None = e_code {
-            return (result.clone(), vec![]);
-        }
-
-        let mut line = String::new();
-        line.push_str(&result);
-        line.push_str(" = ");
-        line.push_str(&e_code.unwrap());
-
-        return (result, vec![line]);
+        return (result, e_code);
 
     }
 }

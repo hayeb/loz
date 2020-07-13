@@ -20,7 +20,7 @@ qualifiable_capital_identifier = @{
 }
 
 char_literal = @{
-    "'" ~ (CASED_LETTER | TITLECASE_LETTER) ~ "'"
+    "'" ~ (LETTER | MARK | NUMBER | SYMBOL | SEPARATOR | OTHER) ~ "'"
 }
 
 string_literal = ${
