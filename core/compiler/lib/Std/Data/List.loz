@@ -1,4 +1,4 @@
-import Std.Maybe
+import Std.Data.Maybe
 
 appendList :: [a] [a] -> [a]
 appendList [] l = l
