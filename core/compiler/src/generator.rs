@@ -34,6 +34,12 @@ const C_NEWLINE_LENGTH: usize = 2; // Includes NULL byte.
 const C_INT_FORMAT_STRING: &'static str = "%d";
 const C_INT_FORMAT_STRING_NAME: &'static str = "@c_int_format_string";
 
+const C_FLOAT_FORMAT_STRING: &'static str = "%f";
+const C_FLOAT_FORMAT_STRING_NAME: &'static str = "@c_float_format_string";
+
+const C_CHAR_FORMAT_STRING: &'static str = "%c";
+const C_CHAR_FORMAT_STRING_NAME: &'static str = "@c_char_format_string";
+
 const C_BOOL_FORMAT_STRING_TRUE: &'static str = "True";
 const C_BOOL_FORMAT_STRING_TRUE_NAME: &'static str = "@c_bool_false_format_string";
 
@@ -75,6 +81,8 @@ fn to_llvm_type(loz_type: &Rc<Type>) -> String {
         Type::Bool => "i1".to_string(),
         Type::String => "i8*".to_string(),
         Type::Int => "i64".to_string(),
+        Type::Float => "double".to_string(),
+        Type::Char => "i8".to_string(),
         _ => unimplemented!()
     }
 }
@@ -160,14 +168,13 @@ impl GeneratorState {
     fn generate_print_code(&mut self, loz_type: &Rc<Type>, llvm_type: String) -> String {
         let c_newline = to_string_constant_with_length(C_NEWLINE_NAME, C_NEWLINE, C_NEWLINE_LENGTH);
         let c_int_format = to_string_constant(C_INT_FORMAT_STRING_NAME, C_INT_FORMAT_STRING);
+        let c_float_format = to_string_constant(C_FLOAT_FORMAT_STRING_NAME, C_FLOAT_FORMAT_STRING);
+        let c_char_format = to_string_constant(C_CHAR_FORMAT_STRING_NAME, C_CHAR_FORMAT_STRING);
         let c_string_format = to_string_constant_with_length(C_STRING_FORMAT_STRING_NAME, C_STRING_FORMAT_STRING, C_STRING_FORMAT_STRING_LENGTH);
         let c_bool_false_format = to_string_constant(C_BOOL_FORMAT_STRING_FALSE_NAME, C_BOOL_FORMAT_STRING_FALSE);
         let c_bool_true_format = to_string_constant(C_BOOL_FORMAT_STRING_TRUE_NAME, C_BOOL_FORMAT_STRING_TRUE);
 
         let printf_external_definition = "declare i32 @printf(i8* noalias nocapture, ...)";
-
-        let function_header = format!("define void @print_result({} %to_print) {{", llvm_type);
-        let function_footer = "}";
 
         let mut print_code = String::new();
         // Push different format strings
@@ -175,12 +182,16 @@ impl GeneratorState {
         print_code.push_str("\n");
         print_code.push_str(&c_int_format);
         print_code.push_str("\n");
+        print_code.push_str(&c_float_format);
+        print_code.push_str("\n");
+        print_code.push_str(&c_char_format);
+        print_code.push_str("\n");
         print_code.push_str(&c_string_format);
         print_code.push_str("\n");
         print_code.push_str(&c_bool_false_format);
         print_code.push_str("\n");
         print_code.push_str(&c_bool_true_format);
-        print_code.push_str("\n");
+        print_code.push_str("\n\n");
 
         // Push misc formatting routings;
         print_code.push_str(FORMAT_BOOL);
@@ -190,6 +201,7 @@ impl GeneratorState {
         print_code.push_str(printf_external_definition);
         print_code.push_str("\n");
 
+        let function_header = format!("define void @print_result({} %to_print) {{", llvm_type);
         print_code.push_str(&function_header);
         print_code.push_str("\n");
 
@@ -199,6 +211,7 @@ impl GeneratorState {
             print_code.push_str("\n")
         }
 
+        let function_footer = "}";
         print_code.push_str(function_footer);
         print_code.push_str("\n");
         print_code
@@ -224,6 +237,13 @@ impl GeneratorState {
                 let var = self.var();
                 vec![
                     resolve_string_constant_len(&var, C_STRING_FORMAT_STRING_NAME, C_STRING_FORMAT_STRING_LENGTH),
+                    format!("call i32 (i8*, ...) @printf(i8* {}, {} {})", var, to_llvm_type(loz_type), to_print)
+                ]
+            },
+            Type::Float => {
+                let var = self.var();
+                vec![
+                    resolve_string_constant(&var, C_FLOAT_FORMAT_STRING_NAME, C_FLOAT_FORMAT_STRING.len()),
                     format!("call i32 (i8*, ...) @printf(i8* {}, {} {})", var, to_llvm_type(loz_type), to_print)
                 ]
             }
@@ -318,7 +338,10 @@ impl GeneratorState {
             }
             Expression::CharacterLiteral(_, _) => unimplemented!(),
 
-            Expression::FloatLiteral(_, _) => unimplemented!(),
+            Expression::FloatLiteral(_, f) => {
+                self.put(result.clone(), f.to_string());
+                None
+            }
             Expression::TupleLiteral(_, _) => unimplemented!(),
             Expression::EmptyListLiteral(_) => unimplemented!(),
             Expression::ShorthandListLiteral(_, _) => unimplemented!(),

@@ -5,7 +5,7 @@ number = @{
       ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*)
 }
 
-float = @{ ASCII_DIGIT ~ "." ~ ASCII_DIGIT+ }
+float = @{ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
 
 identifier = @{
     (LOWERCASE_LETTER | "_") ~ (LETTER | DECIMAL_NUMBER | "_" )*
