@@ -131,7 +131,7 @@ simple_term = _{
     | record_term
 }
 
-minus = @{"-" ~ expression}
+minus = ${"-" ~ expression}
 
 term = {
       simple_term

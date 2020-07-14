@@ -141,6 +141,13 @@ impl GeneratorState {
         return format!("%v{}", self.new_var);
     }
 
+    fn resolve(&mut self, v: SSAVar) -> String {
+        match self.get(&v) {
+            None => v,
+            Some(value) => value,
+        }
+    }
+
     fn generate(&mut self, runtime_module: &Rc<RuntimeModule>) -> String {
         let mut definitions_code = String::new();
         for (_name, function_definition) in &runtime_module.functions {
@@ -295,7 +302,7 @@ impl GeneratorState {
         }
 
         let result_var = result.unwrap();
-        bodies_code.push_str(&format!("\tret {} {}\n", llvm_function_return_type, self.get(&result_var).unwrap_or(result_var.clone())));
+        bodies_code.push_str(&format!("\tret {} {}\n", llvm_function_return_type, self.resolve(result_var)));
 
         bodies_code.push_str("}");
         self.close_scope();
@@ -366,7 +373,7 @@ impl GeneratorState {
             Expression::Variable(_, _) => unimplemented!(),
             Expression::Negation(_, e) => {
                 let (var, mut code) = self.generate_expr(e);
-                code.push(format!("{} = xor {} true", result ,var));
+                code.push(format!("{} = xor i1 {}, true", result, self.resolve(var)));
                 code
 
             }
