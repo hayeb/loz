@@ -393,7 +393,7 @@ impl GeneratorState {
             Expression::Minus(_, e) => {
                 let (var, mut code) = self.generate_expr(e);
                 match derive_type(e) {
-                    Type::Float => code.push(format!("{} = fmul double -1, {}", result, self.resolve(var))),
+                    Type::Float => code.push(format!("{} = fmul double -1.0, {}", result, self.resolve(var))),
                     Type::Int => code.push(format!("{} = mul i64 -1, {}", result, self.resolve(var))),
                     t => panic!("Unsupported type for Minus: {}", t)
                 }
@@ -425,9 +425,45 @@ impl GeneratorState {
                 }
                 code
             }
-            Expression::Modulo(_, _, _) => unimplemented!(),
-            Expression::Add(_, _, _) => unimplemented!(),
-            Expression::Subtract(_, _, _) => unimplemented!(),
+            Expression::Modulo(_, e1, e2) => {
+                let (var1, code1) = self.generate_expr(e1);
+                let (var2, code2) = self.generate_expr(e2);
+                let mut code = Vec::new();
+                code.extend(code1);
+                code.extend(code2);
+                match derive_type(e1) {
+                    Type::Int => code.push(format!("{} = srem i64 {}, {}", result, self.resolve(var1), self.resolve(var2))),
+                    Type::Float => code.push(format!("{} = frem double {}, {}", result, self.resolve(var1), self.resolve(var2))),
+                    t => panic!("Unsupported type for Times: {}", t)
+                }
+                code
+            }
+            Expression::Add(_, e1, e2) => {
+                let (var1, code1) = self.generate_expr(e1);
+                let (var2, code2) = self.generate_expr(e2);
+                let mut code = Vec::new();
+                code.extend(code1);
+                code.extend(code2);
+                match derive_type(e1) {
+                    Type::Int => code.push(format!("{} = add i64 {}, {}", result, self.resolve(var1), self.resolve(var2))),
+                    Type::Float => code.push(format!("{} = fadd double {}, {}", result, self.resolve(var1), self.resolve(var2))),
+                    t => panic!("Unsupported type for Times: {}", t)
+                }
+                code
+            }
+            Expression::Subtract(_, e1, e2) => {
+                let (var1, code1) = self.generate_expr(e1);
+                let (var2, code2) = self.generate_expr(e2);
+                let mut code = Vec::new();
+                code.extend(code1);
+                code.extend(code2);
+                match derive_type(e1) {
+                    Type::Int => code.push(format!("{} = sub i64 {}, {}", result, self.resolve(var1), self.resolve(var2))),
+                    Type::Float => code.push(format!("{} = fsub double {}, {}", result, self.resolve(var1), self.resolve(var2))),
+                    t => panic!("Unsupported type for Times: {}", t)
+                }
+                code
+            }
             Expression::ShiftLeft(_, _, _) => unimplemented!(),
             Expression::ShiftRight(_, _, _) => unimplemented!(),
             Expression::Greater(_, _, _) => unimplemented!(),
