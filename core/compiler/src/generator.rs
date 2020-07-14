@@ -94,6 +94,14 @@ fn return_type(loz_type: &Rc<Type>) -> Rc<Type> {
     }
 }
 
+fn derive_type(e: &Rc<Expression>) -> Type {
+    match e.borrow() {
+        Expression::FloatLiteral(_,_) => Type::Float,
+        Expression::IntegerLiteral(_,_) => Type::Int,
+        _ => unimplemented!("derive_type at {}", e.locate())
+    }
+}
+
 fn to_string_constant(name: &str, constant: &str) -> String {
     format!("{} = private unnamed_addr constant [{} x i8] c\"{}\\00\"", name, constant.len()+1, constant)
 }
@@ -359,6 +367,11 @@ impl GeneratorState {
             }
 
             Expression::FloatLiteral(_, f) => {
+                let mut f = f.to_string();
+                if !f.contains(".") {
+                    // Otherwise LLVM will complain about integer literal instead of float literal.
+                    f.push_str(".0")
+                }
                 self.put(result.clone(), f.to_string());
                 vec![]
             }
@@ -377,9 +390,41 @@ impl GeneratorState {
                 code
 
             }
-            Expression::Minus(_, _) => unimplemented!(),
-            Expression::Times(_, _, _) => unimplemented!(),
-            Expression::Divide(_, _, _) => unimplemented!(),
+            Expression::Minus(_, e) => {
+                let (var, mut code) = self.generate_expr(e);
+                match derive_type(e) {
+                    Type::Float => code.push(format!("{} = fmul double -1, {}", result, self.resolve(var))),
+                    Type::Int => code.push(format!("{} = mul i64 -1, {}", result, self.resolve(var))),
+                    t => panic!("Unsupported type for Minus: {}", t)
+                }
+                code
+            },
+            Expression::Times(_, e1, e2) => {
+                let (var1, code1) = self.generate_expr(e1);
+                let (var2, code2) = self.generate_expr(e2);
+                let mut code = Vec::new();
+                code.extend(code1);
+                code.extend(code2);
+                match derive_type(e1) {
+                    Type::Int => code.push(format!("{} = mul i64 {}, {}", result, self.resolve(var1), self.resolve(var2))),
+                    Type::Float => code.push(format!("{} = fmul double {}, {}", result, self.resolve(var1), self.resolve(var2))),
+                    t => panic!("Unsupported type for Times: {}", t)
+                }
+                code
+            },
+            Expression::Divide(_, e1, e2) => {
+                let (var1, code1) = self.generate_expr(e1);
+                let (var2, code2) = self.generate_expr(e2);
+                let mut code = Vec::new();
+                code.extend(code1);
+                code.extend(code2);
+                match derive_type(e1) {
+                    Type::Int => code.push(format!("{} = sdiv i64 {}, {}", result, self.resolve(var1), self.resolve(var2))),
+                    Type::Float => code.push(format!("{} = fdiv double {}, {}", result, self.resolve(var1), self.resolve(var2))),
+                    t => panic!("Unsupported type for Times: {}", t)
+                }
+                code
+            }
             Expression::Modulo(_, _, _) => unimplemented!(),
             Expression::Add(_, _, _) => unimplemented!(),
             Expression::Subtract(_, _, _) => unimplemented!(),

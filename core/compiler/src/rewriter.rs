@@ -259,6 +259,7 @@ impl RewriteState {
         self.variables_stack.pop();
         res
     }
+
     fn rewrite_function_body_rule(
         &mut self,
         function_body_rule: &Rc<FunctionRule>,
