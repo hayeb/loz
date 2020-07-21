@@ -572,29 +572,59 @@ fn check_unique_definitions(
         }
     }
 
-    // 2. Ensure no ADTs with the same name are defined
+    // 2. Ensure no types with the same name are defined
     // 3. Ensure all ADT constructors are unique
-    // 4. Ensure no records with the same name are defined
-    let mut adt_names: HashMap<Rc<String>, Rc<Location>> = HashMap::new();
+    let mut type_names: HashMap<Rc<String>, Rc<Location>> = HashMap::new();
     let mut adt_constructors: HashMap<Rc<String>, (Rc<String>, Rc<Location>)> = HashMap::new();
-    for (name, definition) in &external_definitions.adt_name_to_definition {
-        adt_names.insert(Rc::clone(name), Rc::clone(&definition.location));
-
-        for (constructor_name, _) in &definition.constructors {
-            adt_constructors.insert(
-                Rc::clone(constructor_name),
-                (Rc::clone(name), Rc::clone(&definition.location)),
-            );
-        }
-    }
-    for adt_definition in &ast.adt_definitions {
-        // 1. Check whether some other type with this name is defined
-        if adt_names.contains_key(&adt_definition.name) {
+    for (name, adt_definition) in &external_definitions.adt_name_to_definition {
+        if type_names.contains_key(name) {
             type_errors.push(InferenceError::from_loc(
                 &adt_definition.location,
                 InferenceErrorType::TypeMultiplyDefined(
                     Rc::clone(&adt_definition.name),
-                    adt_names.get(&adt_definition.name).unwrap().clone(),
+                    type_names.get(&adt_definition.name).unwrap().clone(),
+                ),
+            ));
+            continue;
+        }
+        type_names.insert(Rc::clone(name), Rc::clone(&adt_definition.location));
+
+        for (constructor_name, _) in &adt_definition.constructors {
+            adt_constructors.insert(
+                Rc::clone(constructor_name),
+                (Rc::clone(name), Rc::clone(&adt_definition.location)),
+            );
+        }
+    }
+
+    for (name, record_definition) in &external_definitions.record_name_to_definition {
+        if type_names.contains_key(name) {
+            type_errors.push(InferenceError::from_loc(
+                &record_definition.location,
+                InferenceErrorType::TypeMultiplyDefined(
+                    Rc::clone(&record_definition.name),
+                    type_names.get(&record_definition.name).unwrap().clone(),
+                ),
+            ));
+            continue;
+        }
+        type_names.insert(Rc::clone(name), Rc::clone(&record_definition.location));
+    }
+
+    type_names.extend(external_definitions
+        .record_name_to_definition
+        .iter()
+        .map(|(n, d)| (Rc::clone(n), Rc::clone(&d.location)))
+        .collect::<Vec<(Rc<String>, Rc<Location>)>>());
+
+    for adt_definition in &ast.adt_definitions {
+        // 1. Check whether some other type with this name is defined
+        if type_names.contains_key(&adt_definition.name) {
+            type_errors.push(InferenceError::from_loc(
+                &adt_definition.location,
+                InferenceErrorType::TypeMultiplyDefined(
+                    Rc::clone(&adt_definition.name),
+                    type_names.get(&adt_definition.name).unwrap().clone(),
                 ),
             ));
             continue;
@@ -637,29 +667,24 @@ fn check_unique_definitions(
             }
         }
 
-        adt_names.insert(
+        type_names.insert(
             Rc::clone(&adt_definition.name),
             Rc::clone(&adt_definition.location),
         );
     }
 
-    let mut record_names: HashMap<Rc<String>, Rc<Location>> = external_definitions
-        .record_name_to_definition
-        .iter()
-        .map(|(n, d)| (Rc::clone(n), Rc::clone(&d.location)))
-        .collect();
     for record_definition in &ast.record_definitions {
-        if record_names.contains_key(&record_definition.name) {
+        if type_names.contains_key(&record_definition.name) {
             type_errors.push(InferenceError::from_loc(
                 &record_definition.location,
                 InferenceErrorType::TypeMultiplyDefined(
                     Rc::clone(&record_definition.name),
-                    Rc::clone(record_names.get(&record_definition.name).unwrap()),
+                    Rc::clone(type_names.get(&record_definition.name).unwrap()),
                 ),
             ));
             continue;
         }
-        record_names.insert(
+        type_names.insert(
             Rc::clone(&record_definition.name),
             Rc::clone(&record_definition.location),
         );

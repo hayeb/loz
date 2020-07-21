@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use crate::ast::{CaseRule, Expression, FunctionBody, FunctionDefinition, FunctionRule, Import, MatchExpression, Type};
+use crate::ast::{CaseRule, Expression, FunctionBody, FunctionDefinition, FunctionRule, Import, MatchExpression, Type, RecordDefinition, ADTDefinition};
 use crate::inferencer::TypedModule;
 
 pub struct RuntimeModule {
@@ -94,12 +94,12 @@ impl RewriteState {
             adt_name_to_definition: module
                 .adt_name_to_definition
                 .iter()
-                .map(|(n, d)| (Rc::clone(n), Rc::clone(d)))
+                .map(|(n, d)| (prefix_name(n, &module.module_name), Rc::clone(d)))
                 .collect(),
             record_name_to_definition: module
                 .record_name_to_definition
                 .iter()
-                .map(|(n, d)| (Rc::clone(n), Rc::clone(d)))
+                .map(|(n, d)| (prefix_name(n, &module.module_name), Rc::clone(d)))
                 .collect(),
         });
         self.rewritten_modules
@@ -182,7 +182,7 @@ impl RewriteState {
             }
         }
 
-        // Not found in imported modules.. Must be a record definition in the current module.
+        // Not found in imported modules.. Must be a definition in the current module.
         //println!(
         //    "Rewriting function reference {} in module {} to {}",
         //    function_name,

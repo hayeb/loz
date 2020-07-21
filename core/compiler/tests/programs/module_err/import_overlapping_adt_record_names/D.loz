@@ -1,0 +1,5 @@
+:: Test = {n :: Int}
+:: Test = H String
+
+
+main = (H "Stee", {Test|n = 18})

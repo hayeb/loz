@@ -20,6 +20,15 @@
    need to do monomorphisation.
 */
 
+/* TODO:
+    - Can record names and ADT names overlap?
+
+
+
+
+
+ */
+
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::rc::Rc;
