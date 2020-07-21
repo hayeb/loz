@@ -1,0 +1,4 @@
+f "one" = 1
+f "two" = 2
+
+main = f "one"

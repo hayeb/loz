@@ -26,9 +26,11 @@ use std::rc::Rc;
 
 use crate::ast::{Expression, FunctionBody, FunctionDefinition, FunctionRule, MatchExpression, Type};
 use crate::rewriter::RuntimeModule;
+use regex::Regex;
 
 const ED_C_EXIT : &'static str = "declare void @exit(i32) cold noreturn nounwind";
 const ED_C_PRINTF : &'static str = "declare i32 @printf(i8* noalias nocapture, ...)";
+const ED_C_STRCMP : &'static str = "declare i32 @strcmp(i8*, i8*)";
 
 const C_NEWLINE: &'static str = "\\0A";
 const C_NEWLINE_NAME: &'static str = "@c_newline";
@@ -182,6 +184,8 @@ impl GeneratorState {
             Expression::FloatLiteral(_, _) => Rc::new(Type::Float),
             Expression::IntegerLiteral(_, _) => Rc::new(Type::Int),
             Expression::BoolLiteral(_, _) => Rc::new(Type::Bool),
+            Expression::CharacterLiteral(_, _) => Rc::new(Type::Char),
+            Expression::StringLiteral(_, _) => Rc::new(Type::String),
                 Expression::Call(_, f, _) => {
                 let f_type = self.function_name_to_type.get(f).unwrap();
                 return_type(f_type)
@@ -196,6 +200,8 @@ impl GeneratorState {
         definitions_code.push_str(ED_C_EXIT);
         definitions_code.push_str("\n");
         definitions_code.push_str(ED_C_PRINTF);
+        definitions_code.push_str("\n");
+        definitions_code.push_str(ED_C_STRCMP);
         definitions_code.push_str("\n");
 
         for (_name, function_definition) in &runtime_module.functions {
@@ -425,8 +431,13 @@ impl GeneratorState {
             function_arg_types.iter().enumerate().map(|(i, fat)| format!("{} %a{}", to_llvm_type(fat), i)).collect::<Vec<String>>().join(", ")
         ));
 
+        let label_regex = Regex::new(r"^[A-Z]+.*:$").unwrap();
+
         for b in bodies {
-            bodies_code.push_str("\t");
+            if !label_regex.is_match(&b) {
+                bodies_code.push_str("\t");
+            }
+
             bodies_code.push_str(&b);
             bodies_code.push_str("\n");
         }
@@ -505,12 +516,45 @@ impl GeneratorState {
                 let result = self.var();
                 (result.clone(), vec![format!("{} = icmp eq i64 {}, {}", result.clone(), i, match_on)])
             },
-            MatchExpression::CharLiteral(_, _) => unimplemented!("MatchExpression::CharLiteral"),
-            MatchExpression::StringLiteral(_, _) => unimplemented!("MatchExpression::StringLiteral"),
+            MatchExpression::CharLiteral(_, cc) => {
+                let mut buffer = [0; 4];
+                let char_result = cc.encode_utf8(&mut buffer);
+
+                let global_var = self.var().replace("%", "@");
+                self.string_constants.insert(global_var.clone(), char_result.to_string());
+                let sc_result = self.var();
+                let mut code = Vec::new();
+
+                code.push(format!("{} = getelementptr [{} x i8],[{} x i8]* {}, i64 0, i64 0",
+                                  sc_result,
+                                  char_result.len() + 1,
+                                  char_result.len() + 1,
+                                  global_var));
+                let cmp_res = self.var();
+                code.push(format!("{} = call i32 @strcmp(i8* {}, i8* {})", cmp_res.clone(), match_on, sc_result));
+                let bool_res = self.var();
+                code.push(format!("{} = icmp eq i32 0, {}", bool_res, cmp_res));
+                (bool_res.clone(), code)
+            }
+            MatchExpression::StringLiteral(_, sc) =>  {
+                let global_var = self.var().replace("%", "@");
+                self.string_constants.insert(global_var.clone(), sc.to_string());
+                let sc_result = self.var();
+                let mut code = Vec::new();
+                code.push(format!("{} = getelementptr [{} x i8],[{} x i8]* {}, i64 0, i64 0",
+                                  sc_result,
+                                  sc.len() + 1,
+                                  sc.len() + 1,
+                                  global_var));
+                let cmp_res = self.var();
+                code.push(format!("{} = call i32 @strcmp(i8* {}, i8* {})", cmp_res.clone(), match_on, sc_result));
+                let bool_res = self.var();
+                code.push(format!("{} = icmp eq i32 0, {}", bool_res, cmp_res));
+                (bool_res.clone(), code)
+            }
             MatchExpression::BoolLiteral(_, b) => {
                 let result = self.var();
-                let b_int = if *b {1} else {0};
-                (result.clone(), vec![format!("{} = icmp eq i1 {}, {}", result.clone(), b_int, match_on)])
+                (result.clone(), vec![format!("{} = icmp eq i1 {}, {}", result.clone(), b, match_on)])
             },
             MatchExpression::Identifier(_, id) => {
                 self.var_to_type.last_mut().unwrap().insert(Rc::clone(id), Rc::clone(match_type));
@@ -521,7 +565,7 @@ impl GeneratorState {
             MatchExpression::Tuple(_, _) => unimplemented!("MatchExpression::Tuple"),
             MatchExpression::ShorthandList(_, _) => unimplemented!("MatchExpression::ShorthandList"),
             MatchExpression::LonghandList(_, _, _) => unimplemented!("MatchExpression::LonghandList"),
-            MatchExpression::Wildcard(_) => unimplemented!("MatchExpression::Wildcard"),
+            MatchExpression::Wildcard(_) => ("true".to_string(), vec![]),
             MatchExpression::ADT(_, _, _) => unimplemented!("MatchExpression::ADT"),
             MatchExpression::Record(_, _, _) => unimplemented!("MatchExpression::Record"),
         };
@@ -559,7 +603,7 @@ impl GeneratorState {
                 let mut buffer = [0; 4];
                 let char_result = c.encode_utf8(&mut buffer);
                 self.string_constants
-                    .insert(global_var.clone(), result.to_string());
+                    .insert(global_var.clone(), char_result.to_string());
                 vec![format!(
                     "{} = getelementptr [{} x i8],[{} x i8]* {}, i64 0, i64 0",
                     result,
