@@ -192,11 +192,11 @@ match_term = _{
     | sub_match
     | adt_match
     | record_match
+    | bool_literal
     | identifier
     | number
     | char_literal
     | string_literal
-    | bool_literal
     | match_wildcard
 }
 

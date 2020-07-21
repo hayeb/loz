@@ -88,7 +88,7 @@ fn to_llvm_type(loz_type: &Rc<Type>) -> String {
         Type::Int => "i64".to_string(),
         Type::Float => "double".to_string(),
         Type::Char => "i8*".to_string(),
-        _ => unimplemented!(),
+        _ => unimplemented!("{:?}", loz_type),
     }
 }
 
@@ -181,7 +181,8 @@ impl GeneratorState {
         match e.borrow() {
             Expression::FloatLiteral(_, _) => Rc::new(Type::Float),
             Expression::IntegerLiteral(_, _) => Rc::new(Type::Int),
-            Expression::Call(_, f, _) => {
+            Expression::BoolLiteral(_, _) => Rc::new(Type::Bool),
+                Expression::Call(_, f, _) => {
                 let f_type = self.function_name_to_type.get(f).unwrap();
                 return_type(f_type)
             }
@@ -416,7 +417,6 @@ impl GeneratorState {
         }
         self.string_constants.clear();
 
-
         let llvm_function_return_type = to_llvm_type(&function_return_type);
         bodies_code.push_str(&format!(
             "define {} @{}({}) {{\n",
@@ -507,7 +507,11 @@ impl GeneratorState {
             },
             MatchExpression::CharLiteral(_, _) => unimplemented!("MatchExpression::CharLiteral"),
             MatchExpression::StringLiteral(_, _) => unimplemented!("MatchExpression::StringLiteral"),
-            MatchExpression::BoolLiteral(_, _) => unimplemented!("MatchExpression::BoolLiteral"),
+            MatchExpression::BoolLiteral(_, b) => {
+                let result = self.var();
+                let b_int = if *b {1} else {0};
+                (result.clone(), vec![format!("{} = icmp eq i1 {}, {}", result.clone(), b_int, match_on)])
+            },
             MatchExpression::Identifier(_, id) => {
                 self.var_to_type.last_mut().unwrap().insert(Rc::clone(id), Rc::clone(match_type));
                 self.put(id.to_string(), match_on);
