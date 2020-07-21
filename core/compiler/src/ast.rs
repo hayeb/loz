@@ -22,25 +22,6 @@ pub enum Import {
     ImportModule(Rc<Location>, Rc<String>, Option<Rc<String>>),
 }
 
-#[derive(Debug, Clone)]
-pub enum FunctionRule {
-    // blabla
-    ConditionalRule(Rc<Location>, Rc<Expression>, Rc<Expression>),
-    ExpressionRule(Rc<Location>, Rc<Expression>),
-    LetRule(Rc<Location>, Rc<MatchExpression>, Rc<Expression>),
-}
-
-#[derive(Debug, Clone)]
-pub struct FunctionBody {
-    pub name: Rc<String>,
-    pub location: Rc<Location>,
-    pub match_expressions: Vec<Rc<MatchExpression>>,
-    pub rules: Vec<Rc<FunctionRule>>,
-    pub local_function_definitions: Vec<Rc<FunctionDefinition>>,
-    pub local_adt_definitions: Vec<Rc<ADTDefinition>>,
-    pub local_record_definitions: Vec<Rc<RecordDefinition>>,
-}
-
 pub type TypeVar = String;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -96,6 +77,25 @@ pub struct FunctionDefinition {
     pub name: Rc<String>,
     pub function_type: Option<Rc<TypeScheme>>,
     pub function_bodies: Vec<Rc<FunctionBody>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionBody {
+    pub name: Rc<String>,
+    pub location: Rc<Location>,
+    pub match_expressions: Vec<Rc<MatchExpression>>,
+    pub rules: Vec<Rc<FunctionRule>>,
+    pub local_function_definitions: Vec<Rc<FunctionDefinition>>,
+    pub local_adt_definitions: Vec<Rc<ADTDefinition>>,
+    pub local_record_definitions: Vec<Rc<RecordDefinition>>,
+}
+
+#[derive(Debug, Clone)]
+pub enum FunctionRule {
+    // blabla
+    ConditionalRule(Rc<Location>, Rc<Expression>, Rc<Expression>),
+    ExpressionRule(Rc<Location>, Rc<Expression>),
+    LetRule(Rc<Location>, Rc<MatchExpression>, Rc<Expression>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

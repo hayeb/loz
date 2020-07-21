@@ -24,8 +24,11 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::ast::{Expression, FunctionBody, FunctionDefinition, FunctionRule, Type};
+use crate::ast::{Expression, FunctionBody, FunctionDefinition, FunctionRule, MatchExpression, Type};
 use crate::rewriter::RuntimeModule;
+
+const ED_C_EXIT : &'static str = "declare void @exit(i32) cold noreturn nounwind";
+const ED_C_PRINTF : &'static str = "declare i32 @printf(i8* noalias nocapture, ...)";
 
 const C_NEWLINE: &'static str = "\\0A";
 const C_NEWLINE_NAME: &'static str = "@c_newline";
@@ -73,6 +76,7 @@ struct GeneratorState {
     string_constants: HashMap<String, String>,
 
     vars: Vec<HashMap<String, String>>,
+    var_to_type: Vec<HashMap<Rc<String>, Rc<Type>>>,
 
     function_name_to_type: HashMap<Rc<String>, Rc<Type>>,
 }
@@ -135,6 +139,7 @@ impl GeneratorState {
             string_constants: HashMap::new(),
 
             vars: Vec::new(),
+            var_to_type: Vec::new(),
 
             function_name_to_type: runtime_module.functions.iter()
                 .map(|(n, d)| (Rc::clone(n), Rc::clone(&d.function_type.as_ref().unwrap().enclosed_type)))
@@ -143,11 +148,13 @@ impl GeneratorState {
     }
 
     fn open_scope(&mut self) {
-        self.vars.push(HashMap::new())
+        self.vars.push(HashMap::new());
+        self.var_to_type.push(HashMap::new());
     }
 
     fn close_scope(&mut self) {
         self.vars.pop();
+        self.var_to_type.pop();
     }
 
     fn put(&mut self, var: String, value: String) {
@@ -184,6 +191,12 @@ impl GeneratorState {
 
     fn generate(&mut self, runtime_module: &Rc<RuntimeModule>) -> String {
         let mut definitions_code = String::new();
+
+        definitions_code.push_str(ED_C_EXIT);
+        definitions_code.push_str("\n");
+        definitions_code.push_str(ED_C_PRINTF);
+        definitions_code.push_str("\n");
+
         for (_name, function_definition) in &runtime_module.functions {
             definitions_code.push_str(&self.generate_function_definition(function_definition));
             definitions_code.push_str("\n\n");
@@ -231,9 +244,6 @@ impl GeneratorState {
             to_string_constant(C_BOOL_FORMAT_STRING_TRUE_NAME, C_BOOL_FORMAT_STRING_TRUE);
 
         let mut print_code = String::new();
-        // External printf definition
-        print_code.push_str("declare i32 @printf(i8* noalias nocapture, ...)");
-        print_code.push_str("\n");
         // Push different format strings
         print_code.push_str(&c_newline);
         print_code.push_str("\n\n");
@@ -357,17 +367,45 @@ impl GeneratorState {
         lines
     }
 
+    fn generate_abort(&mut self, message: String) -> Vec<String> {
+        let global_var = self.var().replace("%", "@");
+        self.string_constants.insert(global_var.clone(), message.clone());
+        let result = self.var();
+        let mut code = Vec::new();
+        code.push(resolve_string_constant(&result, &global_var, message.len()));
+        code.push(format!("call i32 (i8*, ...) @printf(i8* {})", result));
+        let result = self.var();
+        code.push(resolve_string_constant_len(
+            &result,
+            C_NEWLINE_NAME,
+            C_NEWLINE_LENGTH,
+        ));
+        code.push(format!("call i32 (i8*, ...) @printf(i8* {})", result));
+        code.push("call void @exit(i32 1)".to_string());
+        code.push("unreachable".to_string());
+        code
+    }
+
     fn generate_function_definition(&mut self, definition: &Rc<FunctionDefinition>) -> String {
         self.open_scope();
-        let function_return_type =
-            return_type(&definition.function_type.as_ref().unwrap().enclosed_type);
-        let llvm_function_return_type = to_llvm_type(&function_return_type);
+        let (function_arg_types, function_return_type) =
+            match &definition.function_type.as_ref().unwrap().enclosed_type.borrow() {
+                Type::Function(from, to) => (from.iter().cloned().collect(), Rc::clone(to)),
+                _ => (vec![], Rc::clone(&definition.function_type.as_ref().unwrap().enclosed_type))
+            };
 
-        let mut bodies: Vec<String> = Vec::new();
-        for body in &definition.function_bodies {
-            let b = self.generate_function_body(body, &llvm_function_return_type);
-            bodies.extend(b);
+        let mut matches: Vec<String> = Vec::new();
+        let mut rules: Vec<String> = Vec::new();
+        for (i, body) in definition.function_bodies.iter().enumerate() {
+            let (match_code, rule_code) = self.generate_function_body(body, &function_arg_types, &function_return_type, i);
+            matches.extend(match_code);
+            rules.extend(rule_code);
         }
+        let mut bodies = Vec::new();
+        bodies.extend(matches);
+        bodies.extend(rules);
+        bodies.push(format!("Body_{}_match:", definition.function_bodies.len()));
+        bodies.extend(self.generate_abort(format!("Function '{}' does not match", definition.name)));
 
         let mut bodies_code = String::new();
         for (v, sc) in &self.string_constants {
@@ -379,11 +417,12 @@ impl GeneratorState {
         self.string_constants.clear();
 
 
+        let llvm_function_return_type = to_llvm_type(&function_return_type);
         bodies_code.push_str(&format!(
             "define {} @{}({}) {{\n",
             llvm_function_return_type,
             definition.name.replace("::", "_"),
-            ""
+            function_arg_types.iter().enumerate().map(|(i, fat)| format!("{} %a{}", to_llvm_type(fat), i)).collect::<Vec<String>>().join(", ")
         ));
 
         for b in bodies {
@@ -397,63 +436,107 @@ impl GeneratorState {
         bodies_code
     }
 
-    fn generate_function_body(&mut self, body: &Rc<FunctionBody>, llvm_function_return_type: &str) -> Vec<String> {
-        let mut rules: Vec<String> = Vec::new();
-        // TODO: The match code should be generated here
+    fn generate_function_body(&mut self, body: &Rc<FunctionBody>, function_argument_types: &Vec<Rc<Type>>, function_return_type: &Rc<Type>, current_body: usize) -> (Vec<String>, Vec<String>) {
+        let mut match_code: Vec<String> = Vec::new();
+        let mut rule_code: Vec<String> = Vec::new();
+        let current_body_label = format!("Body_{}", current_body);
+        let current_body_match_label = format!("Body_{}_match", current_body);
+        let next_body_match_label = format!("Body_{}_match", (current_body + 1).to_string());
+
+        for (i, (me, met)) in body.match_expressions.iter().zip(function_argument_types.iter()).enumerate() {
+            let mut mc = Vec::new();
+            mc.push(format!("{}:", current_body_match_label));
+            mc.extend(self.generate_match_expr(me, format!("%a{}", i), met, current_body_label.clone(), next_body_match_label.clone()));
+
+            match_code.extend(mc);
+        }
+        rule_code.push(format!("{}:", current_body_label));
 
         for (i, rule) in body.rules.iter().enumerate() {
-            let rule_code = self.generate_function_rule(rule, llvm_function_return_type, i);
-            rules.extend(rule_code);
+            let rc = self.generate_function_rule(rule, function_return_type, i);
+            rule_code.extend(rc);
         }
 
-        rules
+        (match_code, rule_code)
     }
 
-    fn generate_function_rule(&mut self, rule: &Rc<FunctionRule>, llvm_function_return_type: &str, current_rule: usize) -> Vec<String> {
+    fn generate_function_rule(&mut self, rule: &Rc<FunctionRule>, function_return_type: &Rc<Type>, current_rule: usize) -> Vec<String> {
+        let llvm_function_return_type = to_llvm_type(function_return_type);
         match rule.borrow() {
             FunctionRule::ConditionalRule(_, condition_expression, result_expression) => {
-                let current_rule_condition_label = format!("Rule_{}", current_rule);
+
                 let current_rule_result_label = format!("Rule_{}_result", current_rule);
                 let next_rule_condition_label = format!("Rule_{}", current_rule + 1);
 
                 let mut code = Vec::new();
-                code.push(format!("{}:", current_rule_condition_label));
-                let (cv, cc) = self.generate_expr(condition_expression);
+
+                if current_rule > 0 {
+                    let current_rule_condition_label = format!("Rule_{}", current_rule);
+                    code.push(format!("{}:", current_rule_condition_label));
+                }
+                let (cv, cc) = self.generate_expr(condition_expression, &Rc::new(Type::Bool));
                 code.extend(cc);
-                code.push(format!("br i1 {}, label %{}, label %{}", self.resolve(cv), current_rule_result_label, next_rule_condition_label));
-                let (rv, rc) = self.generate_expr(result_expression);
+                code.push(format!("br i1 {}, label %{}, label %{}", cv, current_rule_result_label, next_rule_condition_label));
+                let (rv, rc) = self.generate_expr(result_expression, function_return_type);
                 code.push(format!("{}:", current_rule_result_label));
                 code.extend(rc);
-                code.push(format!("ret {} {}", llvm_function_return_type, self.resolve(rv)));
+                code.push(format!("ret {} {}", llvm_function_return_type, rv));
                 code
             }
             FunctionRule::ExpressionRule(_, e) => {
-                let current_rule_label = format!("Rule_{}", current_rule);
                 let mut code = Vec::new();
-                code.push(format!("{}:", current_rule_label));
-                let (v, c) = self.generate_expr(e);
+                if current_rule > 0 {
+                    let current_rule_label = format!("Rule_{}", current_rule);
+                    code.push(format!("{}:", current_rule_label));
+                }
+
+                let (v, c) = self.generate_expr(e, function_return_type);
                 code.extend(c);
-                code.push(format!("ret {} {}", llvm_function_return_type, self.resolve(v)));
+                code.push(format!("ret {} {}", llvm_function_return_type, v));
                 code
             }
             FunctionRule::LetRule(_, _, _) => unimplemented!("LetRule"),
         }
     }
 
-    fn generate_expr(&mut self, e: &Rc<Expression>) -> (SSAVar, Vec<String>) {
+    fn generate_match_expr(&mut self, me: &Rc<MatchExpression>, match_on: String, match_type: &Rc<Type>, match_label: String, no_match_label: String) -> Vec<String> {
+        let (r, mut match_code) = match me.borrow() {
+            MatchExpression::IntLiteral(_, i) => {
+                let result = self.var();
+                (result.clone(), vec![format!("{} = icmp eq i64 {}, {}", result.clone(), i, match_on)])
+            },
+            MatchExpression::CharLiteral(_, _) => unimplemented!("MatchExpression::CharLiteral"),
+            MatchExpression::StringLiteral(_, _) => unimplemented!("MatchExpression::StringLiteral"),
+            MatchExpression::BoolLiteral(_, _) => unimplemented!("MatchExpression::BoolLiteral"),
+            MatchExpression::Identifier(_, id) => {
+                self.var_to_type.last_mut().unwrap().insert(Rc::clone(id), Rc::clone(match_type));
+                self.put(id.to_string(), match_on);
+
+                ("true".to_string(), vec![])
+            }
+            MatchExpression::Tuple(_, _) => unimplemented!("MatchExpression::Tuple"),
+            MatchExpression::ShorthandList(_, _) => unimplemented!("MatchExpression::ShorthandList"),
+            MatchExpression::LonghandList(_, _, _) => unimplemented!("MatchExpression::LonghandList"),
+            MatchExpression::Wildcard(_) => unimplemented!("MatchExpression::Wildcard"),
+            MatchExpression::ADT(_, _, _) => unimplemented!("MatchExpression::ADT"),
+            MatchExpression::Record(_, _, _) => unimplemented!("MatchExpression::Record"),
+        };
+
+        match_code.push(format!("br i1 {}, label %{}, label %{}", r, match_label, no_match_label));
+        match_code
+    }
+
+    fn generate_expr(&mut self, e: &Rc<Expression>, result_type: &Rc<Type>) -> (SSAVar, Vec<String>) {
         let result = self.var();
         let e_code = match e.borrow() {
             Expression::BoolLiteral(_, true) => {
-                self.put(result.clone(), "true".to_string());
-                vec![]
+                return ("true".to_string(), vec![]);
             }
             Expression::BoolLiteral(_, false) => {
-                self.put(result.clone(), "false".to_string());
-                vec![]
+                return ("false".to_string(), vec![]);
             }
             Expression::IntegerLiteral(_, i) => {
-                self.put(result.clone(), i.to_string());
-                vec![]
+                return (i.to_string(), vec![]);
             }
             Expression::StringLiteral(_, string) => {
                 let global_var = self.var().replace("%", "@");
@@ -488,8 +571,7 @@ impl GeneratorState {
                     // Otherwise LLVM will complain about integer literal instead of float literal.
                     f.push_str(".0")
                 }
-                self.put(result.clone(), f.to_string());
-                vec![]
+                return (f.to_string(), vec![]);
             }
             Expression::TupleLiteral(_, _) => unimplemented!(),
             Expression::EmptyListLiteral(_) => unimplemented!(),
@@ -498,16 +580,27 @@ impl GeneratorState {
             Expression::ADTTypeConstructor(_, _, _) => unimplemented!(),
             Expression::Record(_, _, _) => unimplemented!(),
             Expression::Case(_, _, _) => unimplemented!(),
-            Expression::Call(_, _, _) => unimplemented!(),
-            Expression::Variable(_, _) => unimplemented!(),
+            Expression::Call(_, function_name, arguments) => {
+                let mut code = Vec::new();
+                let mut arguments_vars = Vec::new();
+                for arg in arguments {
+                    let arg_type = self.derive_type(arg);
+                    let (v, c) = self.generate_expr(arg, &arg_type);
+                    code.extend(c);
+                    arguments_vars.push(format!("{} {}", to_llvm_type(&arg_type), self.resolve(v)));
+                }
+                code.push(format!("{} = call {} @{}({})", result, to_llvm_type(result_type), function_name.replace("::", "_"), arguments_vars.join(", ")));
+                code
+            }
+            Expression::Variable(_, id) => return (self.resolve(id.to_string()), vec![]),
             Expression::Negation(_, e) => {
-                let (var, mut code) = self.generate_expr(e);
+                let (var, mut code) = self.generate_expr(e, &Rc::new(Type::Bool));
                 code.push(format!("{} = xor i1 {}, true", result, self.resolve(var)));
                 code
             }
             Expression::Minus(_, e) => {
-                let (var, mut code) = self.generate_expr(e);
-                match self.derive_type(e).borrow() {
+                let (var, mut code) = self.generate_expr(e, result_type);
+                match result_type.borrow() {
                     Type::Float => code.push(format!(
                         "{} = fmul double -1.0, {}",
                         result,
@@ -521,12 +614,12 @@ impl GeneratorState {
                 code
             }
             Expression::Times(_, e1, e2) => {
-                let (var1, code1) = self.generate_expr(e1);
-                let (var2, code2) = self.generate_expr(e2);
+                let (var1, code1) = self.generate_expr(e1, result_type);
+                let (var2, code2) = self.generate_expr(e2, result_type);
                 let mut code = Vec::new();
                 code.extend(code1);
                 code.extend(code2);
-                match self.derive_type(e1).borrow() {
+                match result_type.borrow() {
                     Type::Int => code.push(format!(
                         "{} = mul i64 {}, {}",
                         result,
@@ -544,12 +637,12 @@ impl GeneratorState {
                 code
             }
             Expression::Divide(_, e1, e2) => {
-                let (var1, code1) = self.generate_expr(e1);
-                let (var2, code2) = self.generate_expr(e2);
+                let (var1, code1) = self.generate_expr(e1, result_type);
+                let (var2, code2) = self.generate_expr(e2, result_type);
                 let mut code = Vec::new();
                 code.extend(code1);
                 code.extend(code2);
-                match self.derive_type(e1).borrow() {
+                match result_type.borrow() {
                     Type::Int => code.push(format!(
                         "{} = sdiv i64 {}, {}",
                         result,
@@ -567,12 +660,12 @@ impl GeneratorState {
                 code
             }
             Expression::Modulo(_, e1, e2) => {
-                let (var1, code1) = self.generate_expr(e1);
-                let (var2, code2) = self.generate_expr(e2);
+                let (var1, code1) = self.generate_expr(e1, result_type);
+                let (var2, code2) = self.generate_expr(e2, result_type);
                 let mut code = Vec::new();
                 code.extend(code1);
                 code.extend(code2);
-                match self.derive_type(e1).borrow() {
+                match result_type.borrow() {
                     Type::Int => code.push(format!(
                         "{} = srem i64 {}, {}",
                         result,
@@ -590,12 +683,12 @@ impl GeneratorState {
                 code
             }
             Expression::Add(_, e1, e2) => {
-                let (var1, code1) = self.generate_expr(e1);
-                let (var2, code2) = self.generate_expr(e2);
+                let (var1, code1) = self.generate_expr(e1, result_type);
+                let (var2, code2) = self.generate_expr(e2, result_type);
                 let mut code = Vec::new();
                 code.extend(code1);
                 code.extend(code2);
-                match self.derive_type(e1).borrow() {
+                match result_type.borrow() {
                     Type::Int => code.push(format!(
                         "{} = add i64 {}, {}",
                         result,
@@ -613,12 +706,12 @@ impl GeneratorState {
                 code
             }
             Expression::Subtract(_, e1, e2) => {
-                let (var1, code1) = self.generate_expr(e1);
-                let (var2, code2) = self.generate_expr(e2);
+                let (var1, code1) = self.generate_expr(e1, result_type);
+                let (var2, code2) = self.generate_expr(e2, result_type);
                 let mut code = Vec::new();
                 code.extend(code1);
                 code.extend(code2);
-                match self.derive_type(e1).borrow() {
+                match result_type.borrow() {
                     Type::Int => code.push(format!(
                         "{} = sub i64 {}, {}",
                         result,
@@ -636,8 +729,8 @@ impl GeneratorState {
                 code
             }
             Expression::ShiftLeft(_, e1, e2) => {
-                let (var1, code1) = self.generate_expr(e1);
-                let (var2, code2) = self.generate_expr(e2);
+                let (var1, code1) = self.generate_expr(e1, &Rc::new(Type::Int));
+                let (var2, code2) = self.generate_expr(e2, &Rc::new(Type::Int));
                 let mut code = Vec::new();
                 code.extend(code1);
                 code.extend(code2);
@@ -650,8 +743,8 @@ impl GeneratorState {
                 code
             }
             Expression::ShiftRight(_, e1, e2) => {
-                let (var1, code1) = self.generate_expr(e1);
-                let (var2, code2) = self.generate_expr(e2);
+                let (var1, code1) = self.generate_expr(e1, &Rc::new(Type::Int));
+                let (var2, code2) = self.generate_expr(e2, &Rc::new(Type::Int));
                 let mut code = Vec::new();
                 code.extend(code1);
                 code.extend(code2);
@@ -664,8 +757,8 @@ impl GeneratorState {
                 code
             }
             Expression::Greater(_, e1, e2) => {
-                let (var1, code1) = self.generate_expr(e1);
-                let (var2, code2) = self.generate_expr(e2);
+                let (var1, code1) = self.generate_expr(e1, &self.derive_type(e1));
+                let (var2, code2) = self.generate_expr(e2, &self.derive_type(e2));
                 let mut code = Vec::new();
                 code.extend(code1);
                 code.extend(code2);
@@ -687,8 +780,8 @@ impl GeneratorState {
                 code
             }
             Expression::Greq(_, e1, e2) => {
-                let (var1, code1) = self.generate_expr(e1);
-                let (var2, code2) = self.generate_expr(e2);
+                let (var1, code1) = self.generate_expr(e1, &self.derive_type(e1));
+                let (var2, code2) = self.generate_expr(e2, &self.derive_type(e1));
                 let mut code = Vec::new();
                 code.extend(code1);
                 code.extend(code2);
@@ -710,8 +803,8 @@ impl GeneratorState {
                 code
             }
             Expression::Leq(_, e1, e2) => {
-                let (var1, code1) = self.generate_expr(e1);
-                let (var2, code2) = self.generate_expr(e2);
+                let (var1, code1) = self.generate_expr(e1, &self.derive_type(e1));
+                let (var2, code2) = self.generate_expr(e2, &self.derive_type(e1));
                 let mut code = Vec::new();
                 code.extend(code1);
                 code.extend(code2);
@@ -733,8 +826,8 @@ impl GeneratorState {
                 code
             }
             Expression::Lesser(_, e1, e2) => {
-                let (var1, code1) = self.generate_expr(e1);
-                let (var2, code2) = self.generate_expr(e2);
+                let (var1, code1) = self.generate_expr(e1, &self.derive_type(e1));
+                let (var2, code2) = self.generate_expr(e2, &self.derive_type(e1));
                 let mut code = Vec::new();
                 code.extend(code1);
                 code.extend(code2);
@@ -757,8 +850,8 @@ impl GeneratorState {
             }
             Expression::Eq(_, e1, e2) => {
                 // TODO: Implement proper eq routine, type inferencer supports comparing arbitrary 'concrete' values.
-                let (var1, code1) = self.generate_expr(e1);
-                let (var2, code2) = self.generate_expr(e2);
+                let (var1, code1) = self.generate_expr(e1, &self.derive_type(e1));
+                let (var2, code2) = self.generate_expr(e2, &self.derive_type(e1));
                 let mut code = Vec::new();
                 code.extend(code1);
                 code.extend(code2);
@@ -781,8 +874,8 @@ impl GeneratorState {
             }
             Expression::Neq(_, e1, e2) => {
                 // TODO: Implement proper neq routing, type inferencer supports comparing arbitrary 'concrete' values.
-                let (var1, code1) = self.generate_expr(e1);
-                let (var2, code2) = self.generate_expr(e2);
+                let (var1, code1) = self.generate_expr(e1, &self.derive_type(e1));
+                let (var2, code2) = self.generate_expr(e2, &self.derive_type(e1));
                 let mut code = Vec::new();
                 code.extend(code1);
                 code.extend(code2);
@@ -804,8 +897,8 @@ impl GeneratorState {
                 code
             }
             Expression::And(_, e1, e2) => {
-                let (var1, code1) = self.generate_expr(e1);
-                let (var2, code2) = self.generate_expr(e2);
+                let (var1, code1) = self.generate_expr(e1, &Rc::new(Type::Bool));
+                let (var2, code2) = self.generate_expr(e2, &Rc::new(Type::Bool));
                 let mut code = Vec::new();
                 code.extend(code1);
                 code.extend(code2);
@@ -819,8 +912,8 @@ impl GeneratorState {
             }
 
             Expression::Or(_, e1, e2) => {
-                let (var1, code1) = self.generate_expr(e1);
-                let (var2, code2) = self.generate_expr(e2);
+                let (var1, code1) = self.generate_expr(e1, &Rc::new(Type::Bool));
+                let (var2, code2) = self.generate_expr(e2, &Rc::new(Type::Bool));
                 let mut code = Vec::new();
                 code.extend(code1);
                 code.extend(code2);
