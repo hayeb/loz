@@ -1,11 +1,11 @@
 /* Type mapping for LOZ Types to LLVM types:
-   LOZ Type         | C-Type (for refence)  | LLVM Type |
-   -----------------|-----------------------|-----------|
-   Bool             | bool                  | i1        |
-   Char             | ????                  | i32       |
-   String           | *char                 | *i8           |
-   Int              | int_64_t              | i64
-   Float            | float                 | float
+   LOZ Type         | C-Type (for reference)  | LLVM Type |
+   -----------------|-------------------------|-----------|
+   Bool             | bool                    | i1        |
+   Char             | ????                    | i32       |
+   String           | *char                   | *i8           |
+   Int              | int_64_t                | i64
+   Float            | float                   | float
 
    Things to do in no particular order:
    1. Extract compile time string constants
@@ -21,25 +21,28 @@
 */
 
 /* TODO:
-    - Can record names and ADT names overlap?
-
-
-
-
-
- */
+   - Actually implement generating LLVM structure types
+   - Implement record dot expressions
+   - Implement matching on records/ADTs
+   - Implement lists
+   - Implement tuples
+   - Implement Lambda's (brrr..)
+   - Implement
+*/
 
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::ast::{Expression, FunctionBody, FunctionDefinition, FunctionRule, MatchExpression, Type};
+use crate::ast::{
+    Expression, FunctionBody, FunctionDefinition, FunctionRule, MatchExpression, Type,
+};
 use crate::rewriter::RuntimeModule;
 use regex::Regex;
 
-const ED_C_EXIT : &'static str = "declare void @exit(i32) cold noreturn nounwind";
-const ED_C_PRINTF : &'static str = "declare i32 @printf(i8* noalias nocapture, ...)";
-const ED_C_STRCMP : &'static str = "declare i32 @strcmp(i8*, i8*)";
+const LF_C_EXIT: &'static str = "declare void @exit(i32) cold noreturn nounwind";
+const LF_C_PRINTF: &'static str = "declare i32 @printf(i8* noalias nocapture, ...)";
+const LF_C_STRCMP: &'static str = "declare i32 @strcmp(i8*, i8*)";
 
 const C_NEWLINE: &'static str = "\\0A";
 const C_NEWLINE_NAME: &'static str = "@c_newline";
@@ -152,72 +155,48 @@ impl GeneratorState {
             vars: Vec::new(),
             var_to_type: Vec::new(),
 
-            function_name_to_type: runtime_module.functions.iter()
-                .map(|(n, d)| (Rc::clone(n), Rc::clone(&d.function_type.as_ref().unwrap().enclosed_type)))
+            function_name_to_type: runtime_module
+                .functions
+                .iter()
+                .map(|(n, d)| {
+                    (
+                        Rc::clone(n),
+                        Rc::clone(&d.function_type.as_ref().unwrap().enclosed_type),
+                    )
+                })
                 .collect(),
         };
     }
 
-    fn open_scope(&mut self) {
-        self.vars.push(HashMap::new());
-        self.var_to_type.push(HashMap::new());
-    }
-
-    fn close_scope(&mut self) {
-        self.vars.pop();
-        self.var_to_type.pop();
-    }
-
-    fn put(&mut self, var: String, value: String) {
-        self.vars.last_mut().unwrap().insert(var, value);
-    }
-
-    fn get(&self, var: &str) -> Option<String> {
-        self.vars.last().unwrap().get(var).cloned()
-    }
-
-    fn var(&mut self) -> SSAVar {
-        self.new_var += 1;
-        return format!("%v{}", self.new_var);
-    }
-
-    fn resolve(&mut self, v: SSAVar) -> String {
-        match self.get(&v) {
-            None => v,
-            Some(value) => value,
-        }
-    }
-
-    fn derive_type(&self, e: &Rc<Expression>) -> Rc<Type> {
-        match e.borrow() {
-            Expression::FloatLiteral(_, _) => Rc::new(Type::Float),
-            Expression::IntegerLiteral(_, _) => Rc::new(Type::Int),
-            Expression::BoolLiteral(_, _) => Rc::new(Type::Bool),
-            Expression::CharacterLiteral(_, _) => Rc::new(Type::Char),
-            Expression::StringLiteral(_, _) => Rc::new(Type::String),
-                Expression::Call(_, f, _) => {
-                let f_type = self.function_name_to_type.get(f).unwrap();
-                return_type(f_type)
-            }
-            _ => unimplemented!("derive_type at {}", e.locate()),
-        }
-    }
-
     fn generate(&mut self, runtime_module: &Rc<RuntimeModule>) -> String {
-        let mut definitions_code = String::new();
+        let mut code = String::new();
+        code.push_str(&Self::generate_linked_functions());
+        code.push_str(&self.generate_function_definitions(runtime_module));
+        code.push_str(&self.generate_main_function(runtime_module));
+        code
+    }
 
-        definitions_code.push_str(ED_C_EXIT);
-        definitions_code.push_str("\n");
-        definitions_code.push_str(ED_C_PRINTF);
-        definitions_code.push_str("\n");
-        definitions_code.push_str(ED_C_STRCMP);
-        definitions_code.push_str("\n");
+    fn generate_linked_functions() -> String {
+        let mut code = String::new();
+        code.push_str(LF_C_EXIT);
+        code.push_str("\n");
+        code.push_str(LF_C_PRINTF);
+        code.push_str("\n");
+        code.push_str(LF_C_STRCMP);
+        code.push_str("\n");
+        code
+    }
 
+    fn generate_function_definitions(&mut self, runtime_module: &Rc<RuntimeModule>) -> String {
+        let mut function_definitions = String::new();
         for (_name, function_definition) in &runtime_module.functions {
-            definitions_code.push_str(&self.generate_function_definition(function_definition));
-            definitions_code.push_str("\n\n");
+            function_definitions.push_str(&self.generate_function_definition(function_definition));
+            function_definitions.push_str("\n\n");
         }
+        function_definitions
+    }
 
+    fn generate_main_function(&mut self, runtime_module: &Rc<RuntimeModule>) -> String {
         let main_result_ssa = self.var();
         let main_result_type = to_llvm_type(&runtime_module.main_function_type);
         let qualified_main_name = format!(
@@ -225,11 +204,10 @@ impl GeneratorState {
             runtime_module.name, runtime_module.main_function_name
         );
 
-        let print_code =
-            self.generate_print_code(&runtime_module.main_function_type, main_result_type.clone());
-        definitions_code.push_str(&print_code);
+        let mut code = String::new();
+        code.push_str(&self.generate_print_code(&runtime_module.main_function_type, main_result_type.clone()));
 
-        definitions_code.push_str(&format!(
+        code.push_str(&format!(
             "define i32 @main() {{
     {} = call {} {}
     call void @print_result({} {})
@@ -241,7 +219,7 @@ impl GeneratorState {
             main_result_type,
             main_result_ssa
         ));
-        definitions_code
+        code
     }
 
     fn generate_print_code(&mut self, loz_type: &Rc<Type>, llvm_type: String) -> String {
@@ -385,7 +363,8 @@ impl GeneratorState {
 
     fn generate_abort(&mut self, message: String) -> Vec<String> {
         let global_var = self.var().replace("%", "@");
-        self.string_constants.insert(global_var.clone(), message.clone());
+        self.string_constants
+            .insert(global_var.clone(), message.clone());
         let result = self.var();
         let mut code = Vec::new();
         code.push(resolve_string_constant(&result, &global_var, message.len()));
@@ -404,16 +383,25 @@ impl GeneratorState {
 
     fn generate_function_definition(&mut self, definition: &Rc<FunctionDefinition>) -> String {
         self.open_scope();
-        let (function_arg_types, function_return_type) =
-            match &definition.function_type.as_ref().unwrap().enclosed_type.borrow() {
-                Type::Function(from, to) => (from.iter().cloned().collect(), Rc::clone(to)),
-                _ => (vec![], Rc::clone(&definition.function_type.as_ref().unwrap().enclosed_type))
-            };
+        let (function_arg_types, function_return_type) = match &definition
+            .function_type
+            .as_ref()
+            .unwrap()
+            .enclosed_type
+            .borrow()
+        {
+            Type::Function(from, to) => (from.iter().cloned().collect(), Rc::clone(to)),
+            _ => (
+                vec![],
+                Rc::clone(&definition.function_type.as_ref().unwrap().enclosed_type),
+            ),
+        };
 
         let mut matches: Vec<String> = Vec::new();
         let mut rules: Vec<String> = Vec::new();
         for (i, body) in definition.function_bodies.iter().enumerate() {
-            let (match_code, rule_code) = self.generate_function_body(body, &function_arg_types, &function_return_type, i);
+            let (match_code, rule_code) =
+                self.generate_function_body(body, &function_arg_types, &function_return_type, i);
             matches.extend(match_code);
             rules.extend(rule_code);
         }
@@ -421,7 +409,8 @@ impl GeneratorState {
         bodies.extend(matches);
         bodies.extend(rules);
         bodies.push(format!("Body_{}_match:", definition.function_bodies.len()));
-        bodies.extend(self.generate_abort(format!("Function '{}' does not match", definition.name)));
+        bodies
+            .extend(self.generate_abort(format!("Function '{}' does not match", definition.name)));
 
         let mut bodies_code = String::new();
         for (v, sc) in &self.string_constants {
@@ -437,7 +426,12 @@ impl GeneratorState {
             "define {} @{}({}) {{\n",
             llvm_function_return_type,
             definition.name.replace("::", "_"),
-            function_arg_types.iter().enumerate().map(|(i, fat)| format!("{} %a{}", to_llvm_type(fat), i)).collect::<Vec<String>>().join(", ")
+            function_arg_types
+                .iter()
+                .enumerate()
+                .map(|(i, fat)| format!("{} %a{}", to_llvm_type(fat), i))
+                .collect::<Vec<String>>()
+                .join(", ")
         ));
 
         let label_regex = Regex::new(r"^[A-Z]+.*:$").unwrap();
@@ -456,17 +450,34 @@ impl GeneratorState {
         bodies_code
     }
 
-    fn generate_function_body(&mut self, body: &Rc<FunctionBody>, function_argument_types: &Vec<Rc<Type>>, function_return_type: &Rc<Type>, current_body: usize) -> (Vec<String>, Vec<String>) {
+    fn generate_function_body(
+        &mut self,
+        body: &Rc<FunctionBody>,
+        function_argument_types: &Vec<Rc<Type>>,
+        function_return_type: &Rc<Type>,
+        current_body: usize,
+    ) -> (Vec<String>, Vec<String>) {
         let mut match_code: Vec<String> = Vec::new();
         let mut rule_code: Vec<String> = Vec::new();
         let current_body_label = format!("Body_{}", current_body);
         let current_body_match_label = format!("Body_{}_match", current_body);
         let next_body_match_label = format!("Body_{}_match", (current_body + 1).to_string());
 
-        for (i, (me, met)) in body.match_expressions.iter().zip(function_argument_types.iter()).enumerate() {
+        for (i, (me, met)) in body
+            .match_expressions
+            .iter()
+            .zip(function_argument_types.iter())
+            .enumerate()
+        {
             let mut mc = Vec::new();
             mc.push(format!("{}:", current_body_match_label));
-            mc.extend(self.generate_match_expr(me, format!("%a{}", i), met, current_body_label.clone(), next_body_match_label.clone()));
+            mc.extend(self.generate_match_expr(
+                me,
+                format!("%a{}", i),
+                met,
+                current_body_label.clone(),
+                next_body_match_label.clone(),
+            ));
 
             match_code.extend(mc);
         }
@@ -480,11 +491,15 @@ impl GeneratorState {
         (match_code, rule_code)
     }
 
-    fn generate_function_rule(&mut self, rule: &Rc<FunctionRule>, function_return_type: &Rc<Type>, current_rule: usize) -> Vec<String> {
+    fn generate_function_rule(
+        &mut self,
+        rule: &Rc<FunctionRule>,
+        function_return_type: &Rc<Type>,
+        current_rule: usize,
+    ) -> Vec<String> {
         let llvm_function_return_type = to_llvm_type(function_return_type);
         match rule.borrow() {
             FunctionRule::ConditionalRule(_, condition_expression, result_expression) => {
-
                 let current_rule_result_label = format!("Rule_{}_result", current_rule);
                 let next_rule_condition_label = format!("Rule_{}", current_rule + 1);
 
@@ -496,7 +511,10 @@ impl GeneratorState {
                 }
                 let (cv, cc) = self.generate_expr(condition_expression, &Rc::new(Type::Bool));
                 code.extend(cc);
-                code.push(format!("br i1 {}, label %{}, label %{}", cv, current_rule_result_label, next_rule_condition_label));
+                code.push(format!(
+                    "br i1 {}, label %{}, label %{}",
+                    cv, current_rule_result_label, next_rule_condition_label
+                ));
                 let (rv, rc) = self.generate_expr(result_expression, function_return_type);
                 code.push(format!("{}:", current_rule_result_label));
                 code.extend(rc);
@@ -519,71 +537,124 @@ impl GeneratorState {
         }
     }
 
-    fn generate_match_expr(&mut self, me: &Rc<MatchExpression>, match_on: String, match_type: &Rc<Type>, match_label: String, no_match_label: String) -> Vec<String> {
+    fn generate_match_expr(
+        &mut self,
+        me: &Rc<MatchExpression>,
+        match_on: String,
+        match_type: &Rc<Type>,
+        match_label: String,
+        no_match_label: String,
+    ) -> Vec<String> {
         let (r, mut match_code) = match me.borrow() {
             MatchExpression::IntLiteral(_, i) => {
                 let result = self.var();
-                (result.clone(), vec![format!("{} = icmp eq i64 {}, {}", result.clone(), i, match_on)])
-            },
+                (
+                    result.clone(),
+                    vec![format!(
+                        "{} = icmp eq i64 {}, {}",
+                        result.clone(),
+                        i,
+                        match_on
+                    )],
+                )
+            }
             MatchExpression::CharLiteral(_, cc) => {
                 let mut buffer = [0; 4];
                 let char_result = cc.encode_utf8(&mut buffer);
 
                 let global_var = self.var().replace("%", "@");
-                self.string_constants.insert(global_var.clone(), char_result.to_string());
+                self.string_constants
+                    .insert(global_var.clone(), char_result.to_string());
                 let sc_result = self.var();
                 let mut code = Vec::new();
 
-                code.push(format!("{} = getelementptr [{} x i8],[{} x i8]* {}, i64 0, i64 0",
-                                  sc_result,
-                                  char_result.len() + 1,
-                                  char_result.len() + 1,
-                                  global_var));
+                code.push(format!(
+                    "{} = getelementptr [{} x i8],[{} x i8]* {}, i64 0, i64 0",
+                    sc_result,
+                    char_result.len() + 1,
+                    char_result.len() + 1,
+                    global_var
+                ));
                 let cmp_res = self.var();
-                code.push(format!("{} = call i32 @strcmp(i8* {}, i8* {})", cmp_res.clone(), match_on, sc_result));
+                code.push(format!(
+                    "{} = call i32 @strcmp(i8* {}, i8* {})",
+                    cmp_res.clone(),
+                    match_on,
+                    sc_result
+                ));
                 let bool_res = self.var();
                 code.push(format!("{} = icmp eq i32 0, {}", bool_res, cmp_res));
                 (bool_res.clone(), code)
             }
-            MatchExpression::StringLiteral(_, sc) =>  {
+            MatchExpression::StringLiteral(_, sc) => {
                 let global_var = self.var().replace("%", "@");
-                self.string_constants.insert(global_var.clone(), sc.to_string());
+                self.string_constants
+                    .insert(global_var.clone(), sc.to_string());
                 let sc_result = self.var();
                 let mut code = Vec::new();
-                code.push(format!("{} = getelementptr [{} x i8],[{} x i8]* {}, i64 0, i64 0",
-                                  sc_result,
-                                  sc.len() + 1,
-                                  sc.len() + 1,
-                                  global_var));
+                code.push(format!(
+                    "{} = getelementptr [{} x i8],[{} x i8]* {}, i64 0, i64 0",
+                    sc_result,
+                    sc.len() + 1,
+                    sc.len() + 1,
+                    global_var
+                ));
                 let cmp_res = self.var();
-                code.push(format!("{} = call i32 @strcmp(i8* {}, i8* {})", cmp_res.clone(), match_on, sc_result));
+                code.push(format!(
+                    "{} = call i32 @strcmp(i8* {}, i8* {})",
+                    cmp_res.clone(),
+                    match_on,
+                    sc_result
+                ));
                 let bool_res = self.var();
                 code.push(format!("{} = icmp eq i32 0, {}", bool_res, cmp_res));
                 (bool_res.clone(), code)
             }
             MatchExpression::BoolLiteral(_, b) => {
                 let result = self.var();
-                (result.clone(), vec![format!("{} = icmp eq i1 {}, {}", result.clone(), b, match_on)])
-            },
+                (
+                    result.clone(),
+                    vec![format!(
+                        "{} = icmp eq i1 {}, {}",
+                        result.clone(),
+                        b,
+                        match_on
+                    )],
+                )
+            }
             MatchExpression::Identifier(_, id) => {
-                self.var_to_type.last_mut().unwrap().insert(Rc::clone(id), Rc::clone(match_type));
+                self.var_to_type
+                    .last_mut()
+                    .unwrap()
+                    .insert(Rc::clone(id), Rc::clone(match_type));
                 self.put(id.to_string(), match_on);
 
                 ("true".to_string(), vec![])
             }
             MatchExpression::Tuple(_, _) => unimplemented!("MatchExpression::Tuple"),
-            MatchExpression::ShorthandList(_, _) => unimplemented!("MatchExpression::ShorthandList"),
-            MatchExpression::LonghandList(_, _, _) => unimplemented!("MatchExpression::LonghandList"),
+            MatchExpression::ShorthandList(_, _) => {
+                unimplemented!("MatchExpression::ShorthandList")
+            }
+            MatchExpression::LonghandList(_, _, _) => {
+                unimplemented!("MatchExpression::LonghandList")
+            }
             MatchExpression::Wildcard(_) => ("true".to_string(), vec![]),
             MatchExpression::ADT(_, _, _) => unimplemented!("MatchExpression::ADT"),
             MatchExpression::Record(_, _, _) => unimplemented!("MatchExpression::Record"),
         };
 
-        match_code.push(format!("br i1 {}, label %{}, label %{}", r, match_label, no_match_label));
+        match_code.push(format!(
+            "br i1 {}, label %{}, label %{}",
+            r, match_label, no_match_label
+        ));
         match_code
     }
 
-    fn generate_expr(&mut self, e: &Rc<Expression>, result_type: &Rc<Type>) -> (SSAVar, Vec<String>) {
+    fn generate_expr(
+        &mut self,
+        e: &Rc<Expression>,
+        result_type: &Rc<Type>,
+    ) -> (SSAVar, Vec<String>) {
         let result = self.var();
         let e_code = match e.borrow() {
             Expression::BoolLiteral(_, true) => {
@@ -646,7 +717,13 @@ impl GeneratorState {
                     code.extend(c);
                     arguments_vars.push(format!("{} {}", to_llvm_type(&arg_type), self.resolve(v)));
                 }
-                code.push(format!("{} = call {} @{}({})", result, to_llvm_type(result_type), function_name.replace("::", "_"), arguments_vars.join(", ")));
+                code.push(format!(
+                    "{} = call {} @{}({})",
+                    result,
+                    to_llvm_type(result_type),
+                    function_name.replace("::", "_"),
+                    arguments_vars.join(", ")
+                ));
                 code
             }
             Expression::Variable(_, id) => return (self.resolve(id.to_string()), vec![]),
@@ -987,5 +1064,50 @@ impl GeneratorState {
         };
 
         return (result, e_code);
+    }
+
+    fn open_scope(&mut self) {
+        self.vars.push(HashMap::new());
+        self.var_to_type.push(HashMap::new());
+    }
+
+    fn close_scope(&mut self) {
+        self.vars.pop();
+        self.var_to_type.pop();
+    }
+
+    fn put(&mut self, var: String, value: String) {
+        self.vars.last_mut().unwrap().insert(var, value);
+    }
+
+    fn get(&self, var: &str) -> Option<String> {
+        self.vars.last().unwrap().get(var).cloned()
+    }
+
+    fn var(&mut self) -> SSAVar {
+        self.new_var += 1;
+        return format!("%v{}", self.new_var);
+    }
+
+    fn resolve(&mut self, v: SSAVar) -> String {
+        match self.get(&v) {
+            None => v,
+            Some(value) => value,
+        }
+    }
+
+    fn derive_type(&self, e: &Rc<Expression>) -> Rc<Type> {
+        match e.borrow() {
+            Expression::FloatLiteral(_, _) => Rc::new(Type::Float),
+            Expression::IntegerLiteral(_, _) => Rc::new(Type::Int),
+            Expression::BoolLiteral(_, _) => Rc::new(Type::Bool),
+            Expression::CharacterLiteral(_, _) => Rc::new(Type::Char),
+            Expression::StringLiteral(_, _) => Rc::new(Type::String),
+            Expression::Call(_, f, _) => {
+                let f_type = self.function_name_to_type.get(f).unwrap();
+                return_type(f_type)
+            }
+            _ => unimplemented!("derive_type at {}", e.locate()),
+        }
     }
 }

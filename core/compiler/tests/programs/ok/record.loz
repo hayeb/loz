@@ -1,5 +1,6 @@
 :: R = { t :: Int }
 
+g :: R -> Int
 g {R|t} = t
 
 f x = 18 * g x

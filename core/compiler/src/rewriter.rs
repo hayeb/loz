@@ -2,9 +2,13 @@ use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use crate::ast::{CaseRule, Expression, FunctionBody, FunctionDefinition, FunctionRule, Import, MatchExpression, Type, RecordDefinition, ADTDefinition};
+use crate::ast::{
+    ADTConstructor, ADTDefinition, CaseRule, Expression, FunctionBody, FunctionDefinition,
+    FunctionRule, Import, MatchExpression, RecordDefinition, Type, TypeScheme,
+};
 use crate::inferencer::TypedModule;
 
+#[derive(Debug)]
 pub struct RuntimeModule {
     pub name: Rc<String>,
     pub main_function_name: Rc<String>,
@@ -94,17 +98,163 @@ impl RewriteState {
             adt_name_to_definition: module
                 .adt_name_to_definition
                 .iter()
-                .map(|(n, d)| (prefix_name(n, &module.module_name), Rc::clone(d)))
+                .map(|(n, d)| {
+                    (
+                        prefix_name(n, &module.module_name),
+                        self.rewrite_adt_definition(
+                            d,
+                            true,
+                            &module.module_name,
+                            &imported_modules,
+                            &module_aliases,
+                        ),
+                    )
+                })
                 .collect(),
             record_name_to_definition: module
                 .record_name_to_definition
                 .iter()
-                .map(|(n, d)| (prefix_name(n, &module.module_name), Rc::clone(d)))
+                .map(|(n, d)| {
+                    (
+                        prefix_name(n, &module.module_name),
+                        self.rewrite_record_definition(
+                            d,
+                            true,
+                            &module.module_name,
+                            &imported_modules,
+                            &module_aliases,
+                        ),
+                    )
+                })
                 .collect(),
         });
         self.rewritten_modules
             .insert(Rc::clone(&module.module_name), Rc::clone(&rewritten_module));
         return rewritten_module;
+    }
+
+    fn rewrite_adt_definition(
+        &mut self,
+        adt_definition: &Rc<ADTDefinition>,
+        rewrite_definition_names: bool,
+        current_module_name: &Rc<String>,
+        imported_modules: &Vec<Rc<TypedModule>>,
+        module_aliases: &HashMap<Rc<String>, Rc<String>>,
+    ) -> Rc<ADTDefinition> {
+        Rc::new(ADTDefinition {
+            name: if rewrite_definition_names {
+                prefix_name(&adt_definition.name, current_module_name)
+            } else {
+                Rc::clone(&adt_definition.name)
+            },
+            location: Rc::clone(&adt_definition.location),
+            type_variables: adt_definition.type_variables.iter().cloned().collect(),
+            constructors: adt_definition
+                .constructors
+                .iter()
+                .map(|(n, c)| {
+                    (
+                        prefix_name(n, current_module_name),
+                        Rc::new(ADTConstructor {
+                            name: prefix_name(n, current_module_name),
+                            elements: c
+                                .elements
+                                .iter()
+                                .map(|e| {
+                                    self.rewrite_type(
+                                        e,
+                                        current_module_name,
+                                        imported_modules,
+                                        module_aliases,
+                                    )
+                                })
+                                .collect(),
+                        }),
+                    )
+                })
+                .collect(),
+        })
+    }
+
+    fn rewrite_record_definition(
+        &mut self,
+        record_definition: &Rc<RecordDefinition>,
+        rewrite_definition_names: bool,
+        current_module_name: &Rc<String>,
+        imported_modules: &Vec<Rc<TypedModule>>,
+        module_aliases: &HashMap<Rc<String>, Rc<String>>,
+    ) -> Rc<RecordDefinition> {
+        Rc::new(RecordDefinition {
+            name: if rewrite_definition_names {
+                prefix_name(&record_definition.name, current_module_name)
+            } else {
+                Rc::clone(&record_definition.name)
+            },
+            location: Rc::clone(&record_definition.location),
+            type_variables: record_definition.type_variables.iter().cloned().collect(),
+            fields: record_definition
+                .fields
+                .iter()
+                .map(|(name, field_type)| {
+                    (
+                        Rc::clone(name),
+                        self.rewrite_type(
+                            field_type,
+                            current_module_name,
+                            imported_modules,
+                            module_aliases,
+                        ),
+                    )
+                })
+                .collect(),
+        })
+    }
+
+    fn rewrite_type(
+        &mut self,
+        loz_type: &Rc<Type>,
+        current_module_name: &Rc<String>,
+        imported_modules: &Vec<Rc<TypedModule>>,
+        module_aliases: &HashMap<Rc<String>, Rc<String>>,
+    ) -> Rc<Type> {
+        match loz_type.borrow() {
+            Type::Bool => Rc::clone(loz_type),
+            Type::Char => Rc::clone(loz_type),
+            Type::String => Rc::clone(loz_type),
+            Type::Int => Rc::clone(loz_type),
+            Type::Float => Rc::clone(loz_type),
+            Type::UserType(name, arguments) => Rc::new(Type::UserType(
+                self.rewrite_type_name(name, current_module_name, imported_modules, module_aliases),
+                arguments
+                    .iter()
+                    .map(|a| {
+                        self.rewrite_type(a, current_module_name, imported_modules, module_aliases)
+                    })
+                    .collect(),
+            )),
+            Type::Tuple(els) => Rc::new(Type::Tuple(
+                els.iter()
+                    .map(|t| {
+                        self.rewrite_type(t, current_module_name, imported_modules, module_aliases)
+                    })
+                    .collect(),
+            )),
+            Type::List(t) => Rc::new(Type::List(self.rewrite_type(
+                t,
+                current_module_name,
+                imported_modules,
+                module_aliases,
+            ))),
+            Type::Variable(_) => Rc::clone(loz_type),
+            Type::Function(from, to) => Rc::new(Type::Function(
+                from.iter()
+                    .map(|t| {
+                        self.rewrite_type(t, current_module_name, imported_modules, module_aliases)
+                    })
+                    .collect(),
+                self.rewrite_type(to, current_module_name, imported_modules, module_aliases),
+            )),
+        }
     }
 
     fn rewrite_function_definition(
@@ -122,7 +272,20 @@ impl RewriteState {
             } else {
                 Rc::clone(&function_definition.name)
             },
-            function_type: function_definition.function_type.clone(),
+            function_type: Some(Rc::new(TypeScheme {
+                bound_variables: function_definition
+                    .function_type
+                    .as_ref()
+                    .unwrap()
+                    .bound_variables
+                    .clone(),
+                enclosed_type: self.rewrite_type(
+                    &function_definition.function_type.as_ref().unwrap().enclosed_type,
+                    current_module_name,
+                    imported_modules,
+                    module_aliases,
+                ),
+            })),
             function_bodies: function_definition
                 .function_bodies
                 .iter()
@@ -136,6 +299,101 @@ impl RewriteState {
                 })
                 .collect(),
         })
+    }
+
+    fn rewrite_type_name(
+        &mut self,
+        type_name: &Rc<String>,
+        current_module_name: &Rc<String>,
+        imported_modules: &Vec<Rc<TypedModule>>,
+        module_aliases: &HashMap<Rc<String>, Rc<String>>,
+    ) -> Rc<String> {
+        for m in imported_modules {
+            // If the module is alias as import we should not consider it for rewriting here.
+            if module_aliases.values().any(|e| e == &m.module_name) {
+                continue;
+            }
+            // A type name cannot be both a record and an ADT, so we can safely
+            // search both collections.
+            let local_name = prefix_name(type_name, &m.module_name);
+            for (n, _) in &m.record_name_to_definition {
+                if n == &local_name {
+                    //println!(
+                    //    "Rewriting record reference {} in module {} to {}",
+                    //    type_name, current_module_name, local_name
+                    //);
+                    return local_name;
+                }
+            }
+
+            for (n, _) in &m.adt_name_to_definition {
+                if n == &local_name {
+                    //println!(
+                    //    "Rewriting adt reference {} in module {} to {}",
+                    //    type_name, current_module_name, local_name
+                    //);
+                    return local_name;
+                }
+            }
+        }
+
+        // Not found in imported modules.. Must be a definition in the current module.
+        //println!(
+        //    "Rewriting function reference {} in module {} to {}",
+        //    function_name,
+        //    current_module_name,
+        //    prefix_name(function_name, current_module_name)
+        //);
+        prefix_name(type_name, current_module_name)
+    }
+
+    fn rewrite_type_constructor_name(
+        &self,
+        constructor_name: &Rc<String>,
+        current_module_name: &Rc<String>,
+        imported_modules: &Vec<Rc<TypedModule>>,
+        module_aliases: &HashMap<Rc<String>, Rc<String>>,
+    ) -> Rc<String> {
+        // Is already a qualified name so should be an alias for an exiting module name.
+        if constructor_name.contains("::") {
+            let mut splitter = constructor_name.split("::");
+            let module_prefix: Rc<String> = Rc::new(splitter.next().unwrap().to_string());
+            let function_name: Rc<String> = Rc::new(splitter.next().unwrap().to_string());
+
+            let module_name = module_aliases.get(&module_prefix).unwrap();
+            let mut qualified_name = String::new();
+            qualified_name.push_str(module_name);
+            qualified_name.push_str("::");
+            qualified_name.push_str(&function_name);
+            return Rc::new(qualified_name);
+        }
+        for m in imported_modules {
+            // If the module is alias as import we should not consider it for rewriting here.
+            if module_aliases.values().any(|e| e == &m.module_name) {
+                continue;
+            }
+            let local_name = prefix_name(constructor_name, &m.module_name);
+            for (_, d) in &m.adt_name_to_definition {
+                for (c, _) in &d.constructors {
+                    if c == &local_name {
+                        //println!(
+                        //    "Rewriting adt constructor reference {} in module {} to {}",
+                        //    constructor_name, current_module_name, local_name
+                        //);
+                        return local_name;
+                    }
+                }
+            }
+        }
+
+        // Not found in imported modules.. Must be a definition in the current module.
+        //println!(
+        //    "Rewriting function reference {} in module {} to {}",
+        //    function_name,
+        //    current_module_name,
+        //    prefix_name(function_name, current_module_name)
+        //);
+        prefix_name(constructor_name, current_module_name)
     }
 
     fn rewrite_function_name(
@@ -218,7 +476,14 @@ impl RewriteState {
             match_expressions: function_body
                 .match_expressions
                 .iter()
-                .map(|me| self.rewrite_match_expression(me, current_module_name, imported_modules))
+                .map(|me| {
+                    self.rewrite_match_expression(
+                        me,
+                        current_module_name,
+                        imported_modules,
+                        module_aliases,
+                    )
+                })
                 .collect(),
             rules: function_body
                 .rules
@@ -248,12 +513,28 @@ impl RewriteState {
             local_adt_definitions: function_body
                 .local_adt_definitions
                 .iter()
-                .map(Rc::clone)
+                .map(|d| {
+                    self.rewrite_adt_definition(
+                        d,
+                        false,
+                        current_module_name,
+                        imported_modules,
+                        module_aliases,
+                    )
+                })
                 .collect(),
             local_record_definitions: function_body
                 .local_record_definitions
                 .iter()
-                .map(Rc::clone)
+                .map(|d| {
+                    self.rewrite_record_definition(
+                        d,
+                        false,
+                        current_module_name,
+                        imported_modules,
+                        module_aliases,
+                    )
+                })
                 .collect(),
         });
         self.variables_stack.pop();
@@ -284,7 +565,12 @@ impl RewriteState {
                     .extend(me.variables().into_iter());
                 let res = FunctionRule::LetRule(
                     Rc::clone(l),
-                    self.rewrite_match_expression(me, current_module_name, imported_modules),
+                    self.rewrite_match_expression(
+                        me,
+                        current_module_name,
+                        imported_modules,
+                        module_aliases,
+                    ),
                     self.rewrite_expression(
                         e,
                         current_module_name,
@@ -347,7 +633,12 @@ impl RewriteState {
             ),
             Expression::ADTTypeConstructor(l, name, es) => Expression::ADTTypeConstructor(
                 Rc::clone(l),
-                Rc::clone(name),
+                self.rewrite_type_constructor_name(
+                    name,
+                    current_module_name,
+                    imported_modules,
+                    module_aliases,
+                ),
                 es.iter()
                     .map(|e| {
                         self.rewrite_expression(
@@ -361,7 +652,7 @@ impl RewriteState {
             ),
             Expression::Record(l, n, fields) => Expression::Record(
                 Rc::clone(l),
-                Rc::clone(n),
+                self.rewrite_type_name(n, current_module_name, imported_modules, module_aliases),
                 fields
                     .iter()
                     .map(|(n, e)| {
@@ -390,6 +681,7 @@ impl RewriteState {
                                 &r.case_rule,
                                 current_module_name,
                                 imported_modules,
+                                module_aliases,
                             ),
                             result_rule: self.rewrite_expression(
                                 &r.result_rule,
@@ -515,7 +807,12 @@ impl RewriteState {
                 Rc::clone(l),
                 es.iter()
                     .map(|e| {
-                        self.rewrite_match_expression(e, current_module_name, imported_modules)
+                        self.rewrite_match_expression(
+                            e,
+                            current_module_name,
+                            imported_modules,
+                            module_aliases,
+                        )
                     })
                     .collect(),
                 self.rewrite_expression(e, current_module_name, imported_modules, module_aliases),
@@ -528,6 +825,7 @@ impl RewriteState {
         match_expression: &Rc<MatchExpression>,
         current_module_name: &Rc<String>,
         imported_modules: &Vec<Rc<TypedModule>>,
+        module_aliases: &HashMap<Rc<String>, Rc<String>>,
     ) -> Rc<MatchExpression> {
         Rc::new(match match_expression.borrow() {
             MatchExpression::IntLiteral(l, i) => MatchExpression::IntLiteral(Rc::clone(l), *i),
@@ -543,7 +841,12 @@ impl RewriteState {
                 Rc::clone(l),
                 mes.iter()
                     .map(|me| {
-                        self.rewrite_match_expression(me, current_module_name, imported_modules)
+                        self.rewrite_match_expression(
+                            me,
+                            current_module_name,
+                            imported_modules,
+                            module_aliases,
+                        )
                     })
                     .collect(),
             ),
@@ -551,22 +854,47 @@ impl RewriteState {
                 Rc::clone(l),
                 mes.iter()
                     .map(|me| {
-                        self.rewrite_match_expression(me, current_module_name, imported_modules)
+                        self.rewrite_match_expression(
+                            me,
+                            current_module_name,
+                            imported_modules,
+                            module_aliases,
+                        )
                     })
                     .collect(),
             ),
             MatchExpression::LonghandList(l, hme, tme) => MatchExpression::LonghandList(
                 Rc::clone(l),
-                self.rewrite_match_expression(hme, current_module_name, imported_modules),
-                self.rewrite_match_expression(tme, current_module_name, imported_modules),
+                self.rewrite_match_expression(
+                    hme,
+                    current_module_name,
+                    imported_modules,
+                    module_aliases,
+                ),
+                self.rewrite_match_expression(
+                    tme,
+                    current_module_name,
+                    imported_modules,
+                    module_aliases,
+                ),
             ),
             MatchExpression::Wildcard(l) => MatchExpression::Wildcard(Rc::clone(l)),
             MatchExpression::ADT(l, constructor_name, mes) => MatchExpression::ADT(
                 Rc::clone(l),
-                Rc::clone(constructor_name),
+                self.rewrite_type_constructor_name(
+                    constructor_name,
+                    current_module_name,
+                    imported_modules,
+                    module_aliases,
+                ),
                 mes.iter()
                     .map(|me| {
-                        self.rewrite_match_expression(me, current_module_name, imported_modules)
+                        self.rewrite_match_expression(
+                            me,
+                            current_module_name,
+                            imported_modules,
+                            module_aliases,
+                        )
                     })
                     .collect(),
             ),
@@ -598,7 +926,12 @@ pub fn rewrite(
 ) -> Rc<RuntimeModule> {
     println!("Building runtime module..");
     let mut state = RewriteState::new(modules_by_name);
-    let main_function = Rc::clone(main_module.function_name_to_definition.get(&String::from("main")).unwrap());
+    let main_function = Rc::clone(
+        main_module
+            .function_name_to_definition
+            .get(&String::from("main"))
+            .unwrap(),
+    );
     let rewritten_main_module = state.rewrite_module(Rc::new(main_module));
     let mut functions = HashMap::new();
     functions.extend(
@@ -614,11 +947,14 @@ pub fn rewrite(
                 .map(|(n, d)| (Rc::clone(n), Rc::clone(d))),
         )
     }
-
-    Rc::new(RuntimeModule {
+    let runtime_module = RuntimeModule {
         name: Rc::clone(&rewritten_main_module.module_name),
         main_function_name: Rc::clone(&main_function.name),
         main_function_type: Rc::clone(&main_function.function_type.as_ref().unwrap().enclosed_type),
         functions,
-    })
+    };
+
+    println!("Built runtime module: {:#?}", runtime_module);
+
+    return Rc::new(runtime_module);
 }

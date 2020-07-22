@@ -611,11 +611,13 @@ fn check_unique_definitions(
         type_names.insert(Rc::clone(name), Rc::clone(&record_definition.location));
     }
 
-    type_names.extend(external_definitions
-        .record_name_to_definition
-        .iter()
-        .map(|(n, d)| (Rc::clone(n), Rc::clone(&d.location)))
-        .collect::<Vec<(Rc<String>, Rc<Location>)>>());
+    type_names.extend(
+        external_definitions
+            .record_name_to_definition
+            .iter()
+            .map(|(n, d)| (Rc::clone(n), Rc::clone(&d.location)))
+            .collect::<Vec<(Rc<String>, Rc<Location>)>>(),
+    );
 
     for adt_definition in &ast.adt_definitions {
         // 1. Check whether some other type with this name is defined
