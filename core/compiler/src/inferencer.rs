@@ -1625,7 +1625,8 @@ impl InferencerState {
                 expected_type,
             )?,
 
-            Expression::RecordFieldAccess(loc, l, r) => {
+            Expression::RecordFieldAccess(loc, _, l, r) => {
+                // TODO: We should be able to use the record_name field here..
                 let fresh = self.fresh();
                 let subs_lhs = self.infer_expression(l, &fresh)?;
                 self.extend_type_environment(&subs_lhs);

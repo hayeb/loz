@@ -260,7 +260,7 @@ operation = _{
     and = {"&&"}
     or = {"||"}
 
-    record_field_access = { "." }
+    record_field_access = { "." ~ qualifiable_capital_identifier  ~ "." }
 
 adt_definition = {
     "::" ~ capital_identifier ~ adt_type_variables ~ "=" ~ NEWLINE? ~ adt_constructors ~ NEWLINE?

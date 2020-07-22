@@ -429,7 +429,7 @@ fn evaluate(e: &Expression, state: &mut RunState) -> Result<Rc<Value>, Interpret
             eval_bool(e1, state)? || eval_bool(e2, state)?,
         ))),
 
-        Expression::RecordFieldAccess(_, record_expression, field_accessor) => {
+        Expression::RecordFieldAccess(_, record_name, record_expression, field_accessor) => {
             let record_value = evaluate(record_expression, state)?;
             if let Value::RecordValue(fields) = record_value.borrow() {
                 if let Expression::Variable(_, field) = &**field_accessor {

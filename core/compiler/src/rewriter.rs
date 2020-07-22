@@ -14,6 +14,8 @@ pub struct RuntimeModule {
     pub main_function_name: Rc<String>,
     pub main_function_type: Rc<Type>,
     pub functions: HashMap<Rc<String>, Rc<FunctionDefinition>>,
+    pub adts: HashMap<Rc<String>, Rc<ADTDefinition>>,
+    pub records: HashMap<Rc<String>, Rc<RecordDefinition>>,
 }
 
 struct RewriteState {
@@ -280,7 +282,11 @@ impl RewriteState {
                     .bound_variables
                     .clone(),
                 enclosed_type: self.rewrite_type(
-                    &function_definition.function_type.as_ref().unwrap().enclosed_type,
+                    &function_definition
+                        .function_type
+                        .as_ref()
+                        .unwrap()
+                        .enclosed_type,
                     current_module_name,
                     imported_modules,
                     module_aliases,
@@ -302,7 +308,7 @@ impl RewriteState {
     }
 
     fn rewrite_type_name(
-        &mut self,
+        &self,
         type_name: &Rc<String>,
         current_module_name: &Rc<String>,
         imported_modules: &Vec<Rc<TypedModule>>,
@@ -798,8 +804,14 @@ impl RewriteState {
                 self.rewrite_expression(el, current_module_name, imported_modules, module_aliases),
                 self.rewrite_expression(er, current_module_name, imported_modules, module_aliases),
             ),
-            Expression::RecordFieldAccess(l, re, fe) => Expression::RecordFieldAccess(
+            Expression::RecordFieldAccess(l, record_name, re, fe) => Expression::RecordFieldAccess(
                 Rc::clone(l),
+                self.rewrite_type_name(
+                    record_name,
+                    current_module_name,
+                    imported_modules,
+                    module_aliases,
+                ),
                 self.rewrite_expression(re, current_module_name, imported_modules, module_aliases),
                 self.rewrite_expression(fe, current_module_name, imported_modules, module_aliases),
             ),
@@ -898,9 +910,16 @@ impl RewriteState {
                     })
                     .collect(),
             ),
-            MatchExpression::Record(l, record_name, fields) => {
-                MatchExpression::Record(Rc::clone(l), Rc::clone(record_name), fields.clone())
-            }
+            MatchExpression::Record(l, record_name, fields) => MatchExpression::Record(
+                Rc::clone(l),
+                self.rewrite_type_name(
+                    record_name,
+                    current_module_name,
+                    imported_modules,
+                    module_aliases,
+                ),
+                fields.clone(),
+            ),
         })
     }
 }
@@ -934,24 +953,54 @@ pub fn rewrite(
     );
     let rewritten_main_module = state.rewrite_module(Rc::new(main_module));
     let mut functions = HashMap::new();
+    let mut records: HashMap<Rc<String>, Rc<RecordDefinition>> = HashMap::new();
+    let mut adts: HashMap<Rc<String>, Rc<ADTDefinition>> = HashMap::new();
     functions.extend(
         rewritten_main_module
             .function_name_to_definition
             .iter()
             .map(|(n, d)| (Rc::clone(n), Rc::clone(d))),
     );
+    records.extend(
+        rewritten_main_module
+            .record_name_to_definition
+            .iter()
+            .map(|(n, d)| (Rc::clone(n), Rc::clone(d)))
+            .collect::<HashMap<Rc<String>, Rc<RecordDefinition>>>(),
+    );
+    adts.extend(
+        rewritten_main_module
+            .adt_name_to_definition
+            .iter()
+            .map(|(n, d)| (Rc::clone(n), Rc::clone(d)))
+            .collect::<HashMap<Rc<String>, Rc<ADTDefinition>>>(),
+    );
     for (_, m) in &state.rewritten_modules {
         functions.extend(
             m.function_name_to_definition
                 .iter()
                 .map(|(n, d)| (Rc::clone(n), Rc::clone(d))),
-        )
+        );
+        records.extend(
+            m.record_name_to_definition
+                .iter()
+                .map(|(n, d)| (Rc::clone(n), Rc::clone(d)))
+                .collect::<HashMap<Rc<String>, Rc<RecordDefinition>>>(),
+        );
+        adts.extend(
+            m.adt_name_to_definition
+                .iter()
+                .map(|(n, d)| (Rc::clone(n), Rc::clone(d)))
+                .collect::<HashMap<Rc<String>, Rc<ADTDefinition>>>(),
+        );
     }
     let runtime_module = RuntimeModule {
         name: Rc::clone(&rewritten_main_module.module_name),
         main_function_name: Rc::clone(&main_function.name),
         main_function_type: Rc::clone(&main_function.function_type.as_ref().unwrap().enclosed_type),
         functions,
+        records,
+        adts,
     };
 
     println!("Built runtime module: {:#?}", runtime_module);

@@ -134,7 +134,7 @@ impl Expression {
             Neq(loc, _, _) => Rc::clone(loc),
             And(loc, _, _) => Rc::clone(loc),
             Or(loc, _, _) => Rc::clone(loc),
-            RecordFieldAccess(loc, _, _) => Rc::clone(loc),
+            RecordFieldAccess(loc, _, _, _) => Rc::clone(loc),
             Lambda(loc, _, _) => Rc::clone(loc),
         }
     }
@@ -220,7 +220,7 @@ impl Expression {
             Expression::Neq(_, l, r) => Expression::dual_references(l, r, include_variables),
             Expression::And(_, l, r) => Expression::dual_references(l, r, include_variables),
             Expression::Or(_, l, r) => Expression::dual_references(l, r, include_variables),
-            Expression::RecordFieldAccess(_, l, r) => {
+            Expression::RecordFieldAccess(_, _, l, r) => {
                 Expression::dual_references(l, r, include_variables)
             }
             Expression::Lambda(_, me, e) => {

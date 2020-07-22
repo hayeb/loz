@@ -3,4 +3,4 @@
 
 build n = {S| r = {R| a = n}}
 
-main = (build 18) . r . a + 18 * (build 2).r.a
+main = (build 18) .S.r.R.a + 18 * (build 2).S.r.R.a

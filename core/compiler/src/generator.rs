@@ -93,6 +93,7 @@ struct GeneratorState {
     var_to_type: Vec<HashMap<Rc<String>, Rc<Type>>>,
 
     function_name_to_type: HashMap<Rc<String>, Rc<Type>>,
+    record_name_to_field_indexing: HashMap<Rc<String>, HashMap<Rc<String>, (Rc<Type>, usize)>>,
 }
 
 fn to_llvm_type(loz_type: &Rc<Type>) -> String {
@@ -102,6 +103,7 @@ fn to_llvm_type(loz_type: &Rc<Type>) -> String {
         Type::Int => "i64".to_string(),
         Type::Float => "double".to_string(),
         Type::Char => "i8*".to_string(),
+        Type::UserType(name, _) => format!("%{}*", name.replace("::", "_")),
         _ => unimplemented!("{:?}", loz_type),
     }
 }
@@ -165,12 +167,28 @@ impl GeneratorState {
                     )
                 })
                 .collect(),
+
+            record_name_to_field_indexing: runtime_module
+                .records
+                .iter()
+                .map(|(n, d)| {
+                    (
+                        Rc::clone(n),
+                        d.fields
+                            .iter()
+                            .enumerate()
+                            .map(|(i, (n, t))| (Rc::clone(n), (Rc::clone(t), i)))
+                            .collect(),
+                    )
+                })
+                .collect::<HashMap<Rc<String>, HashMap<Rc<String>, (Rc<Type>, usize)>>>(),
         };
     }
 
     fn generate(&mut self, runtime_module: &Rc<RuntimeModule>) -> String {
         let mut code = String::new();
         code.push_str(&Self::generate_linked_functions());
+        code.push_str(&self.generate_structure_types(runtime_module));
         code.push_str(&self.generate_function_definitions(runtime_module));
         code.push_str(&self.generate_main_function(runtime_module));
         code
@@ -184,6 +202,23 @@ impl GeneratorState {
         code.push_str("\n");
         code.push_str(LF_C_STRCMP);
         code.push_str("\n");
+        code
+    }
+
+    fn generate_structure_types(&self, runtime_module: &Rc<RuntimeModule>) -> String {
+        let mut code = String::new();
+        for (n, d) in &runtime_module.records {
+            code.push_str(&format!(
+                "%{} = type {{ {} }}\n",
+                n.replace("::", "_"),
+                d.fields
+                    .iter()
+                    .map(|(_, ft)| to_llvm_type(ft))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ));
+        }
+
         code
     }
 
@@ -205,7 +240,9 @@ impl GeneratorState {
         );
 
         let mut code = String::new();
-        code.push_str(&self.generate_print_code(&runtime_module.main_function_type, main_result_type.clone()));
+        code.push_str(
+            &self.generate_print_code(&runtime_module.main_function_type, main_result_type.clone()),
+        );
 
         code.push_str(&format!(
             "define i32 @main() {{
@@ -640,7 +677,36 @@ impl GeneratorState {
             }
             MatchExpression::Wildcard(_) => ("true".to_string(), vec![]),
             MatchExpression::ADT(_, _, _) => unimplemented!("MatchExpression::ADT"),
-            MatchExpression::Record(_, _, _) => unimplemented!("MatchExpression::Record"),
+            MatchExpression::Record(_, record_name, fields) => {
+                let mut code = Vec::new();
+                let record_type_name = record_name.replace("::", "_");
+                let field_vars: Vec<SSAVar> = fields.iter().map(|_| self.var().clone()).collect();
+                let field_name_to_type_index = self
+                    .record_name_to_field_indexing
+                    .get(record_name)
+                    .unwrap()
+                    .clone();
+                for (field_name, field_var) in fields.iter().zip(field_vars.iter()) {
+                    let (field_type, index) = field_name_to_type_index.get(field_name).unwrap();
+                    self.var_to_type
+                        .last_mut()
+                        .unwrap()
+                        .insert(Rc::clone(field_name), Rc::clone(field_type));
+
+                    self.put(field_name.to_string(), field_var.to_string());
+                    code.push(format!(
+                        "{}p = getelementptr %{}, %{}* {}, i32 0, i32 {}",
+                        field_var, &record_type_name, &record_type_name, match_on, index
+                    ));
+                    let llvm_field_type = to_llvm_type(field_type);
+                    code.push(format!(
+                        "{} = load {}, {}* {}p",
+                        field_var, &llvm_field_type, &llvm_field_type, field_var
+                    ))
+                }
+
+                ("true".to_string(), code)
+            }
         };
 
         match_code.push(format!(
@@ -706,7 +772,39 @@ impl GeneratorState {
             Expression::ShorthandListLiteral(_, _) => unimplemented!(),
             Expression::LonghandListLiteral(_, _, _) => unimplemented!(),
             Expression::ADTTypeConstructor(_, _, _) => unimplemented!(),
-            Expression::Record(_, _, _) => unimplemented!(),
+            Expression::Record(_, name, fields) => {
+                let record_type_name = name.replace("::", "_");
+                let mut code = Vec::new();
+                let field_to_index_type = self
+                    .record_name_to_field_indexing
+                    .get(name)
+                    .unwrap()
+                    .clone();
+                // 1. Allocate memory for the record
+                code.push(format!("{} = alloca %{}", result, record_type_name.clone()));
+                for (n, e) in fields {
+                    let (field_type, index) = field_to_index_type.get(n).unwrap();
+                    let (field_result, field_code) = self.generate_expr(e, &field_type);
+                    code.extend(field_code);
+                    let field_pointer = self.var();
+                    code.push(format!(
+                        "{} = getelementptr %{}, %{}* {}, i32 0, i32 {}",
+                        field_pointer,
+                        record_type_name.clone(),
+                        record_type_name.clone(),
+                        result,
+                        index
+                    ));
+                    code.push(format!(
+                        "store {} {}, {}* {}",
+                        to_llvm_type(&field_type),
+                        field_result,
+                        to_llvm_type(&field_type),
+                        field_pointer
+                    ));
+                }
+                code
+            }
             Expression::Case(_, _, _) => unimplemented!(),
             Expression::Call(_, function_name, arguments) => {
                 let mut code = Vec::new();
@@ -1059,7 +1157,38 @@ impl GeneratorState {
                 ));
                 code
             }
-            Expression::RecordFieldAccess(_, _, _) => unimplemented!("RecordFieldAccess"),
+            Expression::RecordFieldAccess(_, record_name, record_expression, field_expression) => {
+                let field_name = match field_expression.borrow() {
+                    Expression::Variable(_, field) => Rc::clone(field),
+                    _ => unreachable!(),
+                };
+                let (expression_code, record_code) = self.generate_expr(
+                    record_expression,
+                    &Rc::new(Type::UserType(Rc::clone(record_name), vec![])),
+                );
+                let (field_type, field_index) = self
+                    .record_name_to_field_indexing
+                    .get(record_name)
+                    .unwrap()
+                    .get(&field_name)
+                    .unwrap()
+                    .clone();
+                let record_type_name = record_name.replace("::", "_");
+                let mut code = Vec::new();
+                code.extend(record_code);
+
+                code.push(format!(
+                    "{}p = getelementptr %{}, %{}* {}, i32 0, i32 {}",
+                    result, &record_type_name, &record_type_name, expression_code, field_index
+                ));
+                let llvm_field_type = to_llvm_type(&field_type);
+                code.push(format!(
+                    "{} = load {}, {}* {}p",
+                    result, &llvm_field_type, &llvm_field_type, result
+                ));
+
+                code
+            }
             Expression::Lambda(_, _, _) => unimplemented!("Lambda"),
         };
 
@@ -1103,9 +1232,15 @@ impl GeneratorState {
             Expression::BoolLiteral(_, _) => Rc::new(Type::Bool),
             Expression::CharacterLiteral(_, _) => Rc::new(Type::Char),
             Expression::StringLiteral(_, _) => Rc::new(Type::String),
+            Expression::Variable(_, name) => {
+                Rc::clone(self.var_to_type.last().unwrap().get(name).unwrap())
+            }
             Expression::Call(_, f, _) => {
                 let f_type = self.function_name_to_type.get(f).unwrap();
                 return_type(f_type)
+            }
+            Expression::Record(_, name, _) => {
+                Rc::new(Type::UserType(Rc::new(name.replace("::", "_")), vec![]))
             }
             _ => unimplemented!("derive_type at {}", e.locate()),
         }
