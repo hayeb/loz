@@ -2,26 +2,90 @@
 extern crate lazy_static;
 #[macro_use]
 extern crate pest_derive;
-
 extern crate petgraph;
 
-use std::collections::HashSet;
-
-use crate::ast::{
-    Expression, FunctionBody, FunctionDefinition, FunctionRule, Location, MatchExpression, Type,
-};
-use crate::Expression::*;
 use std::borrow::Borrow;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+
+use crate::ast::{Expression, FunctionBody, FunctionDefinition, FunctionRule, MatchExpression};
+use crate::Expression::*;
 
 pub mod ast;
 pub mod generator;
 pub mod inferencer;
-pub mod interpreter;
 pub mod module_system;
 pub mod parser;
 pub mod printer;
 pub mod rewriter;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Location {
+    pub module: Rc<String>,
+    pub function: Rc<String>,
+    pub line: usize,
+    pub col: usize,
+}
+
+#[derive(Debug, Clone)]
+pub enum Import {
+    // Module name, imported members
+    // from A import b, d
+    ImportMembers(Rc<Location>, Rc<String>, HashSet<Rc<String>>),
+
+    // Import A
+    // Import A as B
+    ImportModule(Rc<Location>, Rc<String>, Option<Rc<String>>),
+}
+
+pub type TypeVar = String;
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Type {
+    Bool,
+    Char,
+    String,
+    Int,
+    Float,
+
+    // :: A b c d = A a | B b | C c
+    // :: A b c d = {a :: a, b :: b, c :: c, d :: d}
+    UserType(Rc<String>, Vec<Rc<Type>>),
+    Tuple(Vec<Rc<Type>>),
+    List(Rc<Type>),
+    Variable(Rc<TypeVar>),
+
+    // a a b b -> b
+    Function(Vec<Rc<Type>>, Rc<Type>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeScheme {
+    pub bound_variables: HashSet<Rc<String>>,
+    pub enclosed_type: Rc<Type>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordDefinition {
+    pub name: Rc<String>,
+    pub location: Rc<Location>,
+    pub type_variables: Vec<Rc<String>>,
+    pub fields: HashMap<Rc<String>, Rc<Type>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ADTDefinition {
+    pub name: Rc<String>,
+    pub location: Rc<Location>,
+    pub type_variables: Vec<Rc<String>>,
+    pub constructors: HashMap<Rc<String>, Rc<ADTConstructor>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ADTConstructor {
+    pub name: Rc<String>,
+    pub elements: Vec<Rc<Type>>,
+}
 
 impl Type {
     pub fn collect_free_type_variables(&self) -> HashSet<Rc<String>> {
@@ -135,7 +199,7 @@ impl Expression {
             And(loc, _, _) => Rc::clone(loc),
             Or(loc, _, _) => Rc::clone(loc),
             RecordFieldAccess(loc, _, _, _) => Rc::clone(loc),
-            Lambda(loc, _, _) => Rc::clone(loc),
+            Lambda(loc, _, _, _) => Rc::clone(loc),
         }
     }
 
@@ -223,7 +287,7 @@ impl Expression {
             Expression::RecordFieldAccess(_, _, l, r) => {
                 Expression::dual_references(l, r, include_variables)
             }
-            Expression::Lambda(_, me, e) => {
+            Expression::Lambda(_, _, me, e) => {
                 let fs = e.references(include_variables);
                 let introduced_variables: HashSet<Rc<String>> = me
                     .iter()
@@ -273,6 +337,7 @@ impl MatchExpression {
             MatchExpression::LonghandList(_, h, t) => {
                 let mut vars = HashSet::new();
                 vars.extend(h.variables());
+
                 vars.extend(t.variables());
                 vars
             }
@@ -307,8 +372,8 @@ pub fn body_references(
     for me in &b.match_expressions {
         local_references.extend(me.variables());
     }
-    for d in &b.local_function_definitions {
-        local_references.insert(d.name.clone());
+    for (n, d) in &b.local_function_definitions {
+        local_references.insert(Rc::clone(n));
     }
 
     let mut locally_referred = HashSet::new();
@@ -318,7 +383,7 @@ pub fn body_references(
                 Expression::dual_references(cond, expr, include_variables)
             }
             FunctionRule::ExpressionRule(_, expr) => expr.references(include_variables),
-            FunctionRule::LetRule(_, match_expression, expr) => {
+            FunctionRule::LetRule(_, _, match_expression, expr) => {
                 let lambda_variables = match_expression.variables();
 
                 expr.references(include_variables)

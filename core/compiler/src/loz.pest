@@ -301,16 +301,10 @@ module_import = {
         "import" ~ module_name ~ ("as" ~ name)?
     }
 
-module_export = {
-    "export" ~ name
-}
-
 ast = {
       SOI
     ~ NEWLINE*
     ~ (module_import ~ NEWLINE+)*
-    ~ NEWLINE*
-    ~ (module_export ~ NEWLINE+)*
     ~ NEWLINE*
     ~ ((function_type_definition | function_body | type_definition) ~ NEWLINE*)*
     ~ NEWLINE*

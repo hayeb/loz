@@ -21,9 +21,7 @@
 */
 
 /* TODO:
-   - Actually implement generating LLVM structure types
-   - Implement record dot expressions
-   - Implement matching on records/ADTs
+   - Implement matching on ADTs
    - Implement lists
    - Implement tuples
    - Implement Lambda's (brrr..)
@@ -34,11 +32,10 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::ast::{
-    Expression, FunctionBody, FunctionDefinition, FunctionRule, MatchExpression, Type,
-};
 use crate::rewriter::RuntimeModule;
+use crate::Type;
 use regex::Regex;
+use crate::ast::{FunctionDefinition, FunctionBody, FunctionRule, MatchExpression, Expression};
 
 const LF_C_EXIT: &'static str = "declare void @exit(i32) cold noreturn nounwind";
 const LF_C_PRINTF: &'static str = "declare i32 @printf(i8* noalias nocapture, ...)";
@@ -160,12 +157,7 @@ impl GeneratorState {
             function_name_to_type: runtime_module
                 .functions
                 .iter()
-                .map(|(n, d)| {
-                    (
-                        Rc::clone(n),
-                        Rc::clone(&d.function_type.as_ref().unwrap().enclosed_type),
-                    )
-                })
+                .map(|(n, d)| (Rc::clone(n), Rc::clone(&d.function_type.as_ref().unwrap().enclosed_type)))
                 .collect(),
 
             record_name_to_field_indexing: runtime_module
@@ -420,19 +412,11 @@ impl GeneratorState {
 
     fn generate_function_definition(&mut self, definition: &Rc<FunctionDefinition>) -> String {
         self.open_scope();
-        let (function_arg_types, function_return_type) = match &definition
-            .function_type
-            .as_ref()
-            .unwrap()
-            .enclosed_type
-            .borrow()
-        {
-            Type::Function(from, to) => (from.iter().cloned().collect(), Rc::clone(to)),
-            _ => (
-                vec![],
-                Rc::clone(&definition.function_type.as_ref().unwrap().enclosed_type),
-            ),
-        };
+        let (function_arg_types, function_return_type) =
+            match &definition.function_type.as_ref().unwrap().enclosed_type.borrow() {
+                Type::Function(from, to) => (from.iter().cloned().collect(), Rc::clone(to)),
+                _ => (vec![], Rc::clone(&definition.function_type.as_ref().unwrap().enclosed_type)),
+            };
 
         let mut matches: Vec<String> = Vec::new();
         let mut rules: Vec<String> = Vec::new();
@@ -570,7 +554,7 @@ impl GeneratorState {
                 code.push(format!("ret {} {}", llvm_function_return_type, v));
                 code
             }
-            FunctionRule::LetRule(_, _, _) => unimplemented!("LetRule"),
+            FunctionRule::LetRule(_, _, _, _) => unimplemented!("LetRule"),
         }
     }
 
@@ -659,7 +643,7 @@ impl GeneratorState {
                     )],
                 )
             }
-            MatchExpression::Identifier(_, id) => {
+            MatchExpression::Identifier(_,  id) => {
                 self.var_to_type
                     .last_mut()
                     .unwrap()
@@ -783,8 +767,8 @@ impl GeneratorState {
                 // 1. Allocate memory for the record
                 code.push(format!("{} = alloca %{}", result, record_type_name.clone()));
                 for (n, e) in fields {
-                    let (field_type, index) = field_to_index_type.get(n).unwrap();
-                    let (field_result, field_code) = self.generate_expr(e, &field_type);
+                    let (field_type, field_index) = field_to_index_type.get(n).unwrap();
+                    let (field_result, field_code) = self.generate_expr(e, field_type);
                     code.extend(field_code);
                     let field_pointer = self.var();
                     code.push(format!(
@@ -793,13 +777,13 @@ impl GeneratorState {
                         record_type_name.clone(),
                         record_type_name.clone(),
                         result,
-                        index
+                        field_index
                     ));
                     code.push(format!(
                         "store {} {}, {}* {}",
-                        to_llvm_type(&field_type),
+                        to_llvm_type(field_type),
                         field_result,
-                        to_llvm_type(&field_type),
+                        to_llvm_type(field_type),
                         field_pointer
                     ));
                 }
@@ -1013,7 +997,7 @@ impl GeneratorState {
             }
             Expression::Greq(_, e1, e2) => {
                 let (var1, code1) = self.generate_expr(e1, &self.derive_type(e1));
-                let (var2, code2) = self.generate_expr(e2, &self.derive_type(e1));
+                let (var2, code2) = self.generate_expr(e2, &self.derive_type(e2));
                 let mut code = Vec::new();
                 code.extend(code1);
                 code.extend(code2);
@@ -1157,7 +1141,12 @@ impl GeneratorState {
                 ));
                 code
             }
-            Expression::RecordFieldAccess(_, record_name, record_expression, field_expression) => {
+            Expression::RecordFieldAccess(
+                _,
+                record_name,
+                record_expression,
+                field_expression,
+            ) => {
                 let field_name = match field_expression.borrow() {
                     Expression::Variable(_, field) => Rc::clone(field),
                     _ => unreachable!(),
@@ -1189,7 +1178,7 @@ impl GeneratorState {
 
                 code
             }
-            Expression::Lambda(_, _, _) => unimplemented!("Lambda"),
+            Expression::Lambda(_, _, _, _) => unimplemented!("Lambda"),
         };
 
         return (result, e_code);

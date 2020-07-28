@@ -1,7 +1,7 @@
 use std::fmt::{Display, Formatter};
 
-use crate::ast::{Location, Type, TypeScheme};
 use crate::module_system::{Error, ModuleError, ModuleErrorType};
+use crate::{Location, Type, TypeScheme};
 use std::fmt;
 
 impl Display for Error {

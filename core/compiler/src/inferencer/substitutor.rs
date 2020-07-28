@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use std::rc::Rc;
 
-use crate::ast::{Type, TypeScheme, TypeVar};
+use crate::{Type, TypeScheme, TypeVar};
 
 pub type Substitutions = Vec<(Rc<TypeVar>, Rc<Type>)>;
 

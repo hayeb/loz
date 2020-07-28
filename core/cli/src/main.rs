@@ -107,7 +107,7 @@ fn main() {
             }
         };
 
-    let module_name = typed_main_module.module_name.clone();
+    let module_name = typed_main_module.name.clone();
     let runtime_module = rewrite(typed_main_module, typed_modules);
     let generated_code = generate(runtime_module);
 

@@ -4,13 +4,11 @@ use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use crate::ast::{
-    ADTConstructor, ADTDefinition, FunctionDefinition, Import, Location, Module, RecordDefinition,
-};
-use crate::inferencer::{infer, ExternalDefinitions, InferencerOptions, TypedModule};
+use crate::ast::{FunctionDefinition, Module};
+use crate::inferencer::{infer, ExternalDefinitions, InferencerOptions};
 use crate::module_system::ModuleErrorType::ModuleNotFound;
-use crate::parser;
 use crate::parser::parse;
+use crate::{parser, ADTConstructor, ADTDefinition, Import, Location, RecordDefinition};
 
 #[derive(Debug)]
 pub enum Error {
@@ -107,7 +105,7 @@ pub struct CompilerOptions {
 pub fn compile_modules(
     main_module: String,
     compiler_options: &CompilerOptions,
-) -> Result<(TypedModule, HashMap<Rc<String>, Rc<TypedModule>>), Error> {
+) -> Result<(Module, HashMap<Rc<String>, Rc<Module>>), Error> {
     let module_search_path = build_module_search_path(
         compiler_options.current_directory.clone(),
         compiler_options.extra_module_search_path.clone(),
@@ -125,7 +123,7 @@ pub fn compile_modules(
         module_search_path,
     )?;
 
-    let mut inferred_modules_by_name: HashMap<Rc<String>, Rc<TypedModule>> = HashMap::new();
+    let mut inferred_modules_by_name: HashMap<Rc<String>, Rc<Module>> = HashMap::new();
 
     let mut infer_stack_peekable = infer_stack.into_iter().peekable();
     while let Some(module) = infer_stack_peekable.next() {
@@ -343,7 +341,7 @@ pub fn compile_modules(
                 if infer_stack_peekable.peek().is_none() {
                     return Ok((module, inferred_modules_by_name));
                 }
-                inferred_modules_by_name.insert(module.module_name.clone(), Rc::new(module));
+                inferred_modules_by_name.insert(module.name.clone(), Rc::new(module));
             }
             Err(errors) => return Err(Error::InferenceError(errors)),
         };

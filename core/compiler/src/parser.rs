@@ -1,6 +1,6 @@
 extern crate pest;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 
@@ -10,12 +10,11 @@ use pest::prec_climber::*;
 use pest::Parser;
 
 use crate::ast::{
-    ADTConstructor, ADTDefinition, CaseRule, ExportMember, Expression, FunctionBody,
-    FunctionDefinition, FunctionRule, Import, Location, MatchExpression, Module, RecordDefinition,
-    Type, TypeScheme,
+    CaseRule, Expression, FunctionBody, FunctionDefinition, FunctionRule, MatchExpression, Module,
 };
 use crate::parser::ParseError::PestError;
 use crate::Expression::*;
+use crate::{ADTConstructor, ADTDefinition, Import, Location, RecordDefinition, Type, TypeScheme};
 
 use self::pest::iterators::Pairs;
 
@@ -116,8 +115,8 @@ fn line_col_number(line_starts: &Vec<usize>, pos: usize) -> (usize, usize) {
 fn contract_function_declarations(
     mut function_bodies: HashMap<Rc<String>, Vec<Rc<FunctionBody>>>,
     function_types: HashMap<Rc<String>, (Rc<Location>, Rc<TypeScheme>)>,
-) -> Result<Vec<Rc<FunctionDefinition>>, ParseError> {
-    let mut function_declarations = Vec::new();
+) -> Result<HashMap<Rc<String>, Rc<FunctionDefinition>>, ParseError> {
+    let mut function_declarations = HashMap::new();
     for (function_name, (location, function_scheme)) in function_types {
         match function_bodies.remove(&function_name) {
             None => {
@@ -126,23 +125,31 @@ fn contract_function_declarations(
                     location,
                 ));
             }
-            Some(bodies) => function_declarations.push(Rc::new(FunctionDefinition {
-                location,
-                name: Rc::clone(&function_name),
-                function_type: Some(function_scheme),
-                function_bodies: bodies,
-            })),
+            Some(bodies) => {
+                function_declarations.insert(
+                    Rc::clone(&function_name),
+                    Rc::new(FunctionDefinition {
+                        location,
+                        name: Rc::clone(&function_name),
+                        function_type: Some(function_scheme),
+                        function_bodies: bodies,
+                    }),
+                );
+            }
         }
     }
 
     // Add the remaining functions that do not have a defined type.
     for (function_name, bodies) in function_bodies {
-        function_declarations.push(Rc::new(FunctionDefinition {
-            location: Rc::clone(&bodies.get(0).unwrap().location),
-            name: function_name,
-            function_type: None,
-            function_bodies: bodies,
-        }));
+        function_declarations.insert(
+            Rc::clone(&function_name),
+            Rc::new(FunctionDefinition {
+                location: Rc::clone(&bodies.get(0).unwrap().location),
+                name: function_name,
+                function_type: None,
+                function_bodies: bodies,
+            }),
+        );
     }
 
     Ok(function_declarations)
@@ -156,16 +163,15 @@ fn to_module(
 ) -> Result<Module, ParseError> {
     match pair.as_rule() {
         Rule::ast => {
-            let (adt_definitions, record_definitions, function_declarations, exports, imports) =
+            let (adt_name_to_definition, record_name_to_definition, function_declarations, imports) =
                 to_declaration_block_elements(pair.into_inner(), module_name, line_starts)?;
             return Ok(Module {
                 name: Rc::clone(module_name),
                 file_name: Rc::clone(file_name),
-                exported_members: exports,
                 imports,
-                function_definitions: function_declarations,
-                adt_definitions,
-                record_definitions,
+                function_name_to_definition: function_declarations,
+                adt_name_to_definition,
+                record_name_to_definition,
             });
         }
         _ => unreachable!(),
@@ -178,10 +184,9 @@ fn to_declaration_block_elements(
     line_starts: &Vec<usize>,
 ) -> Result<
     (
-        Vec<Rc<ADTDefinition>>,
-        Vec<Rc<RecordDefinition>>,
-        Vec<Rc<FunctionDefinition>>,
-        HashSet<ExportMember>,
+        HashMap<Rc<String>, Rc<ADTDefinition>>,
+        HashMap<Rc<String>, Rc<RecordDefinition>>,
+        HashMap<Rc<String>, Rc<FunctionDefinition>>,
         Vec<Rc<Import>>,
     ),
     ParseError,
@@ -189,10 +194,9 @@ fn to_declaration_block_elements(
     let mut function_types = HashMap::new();
     let mut function_bodies: HashMap<Rc<String>, Vec<Rc<FunctionBody>>> = HashMap::new();
 
-    let mut adt_definitions = Vec::new();
-    let mut record_definitions = Vec::new();
+    let mut adt_definitions = HashMap::new();
+    let mut record_definitions = HashMap::new();
 
-    let mut module_exports = HashSet::<String>::new();
     let mut module_imports = Vec::new();
 
     for pair in pairs {
@@ -201,13 +205,17 @@ fn to_declaration_block_elements(
                 let child = pair.into_inner().next().unwrap();
                 match child.as_rule() {
                     Rule::adt_definition => {
-                        adt_definitions.push(Rc::new(to_adt_type(child, module_name, line_starts)))
+                        let adt_definition = to_adt_type(child, module_name, line_starts);
+                        adt_definitions
+                            .insert(Rc::clone(&adt_definition.name), Rc::new(adt_definition));
                     }
-                    Rule::record_definition => record_definitions.push(Rc::new(to_record_type(
-                        child,
-                        module_name,
-                        line_starts,
-                    ))),
+                    Rule::record_definition => {
+                        let record_definition = to_record_type(child, module_name, line_starts);
+                        record_definitions.insert(
+                            Rc::clone(&record_definition.name),
+                            Rc::new(record_definition),
+                        );
+                    }
                     r => unreachable!("{:?}", r),
                 }
             }
@@ -240,9 +248,6 @@ fn to_declaration_block_elements(
                         }),
                     ),
                 );
-            }
-            Rule::module_export => {
-                module_exports.insert(pair.into_inner().next().unwrap().as_str().to_string());
             }
             Rule::module_import => {
                 let (line, col) = line_col_number(line_starts, pair.as_span().start());
@@ -292,7 +297,6 @@ fn to_declaration_block_elements(
         adt_definitions,
         record_definitions,
         contract_function_declarations(function_bodies, function_types)?,
-        module_exports,
         module_imports,
     ))
 }
@@ -411,14 +415,14 @@ fn to_function_body(
     }
 
     let mut rules = Vec::new();
-    let mut local_function_definitions = Vec::new();
-    let mut local_adt_definitions = Vec::new();
-    let mut local_record_definitions = Vec::new();
+    let mut local_function_definitions = HashMap::new();
+    let mut local_adt_definitions = HashMap::new();
+    let mut local_record_definitions = HashMap::new();
     for r in parents {
         match r.as_rule() {
             // Guaranteed to only occur once.
             Rule::local_definitions => {
-                let (adt_definitions, record_definitions, function_definitions, _, _) =
+                let (adt_definitions, record_definitions, function_definitions, _) =
                     to_declaration_block_elements(r.into_inner(), module_name, line_starts)?;
                 local_function_definitions = function_definitions;
                 local_adt_definitions = adt_definitions;
@@ -442,6 +446,7 @@ fn to_function_body(
     Ok(FunctionBody {
         name: Rc::clone(&function_name),
         location: Rc::clone(&location),
+        type_information: HashMap::new(),
         match_expressions,
         rules,
         local_function_definitions,
@@ -619,6 +624,7 @@ fn to_term(
                         to_expression(scs.next().unwrap(), module_name, function_name, line_starts);
                     Rc::new(CaseRule {
                         loc_info: location,
+                        type_information: HashMap::new(),
                         case_rule: Rc::new(case_rule),
                         result_rule: Rc::new(result_rule),
                     })
@@ -679,7 +685,7 @@ fn to_term(
                 function_name,
                 line_starts,
             );
-            Lambda(loc_info, argument_match_expressions, Rc::new(body))
+            Lambda(loc_info, HashMap::new(), argument_match_expressions, Rc::new(body))
         }
 
         r => panic!("Reached term {:#?}", r),
@@ -759,6 +765,7 @@ fn to_function_rule(
                     line,
                     col,
                 }),
+                HashMap::new(),
                 Rc::new(identifier),
                 Rc::new(expression),
             )

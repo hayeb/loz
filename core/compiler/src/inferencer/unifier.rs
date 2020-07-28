@@ -1,9 +1,9 @@
 use std::borrow::Borrow;
 use std::rc::Rc;
 
-use crate::ast::{Type, TypeVar};
 use crate::inferencer::substitutor::substitute_type;
 use crate::inferencer::InferenceErrorType;
+use crate::{Type, TypeVar};
 
 pub fn unify(
     a: &Rc<Type>,

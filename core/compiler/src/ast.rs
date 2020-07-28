@@ -1,75 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Location {
-    pub module: Rc<String>,
-    pub function: Rc<String>,
-    pub line: usize,
-    pub col: usize,
-}
-
-pub type ExportMember = String;
-
-#[derive(Debug, Clone)]
-pub enum Import {
-    // Module name, imported members
-    // from A import b, d
-    ImportMembers(Rc<Location>, Rc<String>, HashSet<Rc<String>>),
-
-    // Import A
-    // Import A as B
-    ImportModule(Rc<Location>, Rc<String>, Option<Rc<String>>),
-}
-
-pub type TypeVar = String;
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Type {
-    Bool,
-    Char,
-    String,
-    Int,
-    Float,
-
-    // :: A b c d = A a | B b | C c
-    // :: A b c d = {a :: a, b :: b, c :: c, d :: d}
-    UserType(Rc<String>, Vec<Rc<Type>>),
-    Tuple(Vec<Rc<Type>>),
-    List(Rc<Type>),
-    Variable(Rc<TypeVar>),
-
-    // a a b b -> b
-    Function(Vec<Rc<Type>>, Rc<Type>),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct TypeScheme {
-    pub bound_variables: HashSet<Rc<String>>,
-    pub enclosed_type: Rc<Type>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct RecordDefinition {
-    pub name: Rc<String>,
-    pub location: Rc<Location>,
-    pub type_variables: Vec<Rc<String>>,
-    pub fields: HashMap<Rc<String>, Rc<Type>>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ADTDefinition {
-    pub name: Rc<String>,
-    pub location: Rc<Location>,
-    pub type_variables: Vec<Rc<String>>,
-    pub constructors: HashMap<Rc<String>, Rc<ADTConstructor>>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ADTConstructor {
-    pub name: Rc<String>,
-    pub elements: Vec<Rc<Type>>,
-}
+use crate::{ADTDefinition, Import, Location, RecordDefinition, TypeScheme};
 
 #[derive(Debug, Clone)]
 pub struct FunctionDefinition {
@@ -83,19 +15,19 @@ pub struct FunctionDefinition {
 pub struct FunctionBody {
     pub name: Rc<String>,
     pub location: Rc<Location>,
+    pub type_information: HashMap<Rc<String>, Rc<TypeScheme>>,
     pub match_expressions: Vec<Rc<MatchExpression>>,
     pub rules: Vec<Rc<FunctionRule>>,
-    pub local_function_definitions: Vec<Rc<FunctionDefinition>>,
-    pub local_adt_definitions: Vec<Rc<ADTDefinition>>,
-    pub local_record_definitions: Vec<Rc<RecordDefinition>>,
+    pub local_function_definitions: HashMap<Rc<String>, Rc<FunctionDefinition>>,
+    pub local_adt_definitions: HashMap<Rc<String>, Rc<ADTDefinition>>,
+    pub local_record_definitions: HashMap<Rc<String>, Rc<RecordDefinition>>,
 }
 
 #[derive(Debug, Clone)]
 pub enum FunctionRule {
-    // blabla
     ConditionalRule(Rc<Location>, Rc<Expression>, Rc<Expression>),
     ExpressionRule(Rc<Location>, Rc<Expression>),
-    LetRule(Rc<Location>, Rc<MatchExpression>, Rc<Expression>),
+    LetRule(Rc<Location>, HashMap<Rc<String>, Rc<TypeScheme>>, Rc<MatchExpression>, Rc<Expression>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -146,12 +78,13 @@ pub enum Expression {
 
     RecordFieldAccess(Rc<Location>, Rc<String>, Rc<Expression>, Rc<Expression>),
 
-    Lambda(Rc<Location>, Vec<Rc<MatchExpression>>, Rc<Expression>),
+    Lambda(Rc<Location>, HashMap<Rc<String>, Rc<TypeScheme>>, Vec<Rc<MatchExpression>>, Rc<Expression>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CaseRule {
     pub loc_info: Rc<Location>,
+    pub type_information: HashMap<Rc<String>, Rc<TypeScheme>>,
     pub case_rule: Rc<MatchExpression>,
     pub result_rule: Rc<Expression>,
 }
@@ -175,9 +108,8 @@ pub enum MatchExpression {
 pub struct Module {
     pub name: Rc<String>,
     pub file_name: Rc<String>,
-    pub exported_members: HashSet<ExportMember>,
     pub imports: Vec<Rc<Import>>,
-    pub function_definitions: Vec<Rc<FunctionDefinition>>,
-    pub adt_definitions: Vec<Rc<ADTDefinition>>,
-    pub record_definitions: Vec<Rc<RecordDefinition>>,
+    pub function_name_to_definition: HashMap<Rc<String>, Rc<FunctionDefinition>>,
+    pub adt_name_to_definition: HashMap<Rc<String>, Rc<ADTDefinition>>,
+    pub record_name_to_definition: HashMap<Rc<String>, Rc<RecordDefinition>>,
 }
