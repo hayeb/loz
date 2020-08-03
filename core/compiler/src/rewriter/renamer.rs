@@ -5,6 +5,9 @@ struct RenamerState {
     rewritten_modules: HashMap<Rc<String>, Rc<Module>>,
 
     variables_stack: Vec<HashSet<Rc<String>>>,
+    local_functions_stack: Vec<(Rc<String>, HashSet<Rc<String>>)>,
+    local_records_stack: Vec<(Rc<String>, HashSet<Rc<String>>)>,
+    local_adts_stack: Vec<(Rc<String>, HashMap<Rc<String>, HashSet<Rc<String>>>)>,
 }
 
 /*
@@ -84,8 +87,10 @@ impl RenamerState {
         RenamerState {
             original_modules,
             rewritten_modules: HashMap::new(),
-
             variables_stack: Vec::new(),
+            local_functions_stack: Vec::new(),
+            local_records_stack: Vec::new(),
+            local_adts_stack: Vec::new(),
         }
     }
 
@@ -128,7 +133,6 @@ impl RenamerState {
                         prefix_name(n, &module.name),
                         self.rewrite_function_definition(
                             d,
-                            true,
                             &module.name,
                             &imported_modules,
                             &module_aliases,
@@ -144,7 +148,6 @@ impl RenamerState {
                         prefix_name(n, &module.name),
                         self.rewrite_adt_definition(
                             d,
-                            true,
                             &module.name,
                             &imported_modules,
                             &module_aliases,
@@ -160,7 +163,6 @@ impl RenamerState {
                         prefix_name(n, &module.name),
                         self.rewrite_record_definition(
                             d,
-                            true,
                             &module.name,
                             &imported_modules,
                             &module_aliases,
@@ -177,17 +179,12 @@ impl RenamerState {
     fn rewrite_adt_definition(
         &mut self,
         adt_definition: &Rc<ADTDefinition>,
-        rewrite_definition_names: bool,
-        current_module_name: &Rc<String>,
+        current_scope_name: &Rc<String>,
         imported_modules: &Vec<Rc<Module>>,
         module_aliases: &HashMap<Rc<String>, Rc<String>>,
     ) -> Rc<ADTDefinition> {
         Rc::new(ADTDefinition {
-            name: if rewrite_definition_names {
-                prefix_name(&adt_definition.name, current_module_name)
-            } else {
-                Rc::clone(&adt_definition.name)
-            },
+            name: prefix_name(&adt_definition.name, current_scope_name),
             location: Rc::clone(&adt_definition.location),
             type_variables: adt_definition.type_variables.iter().cloned().collect(),
             constructors: adt_definition
@@ -195,16 +192,16 @@ impl RenamerState {
                 .iter()
                 .map(|(n, c)| {
                     (
-                        prefix_name(n, current_module_name),
+                        prefix_name(n, current_scope_name),
                         Rc::new(ADTConstructor {
-                            name: prefix_name(n, current_module_name),
+                            name: prefix_name(n, current_scope_name),
                             elements: c
                                 .elements
                                 .iter()
                                 .map(|e| {
                                     self.rewrite_type(
                                         e,
-                                        current_module_name,
+                                        current_scope_name,
                                         imported_modules,
                                         module_aliases,
                                     )
@@ -220,17 +217,12 @@ impl RenamerState {
     fn rewrite_record_definition(
         &mut self,
         record_definition: &Rc<RecordDefinition>,
-        rewrite_definition_names: bool,
-        current_module_name: &Rc<String>,
+        current_scope_name: &Rc<String>,
         imported_modules: &Vec<Rc<Module>>,
         module_aliases: &HashMap<Rc<String>, Rc<String>>,
     ) -> Rc<RecordDefinition> {
         Rc::new(RecordDefinition {
-            name: if rewrite_definition_names {
-                prefix_name(&record_definition.name, current_module_name)
-            } else {
-                Rc::clone(&record_definition.name)
-            },
+            name: prefix_name(&record_definition.name, current_scope_name),
             location: Rc::clone(&record_definition.location),
             type_variables: record_definition.type_variables.iter().cloned().collect(),
             fields: record_definition
@@ -241,7 +233,7 @@ impl RenamerState {
                         Rc::clone(name),
                         self.rewrite_type(
                             field_type,
-                            current_module_name,
+                            current_scope_name,
                             imported_modules,
                             module_aliases,
                         ),
@@ -254,7 +246,7 @@ impl RenamerState {
     fn rewrite_type(
         &mut self,
         loz_type: &Rc<Type>,
-        current_module_name: &Rc<String>,
+        current_scope_name: &Rc<String>,
         imported_modules: &Vec<Rc<Module>>,
         module_aliases: &HashMap<Rc<String>, Rc<String>>,
     ) -> Rc<Type> {
@@ -265,24 +257,24 @@ impl RenamerState {
             Type::Int => Rc::clone(loz_type),
             Type::Float => Rc::clone(loz_type),
             Type::UserType(name, arguments) => Rc::new(Type::UserType(
-                self.rewrite_type_name(name, current_module_name, imported_modules, module_aliases),
+                self.rewrite_type_name(name, current_scope_name, imported_modules, module_aliases),
                 arguments
                     .iter()
                     .map(|a| {
-                        self.rewrite_type(a, current_module_name, imported_modules, module_aliases)
+                        self.rewrite_type(a, current_scope_name, imported_modules, module_aliases)
                     })
                     .collect(),
             )),
             Type::Tuple(els) => Rc::new(Type::Tuple(
                 els.iter()
                     .map(|t| {
-                        self.rewrite_type(t, current_module_name, imported_modules, module_aliases)
+                        self.rewrite_type(t, current_scope_name, imported_modules, module_aliases)
                     })
                     .collect(),
             )),
             Type::List(t) => Rc::new(Type::List(self.rewrite_type(
                 t,
-                current_module_name,
+                current_scope_name,
                 imported_modules,
                 module_aliases,
             ))),
@@ -290,10 +282,10 @@ impl RenamerState {
             Type::Function(from, to) => Rc::new(Type::Function(
                 from.iter()
                     .map(|t| {
-                        self.rewrite_type(t, current_module_name, imported_modules, module_aliases)
+                        self.rewrite_type(t, current_scope_name, imported_modules, module_aliases)
                     })
                     .collect(),
-                self.rewrite_type(to, current_module_name, imported_modules, module_aliases),
+                self.rewrite_type(to, current_scope_name, imported_modules, module_aliases),
             )),
         }
     }
@@ -301,18 +293,13 @@ impl RenamerState {
     fn rewrite_function_definition(
         &mut self,
         function_definition: &Rc<FunctionDefinition>,
-        rewrite_definition_names: bool,
-        current_module_name: &Rc<String>,
+        current_scope_name: &Rc<String>,
         imported_modules: &Vec<Rc<Module>>,
         module_aliases: &HashMap<Rc<String>, Rc<String>>,
     ) -> Rc<FunctionDefinition> {
         Rc::new(FunctionDefinition {
             location: Rc::clone(&function_definition.location),
-            name: if rewrite_definition_names {
-                prefix_name(&function_definition.name, current_module_name)
-            } else {
-                Rc::clone(&function_definition.name)
-            },
+            name: prefix_name(&function_definition.name, current_scope_name),
             function_type: Some(Rc::new(TypeScheme {
                 bound_variables: function_definition
                     .function_type
@@ -326,7 +313,7 @@ impl RenamerState {
                         .as_ref()
                         .unwrap()
                         .enclosed_type,
-                    current_module_name,
+                    current_scope_name,
                     imported_modules,
                     module_aliases,
                 ),
@@ -337,7 +324,7 @@ impl RenamerState {
                 .map(|b| {
                     self.rewrite_function_body(
                         b,
-                        current_module_name,
+                        current_scope_name,
                         imported_modules,
                         module_aliases,
                     )
@@ -349,10 +336,21 @@ impl RenamerState {
     fn rewrite_type_name(
         &self,
         type_name: &Rc<String>,
-        current_module_name: &Rc<String>,
+        current_scope_name: &Rc<String>,
         imported_modules: &Vec<Rc<Module>>,
         module_aliases: &HashMap<Rc<String>, Rc<String>>,
     ) -> Rc<String> {
+        for (defined_in, records) in self.local_records_stack.iter().rev() {
+            if records.contains(type_name) {
+                return prefix_name(type_name, defined_in);
+            }
+        }
+        for (defined_in, adts) in self.local_adts_stack.iter().rev() {
+            if adts.contains_key(type_name) {
+                return prefix_name(type_name, defined_in);
+            }
+        }
+
         for m in imported_modules {
             // If the module is alias as import we should not consider it for rewriting here.
             if module_aliases.values().any(|e| e == &m.name) {
@@ -383,22 +381,24 @@ impl RenamerState {
         }
 
         // Not found in imported modules.. Must be a definition in the current module.
-        //println!(
-        //    "Rewriting function reference {} in module {} to {}",
-        //    function_name,
-        //    current_module_name,
-        //    prefix_name(function_name, current_module_name)
-        //);
-        prefix_name(type_name, current_module_name)
+        prefix_name(type_name, current_scope_name)
     }
 
     fn rewrite_type_constructor_name(
         &self,
         constructor_name: &Rc<String>,
-        current_module_name: &Rc<String>,
+        current_scope_name: &Rc<String>,
         imported_modules: &Vec<Rc<Module>>,
         module_aliases: &HashMap<Rc<String>, Rc<String>>,
     ) -> Rc<String> {
+        for (defined_in, adts) in self.local_adts_stack.iter() {
+            for (_, c) in adts.iter() {
+                if c.contains(constructor_name) {
+                    return prefix_name(constructor_name, defined_in);
+                }
+            }
+        }
+
         // Is already a qualified name so should be an alias for an exiting module name.
         if constructor_name.contains("::") {
             let mut splitter = constructor_name.split("::");
@@ -438,7 +438,7 @@ impl RenamerState {
         //    current_module_name,
         //    prefix_name(function_name, current_module_name)
         //);
-        prefix_name(constructor_name, current_module_name)
+        prefix_name(constructor_name, current_scope_name)
     }
 
     fn rewrite_function_name(
@@ -448,10 +448,15 @@ impl RenamerState {
         imported_modules: &Vec<Rc<Module>>,
         module_aliases: &HashMap<Rc<String>, Rc<String>>,
     ) -> Rc<String> {
-        // Local function definitions do not need to be rewritten.
         for vars in self.variables_stack.iter().rev() {
             if vars.contains(function_name) {
                 return Rc::clone(function_name);
+            }
+        }
+
+        for (defined_in, functions) in self.local_functions_stack.iter().rev() {
+            if functions.contains(function_name) {
+                return prefix_name(function_name, defined_in);
             }
         }
 
@@ -498,35 +503,64 @@ impl RenamerState {
     fn rewrite_function_body(
         &mut self,
         function_body: &Rc<FunctionBody>,
-        current_module_name: &Rc<String>,
+        current_scope_name: &Rc<String>,
         imported_modules: &Vec<Rc<Module>>,
         module_aliases: &HashMap<Rc<String>, Rc<String>>,
     ) -> Rc<FunctionBody> {
+        let function_scope_name = prefix_name(&function_body.name, current_scope_name);
+
         self.variables_stack.push(
             function_body
                 .match_expressions
                 .iter()
                 .flat_map(|me| me.variables().into_iter())
-                .chain(
-                    function_body
-                        .local_function_definitions
-                        .iter()
-                        .map(|(n, d)| Rc::clone(n)),
-                )
                 .collect(),
         );
+        self.local_functions_stack.push((
+            Rc::clone(&function_scope_name),
+            function_body
+                .local_function_definitions
+                .iter()
+                .map(|(n, _)| Rc::clone(n))
+                .collect(),
+        ));
+        self.local_records_stack.push((
+            Rc::clone(&function_scope_name),
+            function_body
+                .local_record_definitions
+                .iter()
+                .map(|(n, _)| Rc::clone(n))
+                .collect(),
+        ));
 
         let res = Rc::new(FunctionBody {
-            name: Rc::clone(&function_body.name),
+            name: Rc::clone(&current_scope_name),
             location: Rc::clone(&function_body.location),
-            type_information: function_body.type_information.clone(),
+            type_information: function_body
+                .type_information
+                .iter()
+                .map(|(v, t)| {
+                    (
+                        Rc::clone(v),
+                        Rc::new(TypeScheme {
+                            bound_variables: t.bound_variables.clone(),
+                            enclosed_type: self.rewrite_type(
+                                &t.enclosed_type,
+                                current_scope_name,
+                                imported_modules,
+                                module_aliases,
+                            ),
+                        }),
+                    )
+                })
+                .collect(),
             match_expressions: function_body
                 .match_expressions
                 .iter()
                 .map(|me| {
                     self.rewrite_match_expression(
                         me,
-                        current_module_name,
+                        current_scope_name,
                         imported_modules,
                         module_aliases,
                     )
@@ -536,9 +570,9 @@ impl RenamerState {
                 .rules
                 .iter()
                 .map(|rule| {
-                    self.rewrite_function_body_rule(
+                    self.rewrite_function_rule(
                         rule,
-                        current_module_name,
+                        &current_scope_name,
                         imported_modules,
                         module_aliases,
                     )
@@ -547,11 +581,10 @@ impl RenamerState {
             local_function_definitions: function_body
                 .local_function_definitions
                 .iter()
-                .map(|(n, fd)| {
+                .map(|(_, fd)| {
                     let function_definition = self.rewrite_function_definition(
                         fd,
-                        false,
-                        current_module_name,
+                        &function_scope_name,
                         imported_modules,
                         module_aliases,
                     );
@@ -561,11 +594,10 @@ impl RenamerState {
             local_adt_definitions: function_body
                 .local_adt_definitions
                 .iter()
-                .map(|(n, d)| {
+                .map(|(_, d)| {
                     let adt_definition = self.rewrite_adt_definition(
                         d,
-                        false,
-                        current_module_name,
+                        &function_scope_name,
                         imported_modules,
                         module_aliases,
                     );
@@ -575,11 +607,10 @@ impl RenamerState {
             local_record_definitions: function_body
                 .local_record_definitions
                 .iter()
-                .map(|(n, d)| {
+                .map(|(_, d)| {
                     let record_definition = self.rewrite_record_definition(
                         d,
-                        false,
-                        current_module_name,
+                        &function_scope_name,
                         imported_modules,
                         module_aliases,
                     );
@@ -588,17 +619,20 @@ impl RenamerState {
                 .collect(),
         });
         self.variables_stack.pop();
+        self.local_functions_stack.pop();
+        self.local_adts_stack.pop();
+        self.local_records_stack.pop();
         res
     }
 
-    fn rewrite_function_body_rule(
+    fn rewrite_function_rule(
         &mut self,
-        function_body_rule: &Rc<FunctionRule>,
+        function_rule: &Rc<FunctionRule>,
         current_module_name: &Rc<String>,
         imported_modules: &Vec<Rc<Module>>,
         module_aliases: &HashMap<Rc<String>, Rc<String>>,
     ) -> Rc<FunctionRule> {
-        Rc::new(match function_body_rule.borrow() {
+        Rc::new(match function_rule.borrow() {
             FunctionRule::ConditionalRule(l, c, e) => FunctionRule::ConditionalRule(
                 Rc::clone(l),
                 self.rewrite_expression(c, current_module_name, imported_modules, module_aliases),
@@ -637,7 +671,7 @@ impl RenamerState {
     fn rewrite_expression(
         &mut self,
         expression: &Rc<Expression>,
-        current_module_name: &Rc<String>,
+        current_scope_name: &Rc<String>,
         imported_modules: &Vec<Rc<Module>>,
         module_aliases: &HashMap<Rc<String>, Rc<String>>,
     ) -> Rc<Expression> {
@@ -656,7 +690,7 @@ impl RenamerState {
                     .map(|e| {
                         self.rewrite_expression(
                             e,
-                            current_module_name,
+                            current_scope_name,
                             imported_modules,
                             module_aliases,
                         )
@@ -670,7 +704,7 @@ impl RenamerState {
                     .map(|e| {
                         self.rewrite_expression(
                             e,
-                            current_module_name,
+                            current_scope_name,
                             imported_modules,
                             module_aliases,
                         )
@@ -679,31 +713,39 @@ impl RenamerState {
             ),
             Expression::LonghandListLiteral(l, he, te) => Expression::LonghandListLiteral(
                 Rc::clone(l),
-                self.rewrite_expression(he, current_module_name, imported_modules, module_aliases),
-                self.rewrite_expression(te, current_module_name, imported_modules, module_aliases),
+                self.rewrite_expression(he, current_scope_name, imported_modules, module_aliases),
+                self.rewrite_expression(te, current_scope_name, imported_modules, module_aliases),
             ),
-            Expression::ADTTypeConstructor(l, name, es) => Expression::ADTTypeConstructor(
+            Expression::ADTTypeConstructor(l, user_type, name, es) => {
+                Expression::ADTTypeConstructor(
+                    Rc::clone(l),
+                    user_type.as_ref().map(|t| {
+                        self.rewrite_type(t, current_scope_name, imported_modules, module_aliases)
+                    }),
+                    self.rewrite_type_constructor_name(
+                        name,
+                        current_scope_name,
+                        imported_modules,
+                        module_aliases,
+                    ),
+                    es.iter()
+                        .map(|e| {
+                            self.rewrite_expression(
+                                e,
+                                current_scope_name,
+                                imported_modules,
+                                module_aliases,
+                            )
+                        })
+                        .collect(),
+                )
+            }
+            Expression::Record(l, user_type, n, fields) => Expression::Record(
                 Rc::clone(l),
-                self.rewrite_type_constructor_name(
-                    name,
-                    current_module_name,
-                    imported_modules,
-                    module_aliases,
-                ),
-                es.iter()
-                    .map(|e| {
-                        self.rewrite_expression(
-                            e,
-                            current_module_name,
-                            imported_modules,
-                            module_aliases,
-                        )
-                    })
-                    .collect(),
-            ),
-            Expression::Record(l, n, fields) => Expression::Record(
-                Rc::clone(l),
-                self.rewrite_type_name(n, current_module_name, imported_modules, module_aliases),
+                user_type.as_ref().map(|t| {
+                    self.rewrite_type(t, current_scope_name, imported_modules, module_aliases)
+                }),
+                self.rewrite_type_name(n, current_scope_name, imported_modules, module_aliases),
                 fields
                     .iter()
                     .map(|(n, e)| {
@@ -711,7 +753,7 @@ impl RenamerState {
                             Rc::clone(n),
                             self.rewrite_expression(
                                 e,
-                                current_module_name,
+                                current_scope_name,
                                 imported_modules,
                                 module_aliases,
                             ),
@@ -721,23 +763,40 @@ impl RenamerState {
             ),
             Expression::Case(l, e, rules) => Expression::Case(
                 Rc::clone(l),
-                self.rewrite_expression(e, current_module_name, imported_modules, module_aliases),
+                self.rewrite_expression(e, current_scope_name, imported_modules, module_aliases),
                 rules
                     .iter()
                     .map(|r| {
                         self.variables_stack.push(r.case_rule.variables());
                         let res = Rc::new(CaseRule {
                             loc_info: Rc::clone(&r.loc_info),
-                            type_information: r.type_information.clone(),
+                            type_information: r
+                                .type_information
+                                .iter()
+                                .map(|(v, t)| {
+                                    (
+                                        Rc::clone(v),
+                                        Rc::new(TypeScheme {
+                                            bound_variables: t.bound_variables.clone(),
+                                            enclosed_type: self.rewrite_type(
+                                                &t.enclosed_type,
+                                                current_scope_name,
+                                                imported_modules,
+                                                module_aliases,
+                                            ),
+                                        }),
+                                    )
+                                })
+                                .collect(),
                             case_rule: self.rewrite_match_expression(
                                 &r.case_rule,
-                                current_module_name,
+                                current_scope_name,
                                 imported_modules,
                                 module_aliases,
                             ),
                             result_rule: self.rewrite_expression(
                                 &r.result_rule,
-                                current_module_name,
+                                current_scope_name,
                                 imported_modules,
                                 module_aliases,
                             ),
@@ -747,11 +806,14 @@ impl RenamerState {
                     })
                     .collect(),
             ),
-            Expression::Call(l, function_name, es) => Expression::Call(
+            Expression::Call(l, function_type, function_name, es) => Expression::Call(
                 Rc::clone(l),
+                function_type.as_ref().map(|ft| {
+                    self.rewrite_type(ft, current_scope_name, imported_modules, module_aliases)
+                }),
                 self.rewrite_function_name(
                     function_name,
-                    current_module_name,
+                    current_scope_name,
                     imported_modules,
                     module_aliases,
                 ),
@@ -759,7 +821,7 @@ impl RenamerState {
                     .map(|e| {
                         self.rewrite_expression(
                             e,
-                            current_module_name,
+                            current_scope_name,
                             imported_modules,
                             module_aliases,
                         )
@@ -769,97 +831,98 @@ impl RenamerState {
             Expression::Variable(l, v) => Expression::Variable(Rc::clone(l), Rc::clone(v)),
             Expression::Negation(l, e) => Expression::Negation(
                 Rc::clone(l),
-                self.rewrite_expression(e, current_module_name, imported_modules, module_aliases),
+                self.rewrite_expression(e, current_scope_name, imported_modules, module_aliases),
             ),
             Expression::Minus(l, e) => Expression::Minus(
                 Rc::clone(l),
-                self.rewrite_expression(e, current_module_name, imported_modules, module_aliases),
+                self.rewrite_expression(e, current_scope_name, imported_modules, module_aliases),
             ),
             Expression::Times(l, el, er) => Expression::Times(
                 Rc::clone(l),
-                self.rewrite_expression(el, current_module_name, imported_modules, module_aliases),
-                self.rewrite_expression(er, current_module_name, imported_modules, module_aliases),
+                self.rewrite_expression(el, current_scope_name, imported_modules, module_aliases),
+                self.rewrite_expression(er, current_scope_name, imported_modules, module_aliases),
             ),
             Expression::Divide(l, el, er) => Expression::Divide(
                 Rc::clone(l),
-                self.rewrite_expression(el, current_module_name, imported_modules, module_aliases),
-                self.rewrite_expression(er, current_module_name, imported_modules, module_aliases),
+                self.rewrite_expression(el, current_scope_name, imported_modules, module_aliases),
+                self.rewrite_expression(er, current_scope_name, imported_modules, module_aliases),
             ),
             Expression::Modulo(l, el, er) => Expression::Modulo(
                 Rc::clone(l),
-                self.rewrite_expression(el, current_module_name, imported_modules, module_aliases),
-                self.rewrite_expression(er, current_module_name, imported_modules, module_aliases),
+                self.rewrite_expression(el, current_scope_name, imported_modules, module_aliases),
+                self.rewrite_expression(er, current_scope_name, imported_modules, module_aliases),
             ),
             Expression::Add(l, el, er) => Expression::Add(
                 Rc::clone(l),
-                self.rewrite_expression(el, current_module_name, imported_modules, module_aliases),
-                self.rewrite_expression(er, current_module_name, imported_modules, module_aliases),
+                self.rewrite_expression(el, current_scope_name, imported_modules, module_aliases),
+                self.rewrite_expression(er, current_scope_name, imported_modules, module_aliases),
             ),
             Expression::Subtract(l, el, er) => Expression::Subtract(
                 Rc::clone(l),
-                self.rewrite_expression(el, current_module_name, imported_modules, module_aliases),
-                self.rewrite_expression(er, current_module_name, imported_modules, module_aliases),
+                self.rewrite_expression(el, current_scope_name, imported_modules, module_aliases),
+                self.rewrite_expression(er, current_scope_name, imported_modules, module_aliases),
             ),
             Expression::ShiftLeft(l, el, er) => Expression::ShiftLeft(
                 Rc::clone(l),
-                self.rewrite_expression(el, current_module_name, imported_modules, module_aliases),
-                self.rewrite_expression(er, current_module_name, imported_modules, module_aliases),
+                self.rewrite_expression(el, current_scope_name, imported_modules, module_aliases),
+                self.rewrite_expression(er, current_scope_name, imported_modules, module_aliases),
             ),
             Expression::ShiftRight(l, el, er) => Expression::ShiftRight(
                 Rc::clone(l),
-                self.rewrite_expression(el, current_module_name, imported_modules, module_aliases),
-                self.rewrite_expression(er, current_module_name, imported_modules, module_aliases),
+                self.rewrite_expression(el, current_scope_name, imported_modules, module_aliases),
+                self.rewrite_expression(er, current_scope_name, imported_modules, module_aliases),
             ),
             Expression::Greater(l, el, er) => Expression::Greater(
                 Rc::clone(l),
-                self.rewrite_expression(el, current_module_name, imported_modules, module_aliases),
-                self.rewrite_expression(er, current_module_name, imported_modules, module_aliases),
+                self.rewrite_expression(el, current_scope_name, imported_modules, module_aliases),
+                self.rewrite_expression(er, current_scope_name, imported_modules, module_aliases),
             ),
             Expression::Greq(l, el, er) => Expression::Greq(
                 Rc::clone(l),
-                self.rewrite_expression(el, current_module_name, imported_modules, module_aliases),
-                self.rewrite_expression(er, current_module_name, imported_modules, module_aliases),
+                self.rewrite_expression(el, current_scope_name, imported_modules, module_aliases),
+                self.rewrite_expression(er, current_scope_name, imported_modules, module_aliases),
             ),
             Expression::Leq(l, el, er) => Expression::Leq(
                 Rc::clone(l),
-                self.rewrite_expression(el, current_module_name, imported_modules, module_aliases),
-                self.rewrite_expression(er, current_module_name, imported_modules, module_aliases),
+                self.rewrite_expression(el, current_scope_name, imported_modules, module_aliases),
+                self.rewrite_expression(er, current_scope_name, imported_modules, module_aliases),
             ),
             Expression::Lesser(l, el, er) => Expression::Lesser(
                 Rc::clone(l),
-                self.rewrite_expression(el, current_module_name, imported_modules, module_aliases),
-                self.rewrite_expression(er, current_module_name, imported_modules, module_aliases),
+                self.rewrite_expression(el, current_scope_name, imported_modules, module_aliases),
+                self.rewrite_expression(er, current_scope_name, imported_modules, module_aliases),
             ),
             Expression::Eq(l, el, er) => Expression::Eq(
                 Rc::clone(l),
-                self.rewrite_expression(el, current_module_name, imported_modules, module_aliases),
-                self.rewrite_expression(er, current_module_name, imported_modules, module_aliases),
+                self.rewrite_expression(el, current_scope_name, imported_modules, module_aliases),
+                self.rewrite_expression(er, current_scope_name, imported_modules, module_aliases),
             ),
             Expression::Neq(l, el, er) => Expression::Neq(
                 Rc::clone(l),
-                self.rewrite_expression(el, current_module_name, imported_modules, module_aliases),
-                self.rewrite_expression(er, current_module_name, imported_modules, module_aliases),
+                self.rewrite_expression(el, current_scope_name, imported_modules, module_aliases),
+                self.rewrite_expression(er, current_scope_name, imported_modules, module_aliases),
             ),
             Expression::And(l, el, er) => Expression::And(
                 Rc::clone(l),
-                self.rewrite_expression(el, current_module_name, imported_modules, module_aliases),
-                self.rewrite_expression(er, current_module_name, imported_modules, module_aliases),
+                self.rewrite_expression(el, current_scope_name, imported_modules, module_aliases),
+                self.rewrite_expression(er, current_scope_name, imported_modules, module_aliases),
             ),
             Expression::Or(l, el, er) => Expression::Or(
                 Rc::clone(l),
-                self.rewrite_expression(el, current_module_name, imported_modules, module_aliases),
-                self.rewrite_expression(er, current_module_name, imported_modules, module_aliases),
+                self.rewrite_expression(el, current_scope_name, imported_modules, module_aliases),
+                self.rewrite_expression(er, current_scope_name, imported_modules, module_aliases),
             ),
-            Expression::RecordFieldAccess(l, record_name, re, fe) => Expression::RecordFieldAccess(
+            Expression::RecordFieldAccess(l, record_type, record_name, re, fe) => Expression::RecordFieldAccess(
                 Rc::clone(l),
+                Some(self.rewrite_type(record_type.as_ref().unwrap(), current_scope_name, imported_modules, module_aliases)),
                 self.rewrite_type_name(
                     record_name,
-                    current_module_name,
+                    current_scope_name,
                     imported_modules,
                     module_aliases,
                 ),
-                self.rewrite_expression(re, current_module_name, imported_modules, module_aliases),
-                self.rewrite_expression(fe, current_module_name, imported_modules, module_aliases),
+                self.rewrite_expression(re, current_scope_name, imported_modules, module_aliases),
+                self.rewrite_expression(fe, current_scope_name, imported_modules, module_aliases),
             ),
             Expression::Lambda(l, type_information, es, e) => Expression::Lambda(
                 Rc::clone(l),
@@ -868,13 +931,13 @@ impl RenamerState {
                     .map(|e| {
                         self.rewrite_match_expression(
                             e,
-                            current_module_name,
+                            current_scope_name,
                             imported_modules,
                             module_aliases,
                         )
                     })
                     .collect(),
-                self.rewrite_expression(e, current_module_name, imported_modules, module_aliases),
+                self.rewrite_expression(e, current_scope_name, imported_modules, module_aliases),
             ),
         })
     }
@@ -882,7 +945,7 @@ impl RenamerState {
     fn rewrite_match_expression(
         &self,
         match_expression: &Rc<MatchExpression>,
-        current_module_name: &Rc<String>,
+        current_scope_name: &Rc<String>,
         imported_modules: &Vec<Rc<Module>>,
         module_aliases: &HashMap<Rc<String>, Rc<String>>,
     ) -> Rc<MatchExpression> {
@@ -902,7 +965,7 @@ impl RenamerState {
                     .map(|me| {
                         self.rewrite_match_expression(
                             me,
-                            current_module_name,
+                            current_scope_name,
                             imported_modules,
                             module_aliases,
                         )
@@ -915,7 +978,7 @@ impl RenamerState {
                     .map(|me| {
                         self.rewrite_match_expression(
                             me,
-                            current_module_name,
+                            current_scope_name,
                             imported_modules,
                             module_aliases,
                         )
@@ -926,13 +989,13 @@ impl RenamerState {
                 Rc::clone(l),
                 self.rewrite_match_expression(
                     hme,
-                    current_module_name,
+                    current_scope_name,
                     imported_modules,
                     module_aliases,
                 ),
                 self.rewrite_match_expression(
                     tme,
-                    current_module_name,
+                    current_scope_name,
                     imported_modules,
                     module_aliases,
                 ),
@@ -942,7 +1005,7 @@ impl RenamerState {
                 Rc::clone(l),
                 self.rewrite_type_constructor_name(
                     constructor_name,
-                    current_module_name,
+                    current_scope_name,
                     imported_modules,
                     module_aliases,
                 ),
@@ -950,7 +1013,7 @@ impl RenamerState {
                     .map(|me| {
                         self.rewrite_match_expression(
                             me,
-                            current_module_name,
+                            current_scope_name,
                             imported_modules,
                             module_aliases,
                         )
@@ -961,7 +1024,7 @@ impl RenamerState {
                 Rc::clone(l),
                 self.rewrite_type_name(
                     record_name,
-                    current_module_name,
+                    current_scope_name,
                     imported_modules,
                     module_aliases,
                 ),
@@ -978,9 +1041,9 @@ fn to_import_module_name(import: &Rc<Import>) -> Rc<String> {
     }
 }
 
-fn prefix_name(name: &Rc<String>, module_name: &Rc<String>) -> Rc<String> {
+fn prefix_name(name: &Rc<String>, scope_name: &Rc<String>) -> Rc<String> {
     let mut s = String::new();
-    s.push_str(module_name);
+    s.push_str(scope_name);
     s.push_str("::");
     s.push_str(name);
     Rc::new(s)

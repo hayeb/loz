@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::{ADTDefinition, Import, Location, RecordDefinition, TypeScheme};
+use crate::{ADTDefinition, Import, Location, RecordDefinition, Type, TypeScheme};
 
 #[derive(Debug, Clone)]
 pub struct FunctionDefinition {
@@ -27,7 +27,12 @@ pub struct FunctionBody {
 pub enum FunctionRule {
     ConditionalRule(Rc<Location>, Rc<Expression>, Rc<Expression>),
     ExpressionRule(Rc<Location>, Rc<Expression>),
-    LetRule(Rc<Location>, HashMap<Rc<String>, Rc<TypeScheme>>, Rc<MatchExpression>, Rc<Expression>),
+    LetRule(
+        Rc<Location>,
+        HashMap<Rc<String>, Rc<TypeScheme>>,
+        Rc<MatchExpression>,
+        Rc<Expression>,
+    ),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -44,12 +49,27 @@ pub enum Expression {
     ShorthandListLiteral(Rc<Location>, Vec<Rc<Expression>>),
     LonghandListLiteral(Rc<Location>, Rc<Expression>, Rc<Expression>),
 
-    ADTTypeConstructor(Rc<Location>, Rc<String>, Vec<Rc<Expression>>),
-    Record(Rc<Location>, Rc<String>, Vec<(Rc<String>, Rc<Expression>)>),
+    ADTTypeConstructor(
+        Rc<Location>,
+        Option<Rc<Type>>,
+        Rc<String>,
+        Vec<Rc<Expression>>,
+    ),
+    Record(
+        Rc<Location>,
+        Option<Rc<Type>>,
+        Rc<String>,
+        Vec<(Rc<String>, Rc<Expression>)>,
+    ),
 
     Case(Rc<Location>, Rc<Expression>, Vec<Rc<CaseRule>>),
 
-    Call(Rc<Location>, Rc<String>, Vec<Rc<Expression>>),
+    Call(
+        Rc<Location>,
+        Option<Rc<Type>>,
+        Rc<String>,
+        Vec<Rc<Expression>>,
+    ),
     Variable(Rc<Location>, Rc<String>),
 
     Negation(Rc<Location>, Rc<Expression>),
@@ -76,9 +96,14 @@ pub enum Expression {
     And(Rc<Location>, Rc<Expression>, Rc<Expression>),
     Or(Rc<Location>, Rc<Expression>, Rc<Expression>),
 
-    RecordFieldAccess(Rc<Location>, Rc<String>, Rc<Expression>, Rc<Expression>),
+    RecordFieldAccess(Rc<Location>, Option<Rc<Type>>, Rc<String>, Rc<Expression>, Rc<Expression>),
 
-    Lambda(Rc<Location>, HashMap<Rc<String>, Rc<TypeScheme>>, Vec<Rc<MatchExpression>>, Rc<Expression>),
+    Lambda(
+        Rc<Location>,
+        HashMap<Rc<String>, Rc<TypeScheme>>,
+        Vec<Rc<MatchExpression>>,
+        Rc<Expression>,
+    ),
 }
 
 #[derive(Debug, Clone, PartialEq)]

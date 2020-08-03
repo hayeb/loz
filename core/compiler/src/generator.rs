@@ -32,10 +32,12 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::rewriter::RuntimeModule;
-use crate::Type;
 use regex::Regex;
-use crate::ast::{FunctionDefinition, FunctionBody, FunctionRule, MatchExpression, Expression};
+
+use crate::{ADTDefinition, RecordDefinition, Type};
+use crate::ast::{Expression, FunctionBody, FunctionDefinition, FunctionRule, MatchExpression};
+use crate::rewriter::RuntimeModule;
+use itertools::Itertools;
 
 const LF_C_EXIT: &'static str = "declare void @exit(i32) cold noreturn nounwind";
 const LF_C_PRINTF: &'static str = "declare i32 @printf(i8* noalias nocapture, ...)";
@@ -64,14 +66,26 @@ const C_STRING_FORMAT_STRING: &'static str = "\\22%s\\22";
 const C_STRING_FORMAT_STRING_NAME: &'static str = "@c_string_format_string";
 const C_STRING_FORMAT_STRING_LENGTH: usize = 5; // Includes NULL byte.
 
+const C_RECORD_OPEN_FORMAT: &'static str = "{%s|";
+const C_RECORD_OPEN_FORMAT_NAME: &'static str = "@c_record_open";
+
+const C_RECORD_CLOSE: &'static str = "}";
+const C_RECORD_CLOSE_NAME: &'static str = "@c_record_close";
+
+const C_RECORD_FIELD_FORMAT_STRING: &'static str = "%s = %s";
+const C_RECORD_FIELD_FORMAT_STRING_NAME: &'static str = "@c_record_field_format_string";
+
+const C_RECORD_FIELD_SEPARATOR: &'static str = ", ";
+const C_RECORD_FIELD_SEPARATOR_NAME: &'static str = "@c_record_field_separator";
+
 const FORMAT_BOOL: &'static str = "
 define i8* @format_bool(i1 %bool) {
     br i1 %bool, label %False, label %True
 True:
-    %ts = getelementptr [6 x i8],[6 x i8]* @c_bool_true_format_string, i64 0, i64 0
+    %ts = getelementptr [6 x i8],[6 x i8]* @c_bool_true_format_string, i32 0, i32 0
     ret i8* %ts
 False:
-    %fs = getelementptr [5 x i8],[5 x i8]* @c_bool_false_format_string, i64 0, i64 0
+    %fs = getelementptr [5 x i8],[5 x i8]* @c_bool_false_format_string, i32 0, i32 0
     ret i8* %fs
 }";
 
@@ -90,14 +104,16 @@ struct GeneratorState {
     var_to_type: Vec<HashMap<Rc<String>, Rc<Type>>>,
 
     function_name_to_type: HashMap<Rc<String>, Rc<Type>>,
-    record_name_to_field_indexing: HashMap<Rc<String>, HashMap<Rc<String>, (Rc<Type>, usize)>>,
+
+    records: HashMap<Rc<String>, Rc<RecordDefinition>>,
+    adts: HashMap<Rc<String>, Rc<ADTDefinition>>,
 }
 
 fn to_llvm_type(loz_type: &Rc<Type>) -> String {
     match loz_type.borrow() {
         Type::Bool => "i1".to_string(),
         Type::String => "i8*".to_string(),
-        Type::Int => "i64".to_string(),
+        Type::Int => "i32".to_string(),
         Type::Float => "double".to_string(),
         Type::Char => "i8*".to_string(),
         Type::UserType(name, _) => format!("%{}*", name.replace("::", "_")),
@@ -128,23 +144,6 @@ fn to_string_constant_with_length(name: &str, constant: &str, length: usize) -> 
     )
 }
 
-fn resolve_string_constant(result: &str, name: &str, len: usize) -> String {
-    format!(
-        "{} = getelementptr [{} x i8],[{} x i8]* {}, i64 0, i64 0",
-        result,
-        len + 1,
-        len + 1,
-        name
-    )
-}
-
-fn resolve_string_constant_len(result: &str, name: &str, len: usize) -> String {
-    format!(
-        "{} = getelementptr [{} x i8],[{} x i8]* {}, i64 0, i64 0",
-        result, len, len, name
-    )
-}
-
 impl GeneratorState {
     fn new(runtime_module: &Rc<RuntimeModule>) -> Self {
         return GeneratorState {
@@ -157,23 +156,16 @@ impl GeneratorState {
             function_name_to_type: runtime_module
                 .functions
                 .iter()
-                .map(|(n, d)| (Rc::clone(n), Rc::clone(&d.function_type.as_ref().unwrap().enclosed_type)))
-                .collect(),
-
-            record_name_to_field_indexing: runtime_module
-                .records
-                .iter()
                 .map(|(n, d)| {
                     (
                         Rc::clone(n),
-                        d.fields
-                            .iter()
-                            .enumerate()
-                            .map(|(i, (n, t))| (Rc::clone(n), (Rc::clone(t), i)))
-                            .collect(),
+                        Rc::clone(&d.function_type.as_ref().unwrap().enclosed_type),
                     )
                 })
-                .collect::<HashMap<Rc<String>, HashMap<Rc<String>, (Rc<Type>, usize)>>>(),
+                .collect(),
+
+            records: runtime_module.records.clone(),
+            adts: runtime_module.adts.clone(),
         };
     }
 
@@ -212,6 +204,27 @@ impl GeneratorState {
         }
 
         code
+    }
+
+    fn resolve_string_constant(&mut self, name: &str, len: usize) -> (SSAVar, String) {
+        let v = self.var();
+        let code = format!(
+            "{} = getelementptr [{} x i8],[{} x i8]* {}, i32 0, i32 0",
+            &v,
+            len + 1,
+            len + 1,
+            name
+        );
+        (v, code)
+    }
+
+    fn resolve_string_constant_len(&mut self, name: &str, len: usize) -> (SSAVar, String) {
+        let v = self.var();
+        let code = format!(
+            "{} = getelementptr [{} x i8],[{} x i8]* {}, i32 0, i32 0",
+            &v, len, len, name
+        );
+        (v, code)
     }
 
     fn generate_function_definitions(&mut self, runtime_module: &Rc<RuntimeModule>) -> String {
@@ -266,6 +279,11 @@ impl GeneratorState {
         let c_bool_true_format =
             to_string_constant(C_BOOL_FORMAT_STRING_TRUE_NAME, C_BOOL_FORMAT_STRING_TRUE);
 
+        let c_record_open = to_string_constant(C_RECORD_OPEN_FORMAT_NAME, C_RECORD_OPEN_FORMAT);
+        let c_record_close = to_string_constant(C_RECORD_CLOSE_NAME, C_RECORD_CLOSE);
+        let c_record_field_separator = to_string_constant(C_RECORD_FIELD_SEPARATOR_NAME, C_RECORD_FIELD_SEPARATOR);
+        let c_record_field_format = to_string_constant(C_RECORD_FIELD_FORMAT_STRING_NAME, C_RECORD_FIELD_FORMAT_STRING);
+
         let mut print_code = String::new();
         // Push different format strings
         print_code.push_str(&c_newline);
@@ -282,20 +300,44 @@ impl GeneratorState {
         print_code.push_str("\n");
         print_code.push_str(&c_bool_true_format);
         print_code.push_str("\n");
+        print_code.push_str(&c_record_open);
+        print_code.push_str("\n");
+        print_code.push_str(&c_record_close);
+        print_code.push_str("\n");
+        print_code.push_str(&c_record_field_separator);
+        print_code.push_str("\n");
+        print_code.push_str(&c_record_field_format);
+        print_code.push_str("\n");
 
         // Push misc formatting routings;
         print_code.push_str(FORMAT_BOOL);
         print_code.push_str("\n\n");
 
+        let print_lines = self.generate_print_code_value(loz_type, "%to_print".to_string());
+        for (v, sc) in &self.string_constants {
+            let mut string_constant_code = String::new();
+            string_constant_code.push_str(&to_string_constant(v, sc));
+            string_constant_code.push_str("\n");
+            print_code.push_str(&string_constant_code);
+        }
+        self.string_constants.clear();
+
         let function_header = format!("define void @print_result({} %to_print) {{", llvm_type);
         print_code.push_str(&function_header);
         print_code.push_str("\n");
 
-        for line in self.generate_print_code_value(loz_type, "%to_print".to_string()) {
+        for line in print_lines {
             print_code.push_str("\t");
             print_code.push_str(&line);
             print_code.push_str("\n")
         }
+
+        let (r, code_r) = self.resolve_string_constant_len(C_NEWLINE_NAME, C_NEWLINE_LENGTH);
+        print_code.push_str("\t");
+        print_code.push_str(&code_r);
+        print_code.push_str(&format!("\n\tcall i32 (i8*, ...) @printf(i8* {})\n", r));
+
+        print_code.push_str("\tret void\n");
 
         let function_footer = "}";
         print_code.push_str(function_footer);
@@ -304,34 +346,26 @@ impl GeneratorState {
     }
 
     fn generate_print_code_value(&mut self, loz_type: &Rc<Type>, to_print: String) -> Vec<String> {
-        let mut lines = match loz_type.borrow() {
+        match loz_type.borrow() {
             Type::Int => {
-                let var = self.var();
+                let (v, code) = self.resolve_string_constant(C_INT_FORMAT_STRING_NAME, C_INT_FORMAT_STRING.len());
                 vec![
-                    resolve_string_constant(
-                        &var,
-                        C_INT_FORMAT_STRING_NAME,
-                        C_INT_FORMAT_STRING.len(),
-                    ),
+                    code,
                     format!(
                         "call i32 (i8*, ...) @printf(i8* {}, {} {})",
-                        var,
+                        v,
                         to_llvm_type(loz_type),
                         to_print
                     ),
                 ]
             }
             Type::Char => {
-                let var = self.var();
+                let (v, code) = self.resolve_string_constant(C_CHAR_FORMAT_STRING_NAME, C_CHAR_FORMAT_STRING.len());
                 vec![
-                    resolve_string_constant(
-                        &var,
-                        C_CHAR_FORMAT_STRING_NAME,
-                        C_CHAR_FORMAT_STRING.len(),
-                    ),
+                    code,
                     format!(
                         "call i32 (i8*, ...) @printf(i8* {}, {} {})",
-                        var,
+                        v,
                         to_llvm_type(loz_type),
                         to_print
                     ),
@@ -345,78 +379,111 @@ impl GeneratorState {
                 ]
             }
             Type::String => {
-                let var = self.var();
+                let (v, code) = self.resolve_string_constant_len(C_STRING_FORMAT_STRING_NAME, C_STRING_FORMAT_STRING_LENGTH);
                 vec![
-                    resolve_string_constant_len(
-                        &var,
-                        C_STRING_FORMAT_STRING_NAME,
-                        C_STRING_FORMAT_STRING_LENGTH,
-                    ),
+                    code,
                     format!(
                         "call i32 (i8*, ...) @printf(i8* {}, {} {})",
-                        var,
+                        v,
                         to_llvm_type(loz_type),
                         to_print
                     ),
                 ]
             }
             Type::Float => {
-                let var = self.var();
+                let (v, code) = self.resolve_string_constant(C_FLOAT_FORMAT_STRING_NAME, C_FLOAT_FORMAT_STRING.len());
                 vec![
-                    resolve_string_constant(
-                        &var,
-                        C_FLOAT_FORMAT_STRING_NAME,
-                        C_FLOAT_FORMAT_STRING.len(),
-                    ),
+                    code,
                     format!(
                         "call i32 (i8*, ...) @printf(i8* {}, {} {})",
-                        var,
+                        v,
                         to_llvm_type(loz_type),
                         to_print
                     ),
                 ]
             }
-            _ => unimplemented!(),
-        };
+            Type::UserType(name, _) => {
+                if self.records.contains_key(name) {
+                    self.generate_print_record(to_print, name)
+                } else {
+                    unimplemented!("Printing ADTs")
+                }
+            }
+            t => unimplemented!("Printing type {}", t)
+        }
+    }
 
-        let r = self.var();
-        lines.push(resolve_string_constant_len(
-            &r,
-            C_NEWLINE_NAME,
-            C_NEWLINE_LENGTH,
-        ));
-        lines.push(format!("call i32 (i8*, ...) @printf(i8* {})", r));
-        lines.push("ret void".to_string());
-        lines
+    fn generate_print_record(&mut self, to_print: String, record_name: &Rc<String>) -> Vec<String> {
+        let sanitized_record_name = record_name.to_string().split("_").next().unwrap().to_string();
+        let g_record_name = self.var().replace("%", "@");
+        self.string_constants
+            .insert(g_record_name.clone(), sanitized_record_name.clone());
+
+        let (v_record_header, c_resolve_record_header) = self.resolve_string_constant(C_RECORD_OPEN_FORMAT_NAME, C_RECORD_OPEN_FORMAT.len());
+        let (v_record_name, c_resolve_record_name) = self.resolve_string_constant(&g_record_name, sanitized_record_name.len());
+        let (v_record_footer, c_resolve_record_footer) = self.resolve_string_constant(C_RECORD_CLOSE_NAME, C_RECORD_CLOSE.len());
+        let (v_separator, c_resolve_separator) = self.resolve_string_constant(C_RECORD_FIELD_SEPARATOR_NAME, C_RECORD_FIELD_SEPARATOR.len());
+
+        let code_print_header = format!("call i32 (i8*, ...) @printf(i8* {}, {} {})", v_record_header, "i8*", v_record_name);
+
+        let mut code = vec![c_resolve_record_header, c_resolve_record_name, c_resolve_separator, code_print_header];
+        let record_type_name = record_name.replace("::", "_");
+        let fields= self.records.get(record_name).unwrap().fields.clone();
+        let mut fields = fields.into_iter().enumerate().peekable();
+        while let Some((field_index,(field_name, field_type))) = fields.next()  {
+            let v_field_value = self.var();
+            code.push(format!(
+                "{}p = getelementptr inbounds %{}, %{}* {}, i32 0, i32 {}",
+                v_field_value, &record_type_name, &record_type_name, to_print, field_index
+            ));
+            let llvm_field_type = to_llvm_type(&field_type);
+            code.push(format!(
+                "{} = load {}, {}* {}p",
+                v_field_value, &llvm_field_type, &llvm_field_type, v_field_value
+            ));
+            code.extend(self.generate_print_code_value(&field_type, v_field_value));
+            // if let Some(_) = fields.peek() {
+            //     code.push(format!("call i32 (i8*, ...) @printf(i8* {})", v_separator))
+            // }
+
+        }
+        code.push(c_resolve_record_footer);
+        code.push(format!("call i32 (i8*, ...) @printf(i8* {})", v_record_footer));
+        code
     }
 
     fn generate_abort(&mut self, message: String) -> Vec<String> {
-        let global_var = self.var().replace("%", "@");
+        let g_message = self.var().replace("%", "@");
         self.string_constants
-            .insert(global_var.clone(), message.clone());
-        let result = self.var();
-        let mut code = Vec::new();
-        code.push(resolve_string_constant(&result, &global_var, message.len()));
-        code.push(format!("call i32 (i8*, ...) @printf(i8* {})", result));
-        let result = self.var();
-        code.push(resolve_string_constant_len(
-            &result,
-            C_NEWLINE_NAME,
-            C_NEWLINE_LENGTH,
-        ));
-        code.push(format!("call i32 (i8*, ...) @printf(i8* {})", result));
-        code.push("call void @exit(i32 1)".to_string());
-        code.push("unreachable".to_string());
-        code
+            .insert(g_message.clone(), message.clone());
+        let (v_message, v_message_code) = self.resolve_string_constant(&g_message, message.len());
+        let (v_nl, v_nl_code) = self.resolve_string_constant_len(C_NEWLINE_NAME, C_NEWLINE_LENGTH);
+
+        vec![
+            v_message_code,
+            format!("call i32 (i8*, ...) @printf(i8* {})", v_message),
+            v_nl_code,
+            format!("call i32 (i8*, ...) @printf(i8* {})", v_nl),
+            "call void @exit(i32 1)".to_string(),
+            "unreachable".to_string()
+        ]
     }
 
     fn generate_function_definition(&mut self, definition: &Rc<FunctionDefinition>) -> String {
         self.open_scope();
-        let (function_arg_types, function_return_type) =
-            match &definition.function_type.as_ref().unwrap().enclosed_type.borrow() {
-                Type::Function(from, to) => (from.iter().cloned().collect(), Rc::clone(to)),
-                _ => (vec![], Rc::clone(&definition.function_type.as_ref().unwrap().enclosed_type)),
-            };
+        let (function_arg_types, function_return_type) = match &definition
+            .function_type
+            .as_ref()
+            .unwrap()
+            .enclosed_type
+            .borrow()
+        {
+            Type::Function(from, to) => (from.iter().cloned().collect(), Rc::clone(to)),
+            _ => (
+                vec![],
+                Rc::clone(&definition.function_type.as_ref().unwrap().enclosed_type),
+            ),
+        };
 
         let mut matches: Vec<String> = Vec::new();
         let mut rules: Vec<String> = Vec::new();
@@ -590,7 +657,7 @@ impl GeneratorState {
                 let mut code = Vec::new();
 
                 code.push(format!(
-                    "{} = getelementptr [{} x i8],[{} x i8]* {}, i64 0, i64 0",
+                    "{} = getelementptr [{} x i8],[{} x i8]* {}, i32 0, i32 0",
                     sc_result,
                     char_result.len() + 1,
                     char_result.len() + 1,
@@ -614,7 +681,7 @@ impl GeneratorState {
                 let sc_result = self.var();
                 let mut code = Vec::new();
                 code.push(format!(
-                    "{} = getelementptr [{} x i8],[{} x i8]* {}, i64 0, i64 0",
+                    "{} = getelementptr [{} x i8],[{} x i8]* {}, i32 0, i32 0",
                     sc_result,
                     sc.len() + 1,
                     sc.len() + 1,
@@ -643,7 +710,7 @@ impl GeneratorState {
                     )],
                 )
             }
-            MatchExpression::Identifier(_,  id) => {
+            MatchExpression::Identifier(_, id) => {
                 self.var_to_type
                     .last_mut()
                     .unwrap()
@@ -665,26 +732,28 @@ impl GeneratorState {
                 let mut code = Vec::new();
                 let record_type_name = record_name.replace("::", "_");
                 let field_vars: Vec<SSAVar> = fields.iter().map(|_| self.var().clone()).collect();
-                let field_name_to_type_index = self
-                    .record_name_to_field_indexing
+                let fields_with_index = self
+                    .records
                     .get(record_name)
                     .unwrap()
-                    .clone();
-                for (field_name, field_var) in fields.iter().zip(field_vars.iter()) {
-                    let (field_type, index) = field_name_to_type_index.get(field_name).unwrap();
+                    .fields
+                    .clone()
+                    .into_iter()
+                    .enumerate();
+                for ((field_index, (field_name, field_type)), field_var) in fields_with_index.into_iter().zip(field_vars.iter()) {
                     self.var_to_type
                         .last_mut()
                         .unwrap()
-                        .insert(Rc::clone(field_name), Rc::clone(field_type));
+                        .insert(Rc::clone(&field_name), Rc::clone(&field_type));
 
                     self.put(field_name.to_string(), field_var.to_string());
                     code.push(format!(
-                        "{}p = getelementptr %{}, %{}* {}, i32 0, i32 {}",
-                        field_var, &record_type_name, &record_type_name, match_on, index
+                        "{}p = getelementptr inbounds %{}, %{}* {}, i32 0, i32 {}",
+                        field_var, &record_type_name, &record_type_name, match_on, field_index
                     ));
-                    let llvm_field_type = to_llvm_type(field_type);
+                    let llvm_field_type = to_llvm_type(&field_type);
                     code.push(format!(
-                        "{} = load {}, {}* {}p",
+                        "{} = load {}, {}* {}p, align 8",
                         field_var, &llvm_field_type, &llvm_field_type, field_var
                     ))
                 }
@@ -721,7 +790,7 @@ impl GeneratorState {
                 self.string_constants
                     .insert(global_var.clone(), string.to_string());
                 vec![format!(
-                    "{} = getelementptr [{} x i8],[{} x i8]* {}, i64 0, i64 0",
+                    "{} = getelementptr [{} x i8],[{} x i8]* {}, i32 0, i32 0",
                     result,
                     string.len() + 1,
                     string.len() + 1,
@@ -735,7 +804,7 @@ impl GeneratorState {
                 self.string_constants
                     .insert(global_var.clone(), char_result.to_string());
                 vec![format!(
-                    "{} = getelementptr [{} x i8],[{} x i8]* {}, i64 0, i64 0",
+                    "{} = getelementptr [{} x i8],[{} x i8]* {}, i32 0, i32 0",
                     result,
                     char_result.len() + 1,
                     char_result.len() + 1,
@@ -755,24 +824,28 @@ impl GeneratorState {
             Expression::EmptyListLiteral(_) => unimplemented!(),
             Expression::ShorthandListLiteral(_, _) => unimplemented!(),
             Expression::LonghandListLiteral(_, _, _) => unimplemented!(),
-            Expression::ADTTypeConstructor(_, _, _) => unimplemented!(),
-            Expression::Record(_, name, fields) => {
+            Expression::ADTTypeConstructor(_, _, _, _) => unimplemented!(),
+            Expression::Record(_, _, name, fields) => {
                 let record_type_name = name.replace("::", "_");
                 let mut code = Vec::new();
                 let field_to_index_type = self
-                    .record_name_to_field_indexing
+                    .records
                     .get(name)
                     .unwrap()
-                    .clone();
+                    .fields
+                    .clone()
+                    .into_iter()
+                    .enumerate();
                 // 1. Allocate memory for the record
-                code.push(format!("{} = alloca %{}", result, record_type_name.clone()));
-                for (n, e) in fields {
-                    let (field_type, field_index) = field_to_index_type.get(n).unwrap();
-                    let (field_result, field_code) = self.generate_expr(e, field_type);
+                code.push(format!("{} = alloca %{}, align 8", result, record_type_name.clone()));
+
+                for (field_index, (field_name, field_type)) in field_to_index_type.into_iter() {
+                    let (_, e) = fields.iter().filter(|(n, _)| n.clone() == field_name).next().unwrap();
+                    let (field_result, field_code) = self.generate_expr(e, &field_type);
                     code.extend(field_code);
                     let field_pointer = self.var();
                     code.push(format!(
-                        "{} = getelementptr %{}, %{}* {}, i32 0, i32 {}",
+                        "{} = getelementptr inbounds %{}, %{}* {}, i32 0, i32 {}",
                         field_pointer,
                         record_type_name.clone(),
                         record_type_name.clone(),
@@ -780,17 +853,17 @@ impl GeneratorState {
                         field_index
                     ));
                     code.push(format!(
-                        "store {} {}, {}* {}",
-                        to_llvm_type(field_type),
+                        "store {} {}, {}* {}, align 8",
+                        to_llvm_type(&field_type),
                         field_result,
-                        to_llvm_type(field_type),
+                        to_llvm_type(&field_type),
                         field_pointer
                     ));
                 }
                 code
             }
             Expression::Case(_, _, _) => unimplemented!(),
-            Expression::Call(_, function_name, arguments) => {
+            Expression::Call(_, _, function_name, arguments) => {
                 let mut code = Vec::new();
                 let mut arguments_vars = Vec::new();
                 for arg in arguments {
@@ -1141,25 +1214,24 @@ impl GeneratorState {
                 ));
                 code
             }
-            Expression::RecordFieldAccess(
-                _,
-                record_name,
-                record_expression,
-                field_expression,
-            ) => {
+            Expression::RecordFieldAccess(_, record_type, record_name, record_expression, field_expression) => {
                 let field_name = match field_expression.borrow() {
                     Expression::Variable(_, field) => Rc::clone(field),
                     _ => unreachable!(),
                 };
                 let (expression_code, record_code) = self.generate_expr(
                     record_expression,
-                    &Rc::new(Type::UserType(Rc::clone(record_name), vec![])),
+                    record_type.as_ref().unwrap(),
                 );
-                let (field_type, field_index) = self
-                    .record_name_to_field_indexing
+                let (field_index, (field_name, field_type)) = self
+                    .records
                     .get(record_name)
                     .unwrap()
-                    .get(&field_name)
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (n, _))| n == &field_name)
+                    .next()
                     .unwrap()
                     .clone();
                 let record_type_name = record_name.replace("::", "_");
@@ -1167,12 +1239,12 @@ impl GeneratorState {
                 code.extend(record_code);
 
                 code.push(format!(
-                    "{}p = getelementptr %{}, %{}* {}, i32 0, i32 {}",
+                    "{}p = getelementptr inbounds %{}, %{}* {}, i32 0, i32 {}",
                     result, &record_type_name, &record_type_name, expression_code, field_index
                 ));
                 let llvm_field_type = to_llvm_type(&field_type);
                 code.push(format!(
-                    "{} = load {}, {}* {}p",
+                    "{} = load {}, {}* {}p, align 8",
                     result, &llvm_field_type, &llvm_field_type, result
                 ));
 
@@ -1224,12 +1296,12 @@ impl GeneratorState {
             Expression::Variable(_, name) => {
                 Rc::clone(self.var_to_type.last().unwrap().get(name).unwrap())
             }
-            Expression::Call(_, f, _) => {
+            Expression::Call(_, _, f, _) => {
                 let f_type = self.function_name_to_type.get(f).unwrap();
                 return_type(f_type)
             }
-            Expression::Record(_, name, _) => {
-                Rc::new(Type::UserType(Rc::new(name.replace("::", "_")), vec![]))
+            Expression::Record(_, record_type, _, _) => {
+                Rc::clone(record_type.as_ref().unwrap())
             }
             _ => unimplemented!("derive_type at {}", e.locate()),
         }

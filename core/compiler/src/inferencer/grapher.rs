@@ -13,7 +13,7 @@ pub fn to_components(
 
     let mut graph = Graph::<Rc<String>, ()>::new();
 
-    for (name, d) in function_definitions {
+    for (name, _) in function_definitions {
         let node = graph.add_node(Rc::clone(name));
         name_to_index.insert(name, node.clone());
         index_to_name.insert(node.clone(), name);

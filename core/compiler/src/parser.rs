@@ -492,9 +492,9 @@ fn to_expression(
                 Rule::and => And(loc_info, Rc::new(lhs), Rc::new(rhs)),
                 Rule::or => Or(loc_info, Rc::new(lhs), Rc::new(rhs)),
                 Rule::record_field_access => {
-                    println!("Record field access op: {:?}", op);
                     RecordFieldAccess(
                         loc_info,
+                        None,
                         Rc::new(op.into_inner().next().unwrap().as_str().to_string()),
                         Rc::new(lhs),
                         Rc::new(rhs),
@@ -537,7 +537,7 @@ fn to_term(
             let arguments = subs
                 .map(|a| Rc::new(to_term(a, module_name, function_name, line_starts)))
                 .collect();
-            Call(loc_info, Rc::new(function.to_string()), arguments)
+            Call(loc_info, None, Rc::new(function.to_string()), arguments)
         }
         Rule::qualifiable_identifier => Variable(loc_info, Rc::new(sub.as_str().to_string())),
         Rule::subexpr => to_expression(
@@ -638,7 +638,7 @@ fn to_term(
             let arguments = elements
                 .map(|e| Rc::new(to_expression(e, module_name, function_name, line_starts)))
                 .collect();
-            ADTTypeConstructor(loc_info, Rc::new(alternative), arguments)
+            ADTTypeConstructor(loc_info, None, Rc::new(alternative), arguments)
         }
 
         Rule::record_term => {
@@ -662,7 +662,7 @@ fn to_term(
                 })
                 .collect();
 
-            Record(loc_info, Rc::new(record_name), field_expressions)
+            Record(loc_info, None, Rc::new(record_name), field_expressions)
         }
         Rule::lambda => {
             let mut elements = sub.into_inner();
@@ -685,7 +685,12 @@ fn to_term(
                 function_name,
                 line_starts,
             );
-            Lambda(loc_info, HashMap::new(), argument_match_expressions, Rc::new(body))
+            Lambda(
+                loc_info,
+                HashMap::new(),
+                argument_match_expressions,
+                Rc::new(body),
+            )
         }
 
         r => panic!("Reached term {:#?}", r),

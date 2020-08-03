@@ -270,7 +270,7 @@ adt_definition = {
     adt_contructor = {capital_identifier ~ loz_type_term*}
 
 record_definition = {
-    "::" ~ capital_identifier ~ record_type_variable ~ "=" ~ NEWLINE? ~ "{" ~ NEWLINE? ~ record_field_definitions ~ NEWLINE? ~ "}" ~ NEWLINE?
+    "::" ~ capital_identifier ~ record_type_variable ~ "=" ~ NEWLINE? ~ "{" ~ NEWLINE? ~ record_field_definitions ~ NEWLINE* ~ "}" ~ NEWLINE?
 }
     record_type_variable = { identifier* }
     record_field_definitions = { record_field_definition ~ (NEWLINE? ~ "," ~ NEWLINE? ~ record_field_definition)*}

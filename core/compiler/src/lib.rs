@@ -40,7 +40,7 @@ pub enum Import {
 
 pub type TypeVar = String;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Type {
     Bool,
     Char,
@@ -70,7 +70,7 @@ pub struct RecordDefinition {
     pub name: Rc<String>,
     pub location: Rc<Location>,
     pub type_variables: Vec<Rc<String>>,
-    pub fields: HashMap<Rc<String>, Rc<Type>>,
+    pub fields: Vec<(Rc<String>, Rc<Type>)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -176,10 +176,10 @@ impl Expression {
             EmptyListLiteral(loc) => Rc::clone(loc),
             ShorthandListLiteral(loc, _) => Rc::clone(loc),
             LonghandListLiteral(loc, _, _) => Rc::clone(loc),
-            ADTTypeConstructor(loc, _, _) => Rc::clone(loc),
-            Record(loc, _, _) => Rc::clone(loc),
+            ADTTypeConstructor(loc, _, _, _) => Rc::clone(loc),
+            Record(loc, _, _, _) => Rc::clone(loc),
             Case(loc, _, _) => Rc::clone(loc),
-            Call(loc, _, _) => Rc::clone(loc),
+            Call(loc, _, _, _) => Rc::clone(loc),
             Variable(loc, _) => Rc::clone(loc),
             Negation(loc, _) => Rc::clone(loc),
             Minus(loc, _) => Rc::clone(loc),
@@ -198,7 +198,7 @@ impl Expression {
             Neq(loc, _, _) => Rc::clone(loc),
             And(loc, _, _) => Rc::clone(loc),
             Or(loc, _, _) => Rc::clone(loc),
-            RecordFieldAccess(loc, _, _, _) => Rc::clone(loc),
+            RecordFieldAccess(loc, _, _, _, _) => Rc::clone(loc),
             Lambda(loc, _, _, _) => Rc::clone(loc),
         }
     }
@@ -239,10 +239,10 @@ impl Expression {
             Expression::LonghandListLiteral(_, e1, e2) => {
                 Expression::dual_references(e1, e2, include_variables)
             }
-            Expression::ADTTypeConstructor(_, _, expressions) => {
+            Expression::ADTTypeConstructor(_, _, _, expressions) => {
                 Expression::list_references(expressions, include_variables)
             }
-            Expression::Record(_, _, expressions) => Expression::list_references(
+            Expression::Record(_, _, _, expressions) => Expression::list_references(
                 &expressions.into_iter().map(|(_, e)| e.clone()).collect(),
                 include_variables,
             ),
@@ -257,7 +257,7 @@ impl Expression {
 
                 fs
             }
-            Expression::Call(loc, f, expressions) => {
+            Expression::Call(loc, _, f, expressions) => {
                 let mut fs = HashSet::new();
                 fs.insert((f.clone(), loc.clone()));
                 fs.extend(Expression::list_references(&expressions, include_variables));
@@ -284,7 +284,7 @@ impl Expression {
             Expression::Neq(_, l, r) => Expression::dual_references(l, r, include_variables),
             Expression::And(_, l, r) => Expression::dual_references(l, r, include_variables),
             Expression::Or(_, l, r) => Expression::dual_references(l, r, include_variables),
-            Expression::RecordFieldAccess(_, _, l, r) => {
+            Expression::RecordFieldAccess(_, _, _, l, r) => {
                 Expression::dual_references(l, r, include_variables)
             }
             Expression::Lambda(_, _, me, e) => {
@@ -372,7 +372,7 @@ pub fn body_references(
     for me in &b.match_expressions {
         local_references.extend(me.variables());
     }
-    for (n, d) in &b.local_function_definitions {
+    for (n, _) in &b.local_function_definitions {
         local_references.insert(Rc::clone(n));
     }
 

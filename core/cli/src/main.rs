@@ -103,7 +103,7 @@ fn main() {
             }
             Err(error) => {
                 println!("{}", error);
-                return;
+                exit(1)
             }
         };
 
@@ -139,6 +139,7 @@ fn main() {
     println!("Compiling code using LLVM...");
     let c = match Command::new("clang")
         .arg(llvm_ir_path)
+        .arg("-g")
         .arg("-o")
         .arg(format!("target/{}.exe", module_name))
         .output()

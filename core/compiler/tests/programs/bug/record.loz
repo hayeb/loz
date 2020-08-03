@@ -1,7 +1,0 @@
-test r
-# f = r.f
-= f 1 1
-
-:: F = { f :: (Int Int -> Int), s :: Int }
-
-main = test {F|f = \x y. x + y, s = 0}

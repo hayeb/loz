@@ -1,7 +1,0 @@
-:: T = {
-    text :: String,
-    number :: Int,
-    option :: Bool
-}
-
-main = {T| text = "This is a test", number = 1, option = false}
