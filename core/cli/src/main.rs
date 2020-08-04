@@ -107,55 +107,11 @@ fn main() {
             }
         };
 
-    let module_name = typed_main_module.name.clone();
     let runtime_module = rewrite(typed_main_module, typed_modules);
-    let generated_code = generate(runtime_module);
-
-    // 1. Write code to temporary file
-    let output_file_name = format!("target/{}.ll", module_name);
-    let llvm_ir_path = Path::new(&output_file_name);
-    let mut llvm_ir_file = match File::create(&llvm_ir_path) {
-        Err(e) => {
-            eprintln!(
-                "Error creating file {} for generator output: {}",
-                llvm_ir_path.display(),
-                e
-            );
-            exit(17)
-        }
-        Ok(f) => f,
-    };
-
-    println!("Writing {} bytes to LLVM IR file...", generated_code.len());
-    if let Err(e) = llvm_ir_file.write_all(generated_code.as_bytes()) {
-        println!(
-            "Error writing to LLVM IR file {}: {}",
-            llvm_ir_path.display(),
-            e
-        );
-        exit(5)
+    match generate(runtime_module, &Path::new("target/")) {
+        Ok(_) => return,
+        Err(msg) => eprintln!("Error during code generation: {}", msg)
     }
 
-    println!("Compiling code using LLVM...");
-    let c = match Command::new("clang")
-        .arg(llvm_ir_path)
-        .arg("-g")
-        .arg("-o")
-        .arg(format!("target/{}.exe", module_name))
-        .output()
-    {
-        Err(e) => {
-            println!("Error status running clang on IR: {}", e);
-            exit(10)
-        }
-        Ok(r) => r,
-    };
 
-    if !c.status.success() {
-        println!(
-            "Errorcode {} compiling code with clang: \n{}",
-            c.status.code().unwrap(),
-            String::from_utf8(c.stderr).unwrap()
-        )
-    }
 }
