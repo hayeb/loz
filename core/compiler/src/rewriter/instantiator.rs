@@ -3,6 +3,7 @@ use std::hash::{Hash, Hasher};
 
 use crate::inferencer::substitutor::{substitute, substitute_type, Substitutions};
 use crate::inferencer::unifier::unify;
+use crate::MONOMORPHIC_PREFIX;
 
 use super::*;
 
@@ -359,7 +360,7 @@ impl InstantiatorState {
                 name: Rc::clone(&function_definition.name),
                 function_type: Some(Rc::new(TypeScheme {
                     bound_variables: HashSet::new(),
-                    enclosed_type: instantiated_type
+                    enclosed_type: instantiated_type,
                 })),
                 function_bodies: instantiated_bodies,
             }),
@@ -554,7 +555,7 @@ impl InstantiatorState {
                             .collect(),
                     )),
                 )
-                .unwrap();
+                    .unwrap();
 
                 let mut instantiated_field_expressions = Vec::new();
                 let mut instantiated = Instantiated::new();
@@ -792,7 +793,7 @@ impl InstantiatorState {
     ) -> (Rc<String>, Vec<Rc<Expression>>, Instantiated) {
         let function_definition = self.function_definitions.get(name).unwrap();
         let type_hash = hash(function_type);
-        let call_name = Rc::new(format!("{}__{}", name, type_hash));
+        let call_name = Rc::new(format!("{}{}{}", name, MONOMORPHIC_PREFIX, type_hash));
 
         let subs = unify(
             function_type,
@@ -802,7 +803,7 @@ impl InstantiatorState {
                 .unwrap()
                 .enclosed_type,
         )
-        .unwrap();
+            .unwrap();
 
         let mut resolved_arguments = Vec::new();
         let mut instantiated = Instantiated::new();

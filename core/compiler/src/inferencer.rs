@@ -1259,7 +1259,7 @@ impl InferencerState {
 
                 let undefined_fields: Vec<Rc<String>> = fields
                     .into_iter()
-                    .filter(|n| !record_definition.fields.iter().any(|(k, v)| &k == n))
+                    .filter(|n| !record_definition.fields.iter().any(|(k, _)| &k == n))
                     .map(|n| Rc::clone(n))
                     .collect();
 
@@ -1292,7 +1292,7 @@ impl InferencerState {
                                 .iter()
                                 .map(|(l, r)| (Rc::clone(l), Rc::clone(r)))
                                 .collect(),
-                            &record_definition.fields.iter().filter(|(k, v)| k == field).next().unwrap().1,
+                            &record_definition.fields.iter().filter(|(k, _)| k == field).next().unwrap().1,
                         ),
                     );
                 }

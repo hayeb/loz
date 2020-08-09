@@ -6,9 +6,7 @@ use clap::{App, Arg};
 use loz_compiler::generator::generate;
 use loz_compiler::module_system::{compile_modules, CompilerOptions};
 use loz_compiler::rewriter::rewrite;
-use std::fs::File;
-use std::io::Write;
-use std::process::{exit, Command};
+use std::process::{exit};
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 

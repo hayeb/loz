@@ -529,7 +529,7 @@ fn to_term(
         Rule::char_literal => {
             CharacterLiteral(loc_info, sub.as_str().to_string().chars().nth(1).unwrap())
         }
-        Rule::number => IntegerLiteral(loc_info, sub.as_str().parse::<isize>().unwrap()),
+        Rule::number => IntegerLiteral(loc_info, sub.as_str().parse::<i64>().unwrap()),
         Rule::float => FloatLiteral(loc_info, sub.as_str().parse::<f64>().unwrap()),
         Rule::call => {
             let mut subs = sub.into_inner();
@@ -859,7 +859,7 @@ fn to_match_expression(
         }
         Rule::number => MatchExpression::IntLiteral(
             Rc::clone(&loc_info),
-            match_expression.as_str().parse::<isize>().unwrap(),
+            match_expression.as_str().parse::<i64>().unwrap(),
         ),
         Rule::char_literal => MatchExpression::CharLiteral(
             Rc::clone(&loc_info),

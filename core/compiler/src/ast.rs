@@ -40,7 +40,7 @@ pub enum Expression {
     BoolLiteral(Rc<Location>, bool),
     StringLiteral(Rc<Location>, Rc<String>),
     CharacterLiteral(Rc<Location>, char),
-    IntegerLiteral(Rc<Location>, isize),
+    IntegerLiteral(Rc<Location>, i64),
     FloatLiteral(Rc<Location>, f64),
 
     TupleLiteral(Rc<Location>, Vec<Rc<Expression>>),
@@ -116,7 +116,7 @@ pub struct CaseRule {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MatchExpression {
-    IntLiteral(Rc<Location>, isize),
+    IntLiteral(Rc<Location>, i64),
     CharLiteral(Rc<Location>, char),
     StringLiteral(Rc<Location>, Rc<String>),
     BoolLiteral(Rc<Location>, bool),

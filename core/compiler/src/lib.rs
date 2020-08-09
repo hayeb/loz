@@ -19,6 +19,9 @@ pub mod parser;
 pub mod printer;
 pub mod rewriter;
 
+pub const MODULE_SEPARATOR: &str = "::";
+pub const MONOMORPHIC_PREFIX: &str = "$$";
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Location {
     pub module: Rc<String>,
