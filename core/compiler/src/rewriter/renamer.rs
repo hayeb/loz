@@ -912,18 +912,35 @@ impl RenamerState {
                 self.rewrite_expression(el, current_scope_name, imported_modules, module_aliases),
                 self.rewrite_expression(er, current_scope_name, imported_modules, module_aliases),
             ),
-            Expression::RecordFieldAccess(l, record_type, record_name, re, fe) => Expression::RecordFieldAccess(
-                Rc::clone(l),
-                Some(self.rewrite_type(record_type.as_ref().unwrap(), current_scope_name, imported_modules, module_aliases)),
-                self.rewrite_type_name(
-                    record_name,
-                    current_scope_name,
-                    imported_modules,
-                    module_aliases,
-                ),
-                self.rewrite_expression(re, current_scope_name, imported_modules, module_aliases),
-                self.rewrite_expression(fe, current_scope_name, imported_modules, module_aliases),
-            ),
+            Expression::RecordFieldAccess(l, record_type, record_name, re, fe) => {
+                Expression::RecordFieldAccess(
+                    Rc::clone(l),
+                    Some(self.rewrite_type(
+                        record_type.as_ref().unwrap(),
+                        current_scope_name,
+                        imported_modules,
+                        module_aliases,
+                    )),
+                    self.rewrite_type_name(
+                        record_name,
+                        current_scope_name,
+                        imported_modules,
+                        module_aliases,
+                    ),
+                    self.rewrite_expression(
+                        re,
+                        current_scope_name,
+                        imported_modules,
+                        module_aliases,
+                    ),
+                    self.rewrite_expression(
+                        fe,
+                        current_scope_name,
+                        imported_modules,
+                        module_aliases,
+                    ),
+                )
+            }
             Expression::Lambda(l, type_information, es, e) => Expression::Lambda(
                 Rc::clone(l),
                 type_information.clone(),

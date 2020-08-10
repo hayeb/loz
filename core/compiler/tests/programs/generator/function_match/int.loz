@@ -2,4 +2,4 @@ f 0 = 1
 f 1 = 2
 f 2 = 3
 
-main = f 4
+main = f 2

@@ -241,7 +241,7 @@ impl InstantiatorState {
 
                     let instantiated_type = substitute_type(&subs, &record_type);
                     let type_hash = hash(&instantiated_type);
-                    let instantiated_record_name = Rc::new(format!("{}_{}", &name, type_hash));
+                    let instantiated_record_name = Rc::new(format!("{}{}{}", &name, MONOMORPHIC_PREFIX, type_hash));
 
                     let mut instantiated = Instantiated::new();
                     instantiated.records.insert(
@@ -257,7 +257,19 @@ impl InstantiatorState {
                                 .collect(),
                         }),
                     );
-                    (Rc::new(Type::UserType(Rc::clone(&instantiated_record_name), record_definition.type_variables.iter().map(|v| substitute_type(&subs, &Rc::new(Type::Variable(Rc::clone(v))))).collect())), instantiated)
+                    (
+                        Rc::new(Type::UserType(
+                            Rc::clone(&instantiated_record_name),
+                            record_definition
+                                .type_variables
+                                .iter()
+                                .map(|v| {
+                                    substitute_type(&subs, &Rc::new(Type::Variable(Rc::clone(v))))
+                                })
+                                .collect(),
+                        )),
+                        instantiated,
+                    )
                 } else if let Some(adt_definition) = self.adt_definitions.get(name) {
                     let adt_type = Rc::new(Type::UserType(
                         Rc::clone(&name),
@@ -352,7 +364,13 @@ impl InstantiatorState {
             instantiated_bodies.push(function_body);
         }
 
-        let (instantiated_type, new_instantiated) = self.resolve_type(&function_definition.function_type.as_ref().unwrap().enclosed_type);
+        let (instantiated_type, new_instantiated) = self.resolve_type(
+            &function_definition
+                .function_type
+                .as_ref()
+                .unwrap()
+                .enclosed_type,
+        );
         instantiated.merge(new_instantiated);
         (
             Rc::new(FunctionDefinition {
@@ -527,7 +545,8 @@ impl InstantiatorState {
                     instantiated_arguments.push(instantiated_argument);
                 }
 
-                let (instantiated_record_type, new_instantiated) = self.resolve_type(adt_type.as_ref().unwrap());
+                let (instantiated_record_type, new_instantiated) =
+                    self.resolve_type(adt_type.as_ref().unwrap());
                 instantiated.merge(new_instantiated);
                 (
                     Rc::new(Expression::ADTTypeConstructor(
@@ -542,7 +561,7 @@ impl InstantiatorState {
             Expression::Record(loc, record_type, record_name, field_expressions) => {
                 let record_definition = self.record_definitions.get(record_name).unwrap();
                 let type_hash = hash(record_type.as_ref().unwrap());
-                let new_record_name = Rc::new(format!("{}_{}", record_name, type_hash));
+                let new_record_name = Rc::new(format!("{}{}{}", record_name, MONOMORPHIC_PREFIX, type_hash));
 
                 let subs = unify(
                     record_type.as_ref().unwrap(),
@@ -555,7 +574,7 @@ impl InstantiatorState {
                             .collect(),
                     )),
                 )
-                    .unwrap();
+                .unwrap();
 
                 let mut instantiated_field_expressions = Vec::new();
                 let mut instantiated = Instantiated::new();
@@ -571,7 +590,8 @@ impl InstantiatorState {
                         .push((Rc::clone(field_name), instantiated_field_expression));
                 }
 
-                let (instantiated_record_type, new_instantiated) = self.resolve_type(record_type.as_ref().unwrap());
+                let (instantiated_record_type, new_instantiated) =
+                    self.resolve_type(record_type.as_ref().unwrap());
                 instantiated.merge(new_instantiated);
                 (
                     Rc::new(Expression::Record(
@@ -753,7 +773,8 @@ impl InstantiatorState {
             ) => {
                 let (instantiated_expression, new_instantiated) =
                     self.resolve_expression(record_expression, type_information);
-                let new_record_name = format!("{}_{}", record_name, hash(record_type.as_ref().unwrap()));
+                let new_record_name =
+                    format!("{}_{}", record_name, hash(record_type.as_ref().unwrap()));
                 (
                     Rc::new(Expression::RecordFieldAccess(
                         Rc::clone(loc),
@@ -803,7 +824,7 @@ impl InstantiatorState {
                 .unwrap()
                 .enclosed_type,
         )
-            .unwrap();
+        .unwrap();
 
         let mut resolved_arguments = Vec::new();
         let mut instantiated = Instantiated::new();
@@ -924,7 +945,11 @@ fn substitute_function_body(
             .map(|(n, t)| (n.clone(), Rc::new(substitute(substitutions, t))))
             .collect(),
         match_expressions: target.match_expressions.clone(),
-        rules: target.rules.iter().map(|r| substitute_function_rule(substitutions, r)).collect(),
+        rules: target
+            .rules
+            .iter()
+            .map(|r| substitute_function_rule(substitutions, r))
+            .collect(),
 
         // These are no longer present at this stage.
         local_function_definitions: HashMap::new(),
@@ -1136,7 +1161,9 @@ fn substitute_expression(substitutions: &Substitutions, target: &Rc<Expression>)
         Expression::RecordFieldAccess(loc, record_type, record, expression, field) => {
             Expression::RecordFieldAccess(
                 Rc::clone(loc),
-                record_type.as_ref().map(|t| substitute_type(substitutions, t)),
+                record_type
+                    .as_ref()
+                    .map(|t| substitute_type(substitutions, t)),
                 Rc::clone(record),
                 substitute_expression(substitutions, expression),
                 Rc::clone(field),

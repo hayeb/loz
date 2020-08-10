@@ -6,7 +6,7 @@ use clap::{App, Arg};
 use loz_compiler::generator::generate;
 use loz_compiler::module_system::{compile_modules, CompilerOptions};
 use loz_compiler::rewriter::rewrite;
-use std::process::{exit};
+use std::process::exit;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -108,8 +108,6 @@ fn main() {
     let runtime_module = rewrite(typed_main_module, typed_modules);
     match generate(runtime_module, &Path::new("target/")) {
         Ok(_) => return,
-        Err(msg) => eprintln!("Error during code generation: {}", msg)
+        Err(msg) => eprintln!("Error during code generation: {}", msg),
     }
-
-
 }

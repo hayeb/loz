@@ -3,12 +3,12 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Error, Formatter};
 use std::rc::Rc;
 
-use crate::{ADTDefinition, Location, RecordDefinition, Type, TypeScheme};
 use crate::ast::{
     CaseRule, Expression, FunctionBody, FunctionDefinition, FunctionRule, MatchExpression, Module,
 };
 use crate::inferencer::substitutor::{substitute, substitute_list, substitute_type, Substitutions};
 use crate::inferencer::unifier::{unify, unify_one_of};
+use crate::{ADTDefinition, Location, RecordDefinition, Type, TypeScheme};
 
 mod grapher;
 pub mod substitutor;
@@ -161,7 +161,7 @@ pub struct InferencerOptions {
 }
 
 struct InferencerState {
-    type_variable_iterator: Box<dyn Iterator<Item=Rc<String>>>,
+    type_variable_iterator: Box<dyn Iterator<Item = Rc<String>>>,
     options: InferencerOptions,
 
     frames: Vec<InferencerFrame>,
@@ -1108,10 +1108,10 @@ impl InferencerState {
                     &loc,
                     unify(&Rc::new(Type::Tuple(element_types)), &expected_type),
                 )
-                    .map(|mut r| {
-                        r.extend(union_subs);
-                        r
-                    })?
+                .map(|mut r| {
+                    r.extend(union_subs);
+                    r
+                })?
             }
             MatchExpression::LonghandList(loc, head, tail) => {
                 let fresh_head = self.fresh();
@@ -1219,10 +1219,10 @@ impl InferencerState {
                         expected_type,
                     ),
                 )
-                    .map(|mut r| {
-                        r.extend(union_subs);
-                        r
-                    })?
+                .map(|mut r| {
+                    r.extend(union_subs);
+                    r
+                })?
             }
             MatchExpression::ShorthandList(loc, elements) => {
                 let mut element_type = self.fresh();
@@ -1239,10 +1239,10 @@ impl InferencerState {
                     &loc,
                     unify(&Rc::new(Type::List(element_type)), expected_type),
                 )
-                    .map(|mut r| {
-                        r.extend(union_subs);
-                        r
-                    })?
+                .map(|mut r| {
+                    r.extend(union_subs);
+                    r
+                })?
             }
 
             MatchExpression::Wildcard(_loc) => Vec::new(),
@@ -1292,7 +1292,13 @@ impl InferencerState {
                                 .iter()
                                 .map(|(l, r)| (Rc::clone(l), Rc::clone(r)))
                                 .collect(),
-                            &record_definition.fields.iter().filter(|(k, _)| k == field).next().unwrap().1,
+                            &record_definition
+                                .fields
+                                .iter()
+                                .filter(|(k, _)| k == field)
+                                .next()
+                                .unwrap()
+                                .1,
                         ),
                     );
                 }
@@ -1362,16 +1368,16 @@ impl InferencerState {
             loc,
             unify(&type_transformer(name, &l_type, &r_type), expected_type),
         )
-            .map(|rs| {
-                let mut ns = Vec::new();
-                ns.extend(subs_l_1);
-                ns.extend(subs_l_2);
-                ns.extend(subs_r_1);
-                ns.extend(subs_r_2);
-                ns.extend(subs_e);
-                ns.extend(rs);
-                ((inferred_l, inferred_r), ns)
-            })
+        .map(|rs| {
+            let mut ns = Vec::new();
+            ns.extend(subs_l_1);
+            ns.extend(subs_l_2);
+            ns.extend(subs_r_1);
+            ns.extend(subs_r_2);
+            ns.extend(subs_e);
+            ns.extend(rs);
+            ((inferred_l, inferred_r), ns)
+        })
     }
 
     fn infer_expression(
@@ -1740,7 +1746,12 @@ impl InferencerState {
                     }
                 };
 
-                let field_type = match record_definition.fields.iter().filter(|(k, v)| k == field).next() {
+                let field_type = match record_definition
+                    .fields
+                    .iter()
+                    .filter(|(k, _)| k == field)
+                    .next()
+                {
                     Some((_, field_type)) => field_type,
                     None => {
                         return Err(vec![InferenceError::from_loc(
@@ -1753,18 +1764,25 @@ impl InferencerState {
                     }
                 };
 
-                let subs = map_unify(loc, unify(field_type, expected_type))
-                    .map(|s| {
-                        let mut ns = Vec::new();
-                        ns.extend(subs_lhs);
-                        ns.extend(s);
-                        ns
-                    })?;
+                let subs = map_unify(loc, unify(field_type, expected_type)).map(|s| {
+                    let mut ns = Vec::new();
+                    ns.extend(subs_lhs);
+                    ns.extend(s);
+                    ns
+                })?;
                 (
                     Expression::RecordFieldAccess(
                         Rc::clone(loc),
-                        Some(Rc::new(Type::UserType(Rc::clone(name), record_definition.type_variables.iter()
-                            .map(|tv| substitute_type(&subs, &Rc::new(Type::Variable(Rc::clone(tv))))).collect()))),
+                        Some(Rc::new(Type::UserType(
+                            Rc::clone(name),
+                            record_definition
+                                .type_variables
+                                .iter()
+                                .map(|tv| {
+                                    substitute_type(&subs, &Rc::new(Type::Variable(Rc::clone(tv))))
+                                })
+                                .collect(),
+                        ))),
                         Rc::clone(name),
                         inferred_l,
                         Rc::clone(r),
@@ -1829,9 +1847,9 @@ impl InferencerState {
                 }
                 let subs = map_unify(loc, unify(&Rc::new(Type::List(list_type)), &expected_type))
                     .map(|mut r| {
-                        r.extend(union_subs);
-                        r
-                    })?;
+                    r.extend(union_subs);
+                    r
+                })?;
                 (
                     Expression::ShorthandListLiteral(Rc::clone(loc), inferred_elements),
                     subs,
@@ -1994,7 +2012,7 @@ impl InferencerState {
 
                 let undefined_fields: Vec<Rc<String>> = fields
                     .iter()
-                    .filter(|(n, _)| !record_definition.fields.iter().any(|(k, v)| k == n))
+                    .filter(|(n, _)| !record_definition.fields.iter().any(|(k, _)| k == n))
                     .map(|(n, _)| Rc::clone(n))
                     .collect();
 
@@ -2264,13 +2282,13 @@ impl InferencerState {
                         &expected_type,
                     ),
                 )
-                    .map(|rs| {
-                        let mut ns = Vec::new();
-                        ns.extend(union_subs);
-                        ns.extend(subs);
-                        ns.extend(rs);
-                        ns
-                    })?;
+                .map(|rs| {
+                    let mut ns = Vec::new();
+                    ns.extend(union_subs);
+                    ns.extend(subs);
+                    ns.extend(rs);
+                    ns
+                })?;
                 (
                     Expression::Lambda(
                         Rc::clone(loc),

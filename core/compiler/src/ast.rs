@@ -96,7 +96,13 @@ pub enum Expression {
     And(Rc<Location>, Rc<Expression>, Rc<Expression>),
     Or(Rc<Location>, Rc<Expression>, Rc<Expression>),
 
-    RecordFieldAccess(Rc<Location>, Option<Rc<Type>>, Rc<String>, Rc<Expression>, Rc<Expression>),
+    RecordFieldAccess(
+        Rc<Location>,
+        Option<Rc<Type>>,
+        Rc<String>,
+        Rc<Expression>,
+        Rc<Expression>,
+    ),
 
     Lambda(
         Rc<Location>,

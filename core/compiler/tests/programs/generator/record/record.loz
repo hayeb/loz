@@ -1,4 +1,3 @@
-
 :: T = {
     text :: String,
     option :: Bool,

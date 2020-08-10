@@ -491,15 +491,13 @@ fn to_expression(
                 Rule::neq => Neq(loc_info, Rc::new(lhs), Rc::new(rhs)),
                 Rule::and => And(loc_info, Rc::new(lhs), Rc::new(rhs)),
                 Rule::or => Or(loc_info, Rc::new(lhs), Rc::new(rhs)),
-                Rule::record_field_access => {
-                    RecordFieldAccess(
-                        loc_info,
-                        None,
-                        Rc::new(op.into_inner().next().unwrap().as_str().to_string()),
-                        Rc::new(lhs),
-                        Rc::new(rhs),
-                    )
-                }
+                Rule::record_field_access => RecordFieldAccess(
+                    loc_info,
+                    None,
+                    Rc::new(op.into_inner().next().unwrap().as_str().to_string()),
+                    Rc::new(lhs),
+                    Rc::new(rhs),
+                ),
                 r => panic!("Prec climber unhandled rule: {:#?}", r),
             }
         },
