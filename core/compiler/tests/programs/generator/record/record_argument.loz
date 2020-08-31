@@ -1,0 +1,7 @@
+:: T a = {
+    a :: a
+}
+
+f {T|a} = a
+
+main = (f {T|a = "This is a test"}, f {T| a = 18})

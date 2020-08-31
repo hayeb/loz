@@ -1,0 +1,8 @@
+:: T = {
+    number :: Int,
+    text :: String
+}
+
+f {T|number, text} = text
+
+main = f {T|number = 1, text = "Lorem ipsum"}

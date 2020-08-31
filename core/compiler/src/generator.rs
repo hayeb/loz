@@ -34,7 +34,6 @@ use std::path::Path;
 use std::process::Command;
 use std::rc::Rc;
 
-use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 use inkwell::attributes::AttributeLoc;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
@@ -45,11 +44,12 @@ use inkwell::targets::{
 };
 use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue};
+use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 use itertools::{EitherOrBoth, Itertools};
 
-use crate::{ADTDefinition, MODULE_SEPARATOR, MONOMORPHIC_PREFIX, RecordDefinition, Type};
 use crate::ast::{Expression, FunctionBody, FunctionDefinition, FunctionRule, MatchExpression};
 use crate::rewriter::RuntimeModule;
+use crate::{ADTDefinition, RecordDefinition, Type, MODULE_SEPARATOR, MONOMORPHIC_PREFIX};
 
 pub fn generate(runtime_module: Rc<RuntimeModule>, output_directory: &Path) -> Result<(), String> {
     let context = Context::create();
@@ -166,11 +166,12 @@ impl<'a> GeneratorState<'a> {
 
         self.generate_c_stdlib_definitions();
         self.generate_records(g);
+        self.generate_adts(g);
 
         let main_type = &self
             .functions
             .iter()
-            .filter(|(n, d)| n.ends_with("::main"))
+            .filter(|(n, _)| n.ends_with("::main"))
             .next()
             .as_ref()
             .unwrap()
@@ -205,7 +206,14 @@ impl<'a> GeneratorState<'a> {
     }
 
     fn generate_c_stdlib_definitions(&self) {
-        self.module.add_function("malloc", self.llvm_context.i8_type().ptr_type(AddressSpace::Generic).fn_type(&[self.llvm_context.i64_type().as_basic_type_enum()], false), Some(Linkage::External));
+        self.module.add_function(
+            "malloc",
+            self.llvm_context
+                .i8_type()
+                .ptr_type(AddressSpace::Generic)
+                .fn_type(&[self.llvm_context.i64_type().as_basic_type_enum()], false),
+            Some(Linkage::External),
+        );
         self.module.add_function(
             "puts",
             self.llvm_context.i32_type().fn_type(
@@ -269,7 +277,8 @@ impl<'a> GeneratorState<'a> {
     fn generate_records(&self, _g: &mut VarGenerator) {
         for r in self.records.values() {
             let struct_type = self.llvm_context.opaque_struct_type(&r.name);
-            let field_types = r.fields
+            let field_types = r
+                .fields
                 .iter()
                 .map(|(_, t)| self.to_llvm_type(t).as_basic_type_enum())
                 .collect::<Vec<BasicTypeEnum>>();
@@ -278,7 +287,26 @@ impl<'a> GeneratorState<'a> {
     }
 
     fn generate_adts(&self, _g: &mut VarGenerator) {
-        unimplemented!("Generating ADT types")
+        for adt in self.adts.values() {
+            let field_tag_type = self.llvm_context.i8_type().as_basic_type_enum();
+            let field_content_size = adt.constructors
+                .values()
+                .map(|c| c.elements.iter().map(|e| self.llvm_type_size(e)).sum())
+                .max()
+                .unwrap();
+
+            for (cname, cdef) in adt.constructors.iter() {
+                let constructor_struct_type = self.llvm_context.opaque_struct_type(&format!("{}__{}", adt.name, cname));
+                let mut argument_types = cdef.elements.iter()
+                    .map(|e| self.to_llvm_type(e).as_basic_type_enum())
+                    .collect::<Vec<BasicTypeEnum>>();
+                argument_types.insert(0, field_tag_type);
+                constructor_struct_type.set_body(argument_types.as_slice(), false);
+            }
+
+            let adt_struct_type = self.llvm_context.opaque_struct_type(&adt.name);
+            adt_struct_type.set_body(&[field_tag_type, self.llvm_context.i8_type().array_type(field_content_size).as_basic_type_enum()], false);
+        }
     }
 
     fn generate_function_definitions(&self, _g: &mut VarGenerator) -> Vec<FunctionValue> {
@@ -297,8 +325,9 @@ impl<'a> GeneratorState<'a> {
                 .map(|a| self.to_llvm_type(a).as_basic_type_enum())
                 .collect::<Vec<BasicTypeEnum>>();
             let llvm_arguments = llvm_arguments.as_slice();
-            let function_type =
-                self.to_llvm_type(return_type).fn_type(llvm_arguments, false);
+            let function_type = self
+                .to_llvm_type(return_type)
+                .fn_type(llvm_arguments, false);
             function_values.push(self.module.add_function(
                 &function_definition.name,
                 function_type,
@@ -513,14 +542,14 @@ impl<'a> GeneratorState<'a> {
         }
     }
 
-    fn generate_match_expression<'b>(
+    fn generate_match_expression(
         &self,
         g: &mut VarGenerator,
         me: &Rc<MatchExpression>,
-        match_value: BasicValueEnum<'b>,
+        match_value: BasicValueEnum<'a>,
         match_block: BasicBlock,
         no_match_block: BasicBlock,
-    ) -> HashMap<Rc<String>, BasicValueEnum<'b>> {
+    ) -> HashMap<Rc<String>, BasicValueEnum<'a>> {
         let mut value_information = HashMap::new();
         match me.borrow() {
             MatchExpression::IntLiteral(_, i) => {
@@ -545,7 +574,12 @@ impl<'a> GeneratorState<'a> {
                     .left()
                     .unwrap()
                     .into_int_value();
-                let eq = self.builder.build_int_compare(IntPredicate::EQ, compared, self.llvm_context.i32_type().const_int(0, false), &g.var());
+                let eq = self.builder.build_int_compare(
+                    IntPredicate::EQ,
+                    compared,
+                    self.llvm_context.i32_type().const_int(0, false),
+                    &g.var(),
+                );
 
                 self.builder
                     .build_conditional_branch(eq, match_block, no_match_block);
@@ -560,13 +594,25 @@ impl<'a> GeneratorState<'a> {
                     .left()
                     .unwrap()
                     .into_int_value();
-                let eq = self.builder.build_int_compare(IntPredicate::EQ, compared, self.llvm_context.i32_type().const_int(0, false), &g.var());
+                let eq = self.builder.build_int_compare(
+                    IntPredicate::EQ,
+                    compared,
+                    self.llvm_context.i32_type().const_int(0, false),
+                    &g.var(),
+                );
 
                 self.builder
                     .build_conditional_branch(eq, match_block, no_match_block);
             }
             MatchExpression::BoolLiteral(_, b) => {
-                let eq = self.builder.build_int_compare(IntPredicate::EQ, self.llvm_context.bool_type().const_int(if *b { 1 } else { 0 }, false), match_value.into_int_value(), &g.var());
+                let eq = self.builder.build_int_compare(
+                    IntPredicate::EQ,
+                    self.llvm_context
+                        .bool_type()
+                        .const_int(if *b { 1 } else { 0 }, false),
+                    match_value.into_int_value(),
+                    &g.var(),
+                );
                 self.builder
                     .build_conditional_branch(eq, match_block, no_match_block);
             }
@@ -579,7 +625,26 @@ impl<'a> GeneratorState<'a> {
             MatchExpression::LonghandList(_, _, _) => unimplemented!(""),
             MatchExpression::Wildcard(_) => unimplemented!(""),
             MatchExpression::ADT(_, _, _) => unimplemented!(""),
-            MatchExpression::Record(_, _, _) => unimplemented!(""),
+            MatchExpression::Record(_, record_name, fields) => {
+                let record_definition = self.records.get(record_name).unwrap();
+                for field in fields {
+                    let index = record_definition
+                        .fields
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, (n, _))| n == field)
+                        .map(|(i, _)| i)
+                        .next()
+                        .unwrap();
+                    let field_pointer = self
+                        .builder
+                        .build_struct_gep(match_value.into_pointer_value(), index as u32, &g.var())
+                        .unwrap();
+                    let field_value = self.builder.build_load(field_pointer, &g.var());
+                    value_information.insert(Rc::clone(field), field_value);
+                }
+                self.builder.build_unconditional_branch(match_block);
+            }
         };
         value_information
     }
@@ -616,7 +681,41 @@ impl<'a> GeneratorState<'a> {
                 .f64_type()
                 .const_float(*f)
                 .as_basic_value_enum(),
-            Expression::TupleLiteral(_, _) => unimplemented!(""),
+            Expression::TupleLiteral(_, elements) => {
+                let mut element_values = Vec::new();
+                for e in elements {
+                    element_values.push(self.generate_expression(g, e, value_information));
+                }
+                let tuple_type = self.llvm_context.struct_type(
+                    element_values
+                        .iter()
+                        .map(|ev| ev.get_type())
+                        .collect::<Vec<BasicTypeEnum>>()
+                        .as_slice(),
+                    false,
+                );
+                let tuple_pointer = self
+                    .builder
+                    .build_call(
+                        self.module.get_function("malloc").unwrap(),
+                        &[tuple_type.size_of().unwrap().as_basic_value_enum()],
+                        &g.var(),
+                    )
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_pointer_value()
+                    .const_cast(tuple_type.ptr_type(AddressSpace::Generic));
+
+                for (i, value) in element_values.into_iter().enumerate() {
+                    let element_pointer = self
+                        .builder
+                        .build_struct_gep(tuple_pointer, i as u32, &g.var())
+                        .unwrap();
+                    self.builder.build_store(element_pointer, value);
+                }
+                tuple_pointer.as_basic_value_enum()
+            }
             Expression::EmptyListLiteral(_) => unimplemented!(""),
             Expression::ShorthandListLiteral(_, _) => unimplemented!(""),
             Expression::LonghandListLiteral(_, _, _) => unimplemented!(""),
@@ -624,12 +723,27 @@ impl<'a> GeneratorState<'a> {
             Expression::Record(_, _, c, d) => {
                 let record_definition = self.records.get(c).unwrap();
                 let record_llvm_type = self.module.get_struct_type(c).unwrap();
-                let record_heap_pointer = self.builder.build_call(self.module.get_function("malloc").unwrap(), &[record_llvm_type.size_of().unwrap().as_basic_value_enum()], &g.var())
-                    .try_as_basic_value().left().unwrap().into_pointer_value().const_cast(record_llvm_type.ptr_type(AddressSpace::Generic));
+                let record_heap_pointer = self
+                    .builder
+                    .build_call(
+                        self.module.get_function("malloc").unwrap(),
+                        &[record_llvm_type.size_of().unwrap().as_basic_value_enum()],
+                        &g.var(),
+                    )
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_pointer_value()
+                    .const_cast(record_llvm_type.ptr_type(AddressSpace::Generic));
 
-                for (i, ((field_name, field_type), (_, field_expression))) in record_definition.fields.iter().zip(d.iter()).enumerate() {
+                for (i, (_, (_, field_expression))) in
+                    record_definition.fields.iter().zip(d.iter()).enumerate()
+                {
                     let v = self.generate_expression(g, field_expression, value_information);
-                    let field_ptr = self.builder.build_struct_gep(record_heap_pointer, i as u32, &g.var()).unwrap();
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(record_heap_pointer, i as u32, &g.var())
+                        .unwrap();
                     self.builder.build_store(field_ptr, v);
                 }
                 record_heap_pointer.as_basic_value_enum()
@@ -858,11 +972,21 @@ impl<'a> GeneratorState<'a> {
                 let er = self.generate_expression(g, r, value_information);
                 if el.is_int_value() {
                     self.builder
-                        .build_int_compare(IntPredicate::EQ, el.into_int_value(), er.into_int_value(), &g.var())
+                        .build_int_compare(
+                            IntPredicate::EQ,
+                            el.into_int_value(),
+                            er.into_int_value(),
+                            &g.var(),
+                        )
                         .as_basic_value_enum()
                 } else {
                     self.builder
-                        .build_float_compare(FloatPredicate::OGE, el.into_float_value(), er.into_float_value(), &g.var())
+                        .build_float_compare(
+                            FloatPredicate::OGE,
+                            el.into_float_value(),
+                            er.into_float_value(),
+                            &g.var(),
+                        )
                         .as_basic_value_enum()
                 }
             }
@@ -871,11 +995,21 @@ impl<'a> GeneratorState<'a> {
                 let er = self.generate_expression(g, r, value_information);
                 if el.is_int_value() {
                     self.builder
-                        .build_int_compare(IntPredicate::NE, el.into_int_value(), er.into_int_value(), &g.var())
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            el.into_int_value(),
+                            er.into_int_value(),
+                            &g.var(),
+                        )
                         .as_basic_value_enum()
                 } else {
                     self.builder
-                        .build_float_compare(FloatPredicate::ONE, el.into_float_value(), er.into_float_value(), &g.var())
+                        .build_float_compare(
+                            FloatPredicate::ONE,
+                            el.into_float_value(),
+                            er.into_float_value(),
+                            &g.var(),
+                        )
                         .as_basic_value_enum()
                 }
             }
@@ -893,13 +1027,35 @@ impl<'a> GeneratorState<'a> {
                     .build_or(el.into_int_value(), er.into_int_value(), &g.var())
                     .as_basic_value_enum()
             }
-            Expression::RecordFieldAccess(_, _, _, _, _) => unimplemented!(""),
+            Expression::RecordFieldAccess(_, _, record_name, l, r) => {
+                let record_value = self.generate_expression(g, l, value_information);
+                let field_name = match r.borrow() {
+                    Expression::Variable(_, field) => field,
+                    _ => unreachable!(),
+                };
+                let record_definition = self.records.get(record_name).unwrap();
+                let record_field_index = record_definition
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (n, _))| n == field_name)
+                    .map(|t| t.0)
+                    .next()
+                    .unwrap();
+
+                let field_pointer = self.builder.build_struct_gep(
+                    record_value.into_pointer_value(),
+                    record_field_index as u32,
+                    &g.var(),
+                );
+                self.builder.build_load(field_pointer.unwrap(), &g.var())
+            }
             Expression::Lambda(_, _, _, _) => unimplemented!(""),
         }
     }
 
     fn write_module_object(&self, object_file: &Path) -> Result<(), String> {
-        //println!("LLMVM IR:\n{}", self.module.print_to_string().to_string());
+        println!("LLMVM IR:\n{}", self.module.print_to_string().to_string());
         Target::initialize_x86(&InitializationConfig::default());
 
         let opt = OptimizationLevel::Aggressive;
@@ -941,13 +1097,19 @@ impl<'a> GeneratorState<'a> {
         self.builder.build_unreachable();
     }
 
-    fn generate_print(&self, g: &mut VarGenerator, type_to_print: &Rc<Type>, print_bool_function: FunctionValue) -> FunctionValue {
+    fn generate_print(
+        &self,
+        g: &mut VarGenerator,
+        type_to_print: &Rc<Type>,
+        print_bool_function: FunctionValue,
+    ) -> FunctionValue {
         let print_value_type = self.llvm_context.void_type().fn_type(
             &[self.to_llvm_type(type_to_print).as_basic_type_enum()],
             false,
         );
         let function_print_value =
-            self.module.add_function("print_value", print_value_type, Some(Linkage::External));
+            self.module
+                .add_function("print_value", print_value_type, Some(Linkage::External));
         let entry = self
             .llvm_context
             .append_basic_block(function_print_value, "Entry");
@@ -974,22 +1136,45 @@ impl<'a> GeneratorState<'a> {
     }
 
     fn generate_print_bool(&self, g: &mut VarGenerator) -> FunctionValue {
-        let print_bool_type = self.llvm_context.void_type().fn_type(&[self.llvm_context.bool_type().as_basic_type_enum()], false);
-        let print_bool = self.module.add_function("print_bool", print_bool_type, Some(Linkage::External));
+        let print_bool_type = self
+            .llvm_context
+            .void_type()
+            .fn_type(&[self.llvm_context.bool_type().as_basic_type_enum()], false);
+        let print_bool =
+            self.module
+                .add_function("print_bool", print_bool_type, Some(Linkage::External));
         let e = self.llvm_context.append_basic_block(print_bool, "Entry");
         let tt = self.llvm_context.append_basic_block(print_bool, "TT");
         let ff = self.llvm_context.append_basic_block(print_bool, "FF");
         let printf = self.module.get_function("printf").unwrap();
 
         self.builder.position_at_end(e);
-        self.builder.build_conditional_branch(print_bool.get_nth_param(0).unwrap().into_int_value(), tt, ff);
+        self.builder.build_conditional_branch(
+            print_bool.get_nth_param(0).unwrap().into_int_value(),
+            tt,
+            ff,
+        );
 
         self.builder.position_at_end(tt);
-        self.builder.build_call(printf, &[self.builder.build_global_string_ptr("True", "true_string").as_basic_value_enum()], &g.var());
+        self.builder.build_call(
+            printf,
+            &[self
+                .builder
+                .build_global_string_ptr("True", "true_string")
+                .as_basic_value_enum()],
+            &g.var(),
+        );
         self.builder.build_return(None);
 
         self.builder.position_at_end(ff);
-        self.builder.build_call(printf, &[self.builder.build_global_string_ptr("False", "false_string").as_basic_value_enum()], &g.var());
+        self.builder.build_call(
+            printf,
+            &[self
+                .builder
+                .build_global_string_ptr("False", "false_string")
+                .as_basic_value_enum()],
+            &g.var(),
+        );
         self.builder.build_return(None);
 
         print_bool
@@ -1003,26 +1188,31 @@ impl<'a> GeneratorState<'a> {
         print_bool_function: FunctionValue,
     ) {
         let printf = self.module.get_function("printf").unwrap();
-        let puts = self.module.get_function("puts").unwrap();
         match type_to_print.borrow() {
-            Type::Bool => self.builder.build_call(
-                print_bool_function,
+            Type::Bool => self
+                .builder
+                .build_call(print_bool_function, &[value], &g.var()),
+
+            Type::Char => self.builder.build_call(
+                printf,
                 &[
+                    self.builder
+                        .build_global_string_ptr("'%s'", "char_format_string")
+                        .as_basic_value_enum(),
                     value,
                 ],
                 &g.var(),
             ),
-
-            Type::Char =>
-                self.builder.build_call(printf, &[
-                    self.builder.build_global_string_ptr("'%s'", "char_format_string").as_basic_value_enum(),
-                    value
-                ], &g.var())
-            ,
-            Type::String => self.builder.build_call(printf, &[
-                self.builder.build_global_string_ptr("\"%s\"", "string_format_string").as_basic_value_enum(),
-                value
-            ], &g.var()),
+            Type::String => self.builder.build_call(
+                printf,
+                &[
+                    self.builder
+                        .build_global_string_ptr("\"%s\"", "string_format_string")
+                        .as_basic_value_enum(),
+                    value,
+                ],
+                &g.var(),
+            ),
             Type::Int => self.builder.build_call(
                 printf,
                 &[
@@ -1045,34 +1235,109 @@ impl<'a> GeneratorState<'a> {
             ),
             Type::UserType(name, _) => {
                 if self.records.contains_key(name) {
-                    let print_string = self.builder.build_global_string_ptr("%s", "print_string").as_basic_value_enum();
-                    let record_prefix = self.builder.build_global_string_ptr(&format!("{{{}|", sanitize_name(name)), "record_prefix").as_basic_value_enum();
-                    let record_suffix = self.builder.build_global_string_ptr("}", "record_suffix").as_basic_value_enum();
-                    let record_field_name = self.builder.build_global_string_ptr("%s = ", "record_field_name").as_basic_value_enum();
-                    let record_field_separator = self.builder.build_global_string_ptr(", ", "record_field_separator").as_basic_value_enum();
-                    self.builder.build_call(printf, &[print_string, record_prefix], &g.var());
+                    let print_string = self
+                        .builder
+                        .build_global_string_ptr("%s", "print_string")
+                        .as_basic_value_enum();
+                    let record_prefix = self
+                        .builder
+                        .build_global_string_ptr(
+                            &format!("{{{}|", sanitize_name(name)),
+                            "record_prefix",
+                        )
+                        .as_basic_value_enum();
+                    let record_suffix = self
+                        .builder
+                        .build_global_string_ptr("}", "record_suffix")
+                        .as_basic_value_enum();
+                    let record_field_name = self
+                        .builder
+                        .build_global_string_ptr("%s = ", "record_field_name")
+                        .as_basic_value_enum();
+                    let record_field_separator = self
+                        .builder
+                        .build_global_string_ptr(", ", "record_field_separator")
+                        .as_basic_value_enum();
+                    self.builder
+                        .build_call(printf, &[print_string, record_prefix], &g.var());
 
                     let record_definition = self.records.get(name).unwrap();
                     let struct_value = value.into_pointer_value();
-                    for (i, (field_name, field_type)) in record_definition.fields.iter().enumerate() {
-                        let field_pointer = self.builder.build_struct_gep(struct_value, i as u32, &g.var()).unwrap();
+                    for (i, (field_name, field_type)) in record_definition.fields.iter().enumerate()
+                    {
+                        let field_pointer = self
+                            .builder
+                            .build_struct_gep(struct_value, i as u32, &g.var())
+                            .unwrap();
                         let field_value = self.builder.build_load(field_pointer, &g.var());
-                        self.builder.build_call(printf, &[record_field_name, self.builder.build_global_string_ptr(field_name, field_name).as_basic_value_enum()], &g.var());
+                        self.builder.build_call(
+                            printf,
+                            &[
+                                record_field_name,
+                                self.builder
+                                    .build_global_string_ptr(field_name, field_name)
+                                    .as_basic_value_enum(),
+                            ],
+                            &g.var(),
+                        );
                         self.generate_print_code(g, field_type, field_value, print_bool_function);
                         if i < record_definition.fields.len() - 1 {
-                            self.builder.build_call(printf, &[record_field_separator], &g.var());
+                            self.builder
+                                .build_call(printf, &[record_field_separator], &g.var());
                         }
-                    };
+                    }
                     self.builder.build_call(printf, &[record_suffix], &g.var())
                 } else {
                     unimplemented!("Printing ADTs")
                 }
             }
-            Type::Tuple(_) => unimplemented!(""),
+            Type::Tuple(elements) => {
+                let tuple_prefix = self
+                    .builder
+                    .build_global_string_ptr("(", "tuple_prefix")
+                    .as_basic_value_enum();
+                let tuple_separator = self
+                    .builder
+                    .build_global_string_ptr(", ", "tuple_separator")
+                    .as_basic_value_enum();
+                let tuple_suffix = self
+                    .builder
+                    .build_global_string_ptr(")", "tuple_suffix")
+                    .as_basic_value_enum();
+                self.builder.build_call(printf, &[tuple_prefix], &g.var());
+                for (i, element_type) in elements.iter().enumerate() {
+                    let element_pointer = self
+                        .builder
+                        .build_struct_gep(value.into_pointer_value(), i as u32, &g.var())
+                        .unwrap();
+                    let element_value = self.builder.build_load(element_pointer, &g.var());
+                    self.generate_print_code(g, element_type, element_value, print_bool_function);
+                    if i < elements.len() - 1 {
+                        self.builder
+                            .build_call(printf, &[tuple_separator], &g.var());
+                    }
+                }
+                self.builder.build_call(printf, &[tuple_suffix], &g.var())
+            }
             Type::List(_) => unimplemented!(""),
             Type::Variable(_) => unimplemented!(""),
             Type::Function(_, _) => unreachable!("Printing function not supported."),
         };
+    }
+
+    fn llvm_type_size(&self, loz_type: &Rc<Type>) -> u32 {
+        match loz_type.borrow() {
+            Type::Bool => 8,
+            Type::Char => 64,
+            Type::String => 64,
+            Type::Int => 64,
+            Type::Float => 64,
+            Type::UserType(_, _) => 64,
+            Type::Tuple(_) => 64,
+            Type::List(_) => 64,
+            Type::Variable(_) => unreachable!("Variable type in generator"),
+            Type::Function(_, _) => unreachable!("Function type in generator"),
+        }
     }
 
     fn to_llvm_type(&self, loz_type: &Rc<Type>) -> Box<dyn BasicType<'a> + 'a> {
@@ -1080,9 +1345,36 @@ impl<'a> GeneratorState<'a> {
             Type::Bool => Box::new(self.llvm_context.bool_type().as_basic_type_enum()),
             Type::Int => Box::new(self.llvm_context.i64_type().as_basic_type_enum()),
             Type::Float => Box::new(self.llvm_context.f64_type().as_basic_type_enum()),
-            Type::Char => Box::new(self.llvm_context.i8_type().ptr_type(AddressSpace::Generic).as_basic_type_enum()),
-            Type::String => Box::new(self.llvm_context.i8_type().ptr_type(AddressSpace::Generic).as_basic_type_enum()),
-            Type::UserType(name, _) => Box::new(self.module.get_struct_type(name).unwrap().ptr_type(AddressSpace::Generic).as_basic_type_enum()),
+            Type::Char => Box::new(
+                self.llvm_context
+                    .i8_type()
+                    .ptr_type(AddressSpace::Generic)
+                    .as_basic_type_enum(),
+            ),
+            Type::String => Box::new(
+                self.llvm_context
+                    .i8_type()
+                    .ptr_type(AddressSpace::Generic)
+                    .as_basic_type_enum(),
+            ),
+            Type::UserType(name, _) => Box::new(
+                self.module
+                    .get_struct_type(name)
+                    .unwrap()
+                    .ptr_type(AddressSpace::Generic)
+                    .as_basic_type_enum(),
+            ),
+            Type::Tuple(els) => Box::new(
+                self.llvm_context
+                    .struct_type(
+                        els.iter()
+                            .map(|e| self.to_llvm_type(e).as_basic_type_enum())
+                            .collect::<Vec<BasicTypeEnum>>()
+                            .as_slice(),
+                        false,
+                    )
+                    .ptr_type(AddressSpace::Generic),
+            ),
             _ => unimplemented!("{:?}", loz_type),
         }
     }

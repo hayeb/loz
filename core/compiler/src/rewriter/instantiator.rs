@@ -545,13 +545,14 @@ impl InstantiatorState {
                     instantiated_arguments.push(instantiated_argument);
                 }
 
-                let (instantiated_record_type, new_instantiated) =
+                let (instantiated_adt_type, new_instantiated) =
                     self.resolve_type(adt_type.as_ref().unwrap());
+                let adt_type_name =
                 instantiated.merge(new_instantiated);
                 (
                     Rc::new(Expression::ADTTypeConstructor(
                         Rc::clone(loc),
-                        Some(instantiated_record_type),
+                        Some(instantiated_adt_type),
                         Rc::clone(constructor_name),
                         instantiated_arguments,
                     )),
@@ -561,7 +562,10 @@ impl InstantiatorState {
             Expression::Record(loc, record_type, record_name, field_expressions) => {
                 let record_definition = self.record_definitions.get(record_name).unwrap();
                 let type_hash = hash(record_type.as_ref().unwrap());
-                let new_record_name = Rc::new(format!("{}{}{}", record_name, MONOMORPHIC_PREFIX, type_hash));
+                let new_record_name = Rc::new(format!(
+                    "{}{}{}",
+                    record_name, MONOMORPHIC_PREFIX, type_hash
+                ));
 
                 let subs = unify(
                     record_type.as_ref().unwrap(),
@@ -773,8 +777,12 @@ impl InstantiatorState {
             ) => {
                 let (instantiated_expression, new_instantiated) =
                     self.resolve_expression(record_expression, type_information);
-                let new_record_name =
-                    format!("{}_{}", record_name, hash(record_type.as_ref().unwrap()));
+                let new_record_name = format!(
+                    "{}{}{}",
+                    record_name,
+                    MONOMORPHIC_PREFIX,
+                    hash(record_type.as_ref().unwrap())
+                );
                 (
                     Rc::new(Expression::RecordFieldAccess(
                         Rc::clone(loc),
@@ -830,7 +838,7 @@ impl InstantiatorState {
         let mut instantiated = Instantiated::new();
         instantiated.functions.insert(
             Rc::clone(&call_name),
-            substitute_function_definition(&call_name, &subs, function_definition),
+            substitute_function_definition(&self.adt_definitions, &self.record_definitions, &call_name, &subs, function_definition),
         );
         for argument in arguments {
             let (resolved_argument, new_instantiated) =
@@ -864,24 +872,31 @@ fn hash<T: Hash>(t: &Rc<T>) -> String {
 }
 
 fn substitute_function_definition(
+    adts: &HashMap<Rc<String>, Rc<ADTDefinition>>,
+    records: &HashMap<Rc<String>, Rc<RecordDefinition>>,
     new_name: &Rc<String>,
     substitutions: &Substitutions,
     target: &Rc<FunctionDefinition>,
 ) -> Rc<FunctionDefinition> {
+    let function_type = substitute_type(
+        substitutions,
+        &target.function_type.as_ref().unwrap().enclosed_type,
+    );
+    let argument_types = match function_type.borrow() {
+        Type::Function(args, _) => args.clone(),
+        _ => vec![function_type.clone()]
+    };
     Rc::new(FunctionDefinition {
         location: target.location.clone(),
         name: Rc::clone(new_name),
         function_type: Some(Rc::new(TypeScheme {
             bound_variables: HashSet::new(),
-            enclosed_type: substitute_type(
-                substitutions,
-                &target.function_type.as_ref().unwrap().enclosed_type,
-            ),
+            enclosed_type: function_type,
         })),
         function_bodies: target
             .function_bodies
             .iter()
-            .map(|b| substitute_function_body(substitutions, b))
+            .map(|b| substitute_function_body(adts, records, &argument_types, substitutions, b))
             .collect(),
     })
 }
@@ -933,6 +948,9 @@ fn substitute_adt_definition(
 }
 
 fn substitute_function_body(
+    adts: &HashMap<Rc<String>, Rc<ADTDefinition>>,
+    records: &HashMap<Rc<String>, Rc<RecordDefinition>>,
+    argument_types: &Vec<Rc<Type>>,
     substitutions: &Substitutions,
     target: &Rc<FunctionBody>,
 ) -> Rc<FunctionBody> {
@@ -944,7 +962,10 @@ fn substitute_function_body(
             .iter()
             .map(|(n, t)| (n.clone(), Rc::new(substitute(substitutions, t))))
             .collect(),
-        match_expressions: target.match_expressions.clone(),
+        match_expressions: target.match_expressions.iter()
+            .zip(argument_types.iter())
+            .map(|(me, mt)| substitute_type_references(adts, records, me, mt))
+            .collect(),
         rules: target
             .rules
             .iter()
@@ -984,6 +1005,56 @@ fn substitute_function_rule(
             )
         }
     })
+}
+
+fn substitute_type_references(adts: &HashMap<Rc<String>, Rc<ADTDefinition>>, records: &HashMap<Rc<String>, Rc<RecordDefinition>>, match_expression: &Rc<MatchExpression>, match_type: &Rc<Type>) -> Rc<MatchExpression> {
+    match (match_expression.borrow(), match_type.borrow()) {
+        (MatchExpression::IntLiteral(_, _), _) => Rc::clone(match_expression),
+        (MatchExpression::CharLiteral(_, _), _) => Rc::clone(match_expression),
+        (MatchExpression::StringLiteral(_, _), _) => Rc::clone(match_expression),
+        (MatchExpression::BoolLiteral(_, _), _) => Rc::clone(match_expression),
+        (MatchExpression::Identifier(_, _), _) => Rc::clone(match_expression),
+        (MatchExpression::Wildcard(_), _) => Rc::clone(match_expression),
+
+        (MatchExpression::Tuple(l, elements), Type::Tuple(element_types))
+        => Rc::new(MatchExpression::Tuple(Rc::clone(l), elements.iter()
+            .zip(element_types.iter())
+            .map(|(e, t)| substitute_type_references(adts, records, e, t))
+            .collect())),
+
+        (MatchExpression::ShorthandList(l, elements), Type::List(list_type))
+        => Rc::new(MatchExpression::ShorthandList(Rc::clone(l), elements.iter()
+            .map(|e| substitute_type_references(adts, records, e, list_type))
+            .collect())),
+        (MatchExpression::LonghandList(l, h, t), Type::List(list_type))
+        => Rc::new(MatchExpression::LonghandList(Rc::clone(l), substitute_type_references(adts, records, h, list_type), substitute_type_references(adts, records, t, list_type))),
+
+        (MatchExpression::ADT(l, _, arguments), Type::UserType(name, argument_types))
+        => {
+            let type_hash = hash(match_type);
+            Rc::new(MatchExpression::ADT(
+                Rc::clone(l),
+                Rc::new(format!("{}{}{}", &name, MONOMORPHIC_PREFIX, type_hash)),
+                arguments.iter()
+                    .zip(argument_types.iter())
+                    .map(|(me, mt)| substitute_type_references(adts, records, me, mt))
+                    .collect()))
+        }
+
+        (MatchExpression::Record(l, _, fields), Type::UserType(name, _))
+        => {
+            let type_hash = hash(match_type);
+            Rc::new(MatchExpression::Record(
+                Rc::clone(l),
+                Rc::new(format!("{}{}{}", &name, MONOMORPHIC_PREFIX, type_hash)),
+                fields.clone()
+            ))
+        }
+
+
+
+        (l, r) => unreachable!("Illegal match expression * type combination at location {} with type {}", l.locate(), r)
+    }
 }
 
 fn substitute_expression(substitutions: &Substitutions, target: &Rc<Expression>) -> Rc<Expression> {

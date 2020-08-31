@@ -1,0 +1,7 @@
+:: T = {
+    text :: String,
+    option :: Bool,
+    number :: Int
+}
+
+main = {T|text = "Test", option = false, number = 2}.T.text
