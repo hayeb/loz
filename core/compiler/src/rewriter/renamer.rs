@@ -190,25 +190,22 @@ impl RenamerState {
             constructors: adt_definition
                 .constructors
                 .iter()
-                .map(|(n, c)| {
-                    (
-                        prefix_name(n, current_scope_name),
-                        Rc::new(ADTConstructor {
-                            name: prefix_name(n, current_scope_name),
-                            elements: c
-                                .elements
-                                .iter()
-                                .map(|e| {
-                                    self.rewrite_type(
-                                        e,
-                                        current_scope_name,
-                                        imported_modules,
-                                        module_aliases,
-                                    )
-                                })
-                                .collect(),
-                        }),
-                    )
+                .map(|c| {
+                    Rc::new(ADTConstructor {
+                        name: prefix_name(&c.name, current_scope_name),
+                        elements: c
+                            .elements
+                            .iter()
+                            .map(|e| {
+                                self.rewrite_type(
+                                    e,
+                                    current_scope_name,
+                                    imported_modules,
+                                    module_aliases,
+                                )
+                            })
+                            .collect(),
+                    })
                 })
                 .collect(),
         })
@@ -419,8 +416,8 @@ impl RenamerState {
             }
             let local_name = prefix_name(constructor_name, &m.name);
             for (_, d) in &m.adt_name_to_definition {
-                for (c, _) in &d.constructors {
-                    if c == &local_name {
+                for constructor in &d.constructors {
+                    if &constructor.name == &local_name {
                         //println!(
                         //    "Rewriting adt constructor reference {} in module {} to {}",
                         //    constructor_name, current_module_name, local_name

@@ -325,13 +325,10 @@ fn to_adt_type(
             let alternative_name =
                 Rc::new(alternative_elements.next().unwrap().as_str().to_string());
             let alternative_elements = alternative_elements.map(to_type).map(Rc::new).collect();
-            (
-                Rc::clone(&alternative_name),
-                Rc::new(ADTConstructor {
-                    name: Rc::clone(&alternative_name),
-                    elements: alternative_elements,
-                }),
-            )
+            Rc::new(ADTConstructor {
+                name: Rc::clone(&alternative_name),
+                elements: alternative_elements,
+            })
         })
         .collect();
 
@@ -538,6 +535,7 @@ fn to_term(
             Call(loc_info, None, Rc::new(function.to_string()), arguments)
         }
         Rule::qualifiable_identifier => Variable(loc_info, Rc::new(sub.as_str().to_string())),
+        Rule::qualifiable_capital_identifier => ADTTypeConstructor(loc_info, None, Rc::new(sub.as_str().to_string()), vec![]),
         Rule::subexpr => to_expression(
             sub.into_inner().next().unwrap(),
             module_name,

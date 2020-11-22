@@ -114,6 +114,7 @@ call = {
 
 function_argument = {
     simple_term
+    | qualifiable_capital_identifier
     | qualifiable_identifier
 }
 

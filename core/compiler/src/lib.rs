@@ -5,7 +5,7 @@ extern crate pest_derive;
 extern crate petgraph;
 
 use std::borrow::Borrow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashSet};
 use std::rc::Rc;
 
 use crate::ast::{Expression, FunctionBody, FunctionDefinition, FunctionRule, MatchExpression};
@@ -20,6 +20,7 @@ pub mod printer;
 pub mod rewriter;
 
 pub const MODULE_SEPARATOR: &str = "::";
+pub const ADT_SEPARATOR: &str = ";;";
 pub const MONOMORPHIC_PREFIX: &str = "$$";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -81,7 +82,7 @@ pub struct ADTDefinition {
     pub name: Rc<String>,
     pub location: Rc<Location>,
     pub type_variables: Vec<Rc<String>>,
-    pub constructors: HashMap<Rc<String>, Rc<ADTConstructor>>,
+    pub constructors: Vec<Rc<ADTConstructor>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

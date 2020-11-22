@@ -577,9 +577,9 @@ fn check_unique_definitions(
         }
         type_names.insert(Rc::clone(name), Rc::clone(&adt_definition.location));
 
-        for (constructor_name, _) in &adt_definition.constructors {
+        for constructor in &adt_definition.constructors {
             adt_constructors.insert(
-                Rc::clone(constructor_name),
+                Rc::clone(&constructor.name),
                 (Rc::clone(name), Rc::clone(&adt_definition.location)),
             );
         }
@@ -621,21 +621,21 @@ fn check_unique_definitions(
         }
 
         // 2. Check whether all constructors are uniquely defined
-        for (constructor_name, alternative) in &adt_definition.constructors {
-            if adt_constructors.contains_key(constructor_name) {
+        for constructor in &adt_definition.constructors {
+            if adt_constructors.contains_key(&constructor.name) {
                 let (defined_in, defined_in_location) =
-                    adt_constructors.get(constructor_name).unwrap();
+                    adt_constructors.get(&constructor.name).unwrap();
                 type_errors.push(InferenceError::from_loc(
                     &adt_definition.location,
                     InferenceErrorType::TypeConstructorMultiplyDefined(
-                        Rc::clone(constructor_name),
+                        Rc::clone(&constructor.name),
                         Rc::clone(defined_in),
                         Rc::clone(defined_in_location),
                     ),
                 ))
             } else {
                 // 3. Check whether a constructor only uses defined type variables, if any.
-                for variable_name in alternative
+                for variable_name in constructor
                     .elements
                     .iter()
                     .flat_map(|e| e.collect_free_type_variables().into_iter())
@@ -648,7 +648,7 @@ fn check_unique_definitions(
                     }
                 }
                 adt_constructors.insert(
-                    Rc::clone(constructor_name),
+                    Rc::clone(&constructor.name),
                     (Rc::clone(name), Rc::clone(&adt_definition.location)),
                 );
             }
@@ -727,7 +727,7 @@ impl InferencerState {
     ) -> Option<Rc<ADTDefinition>> {
         for frame in self.frames.iter().rev() {
             for (_, adt_def) in frame.adt_name_to_definition.iter() {
-                if adt_def.constructors.contains_key(name) {
+                if adt_def.constructors.iter().any(|c| &c.name == name) {
                     return Some(adt_def).map(Rc::clone);
                 }
             }
@@ -1148,7 +1148,7 @@ impl InferencerState {
                         }
                     };
                 let adt_constructor_definition =
-                    adt_definition.constructors.get(constructor_name).unwrap();
+                    adt_definition.constructors.iter().filter(|c| &c.name == constructor_name).next().unwrap();
 
                 if adt_constructor_definition.elements.len() != constructor_arguments.len() {
                     return Err(vec![InferenceError::from_loc(
@@ -1891,7 +1891,7 @@ impl InferencerState {
                         )]);
                     }
                 };
-                let adt_constructor_definition = adt_definition.constructors.get(name).unwrap();
+                let adt_constructor_definition = adt_definition.constructors.iter().filter(|c| &c.name == name).next().unwrap();
 
                 if adt_constructor_definition.elements.len() != arguments.len() {
                     return Err(vec![InferenceError::from_loc(

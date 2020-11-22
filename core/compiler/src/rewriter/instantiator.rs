@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 
 use crate::inferencer::substitutor::{substitute, substitute_type, Substitutions};
 use crate::inferencer::unifier::unify;
-use crate::MONOMORPHIC_PREFIX;
+use crate::{MONOMORPHIC_PREFIX, ADT_SEPARATOR};
 
 use super::*;
 
@@ -167,20 +167,19 @@ impl InstantiatorState {
         let mut instantiated = Instantiated::new();
 
         // Type variables should be replace with concrete types earlier
-        let mut constructors = HashMap::new();
-        for (n, constructor) in adt_definition.constructors.iter() {
+        let mut constructors = Vec::new();
+        for constructor in adt_definition.constructors.iter() {
             let mut elements = Vec::new();
             for element in constructor.elements.iter() {
                 let (instantiated_element, new_instantiated) = self.resolve_type(element);
                 elements.push(instantiated_element);
                 instantiated.merge(new_instantiated);
             }
-            constructors.insert(
-                Rc::clone(n),
+            constructors.push(
                 Rc::new(ADTConstructor {
-                    name: Rc::clone(&n),
+                    name: Rc::clone(&constructor.name),
                     elements,
-                }),
+                })
             );
         }
 
@@ -240,7 +239,7 @@ impl InstantiatorState {
                     let subs = unify(loz_type, &record_type).unwrap();
 
                     let instantiated_type = substitute_type(&subs, &record_type);
-                    let type_hash = hash(&instantiated_type);
+                    let type_hash = hash_type(&instantiated_type);
                     let instantiated_record_name = Rc::new(format!("{}{}{}", &name, MONOMORPHIC_PREFIX, type_hash));
 
                     let mut instantiated = Instantiated::new();
@@ -282,8 +281,9 @@ impl InstantiatorState {
                     let subs = unify(loz_type, &adt_type).unwrap();
 
                     let instantiated_type = substitute_type(&subs, &adt_type);
-                    let type_hash = hash(&instantiated_type);
-                    let instantiated_adt_name = Rc::new(format!("{}_{}", &name, type_hash));
+                    let type_hash = hash_type(&instantiated_type);
+
+                    let instantiated_adt_name = Rc::new(format!("{}{}{}", &name, MONOMORPHIC_PREFIX, type_hash));
 
                     let mut instantiated = Instantiated::new();
                     instantiated.adts.insert(
@@ -295,9 +295,7 @@ impl InstantiatorState {
                             constructors: adt_definition
                                 .constructors
                                 .iter()
-                                .map(|(cn, cd)| {
-                                    (
-                                        Rc::clone(cn),
+                                .map(|cd| {
                                         Rc::new(ADTConstructor {
                                             name: Rc::clone(&cd.name),
                                             elements: cd
@@ -305,13 +303,21 @@ impl InstantiatorState {
                                                 .iter()
                                                 .map(|e| substitute_type(&subs, e))
                                                 .collect(),
-                                        }),
-                                    )
+                                        })
                                 })
                                 .collect(),
                         }),
                     );
-                    (Rc::clone(loz_type), instantiated)
+                    (Rc::new(Type::UserType(
+                        Rc::clone(&instantiated_adt_name),
+                        adt_definition
+                            .type_variables
+                            .iter()
+                            .map(|v| {
+                                substitute_type(&subs, &Rc::new(Type::Variable(Rc::clone(v))))
+                            })
+                            .collect(),
+                    )), instantiated)
                 } else {
                     unreachable!()
                 }
@@ -331,7 +337,10 @@ impl InstantiatorState {
                 let (initiated_e, initiated) = self.resolve_type(e);
                 (Rc::new(Type::List(initiated_e)), initiated)
             }
-            Type::Variable(_) => unreachable!(),
+
+            // TODO: Interesting..
+            Type::Variable(_) => (Rc::clone(&loz_type), Instantiated::new()),
+
             Type::Function(arguments, result) => {
                 let mut initiated = Instantiated::new();
 
@@ -547,7 +556,6 @@ impl InstantiatorState {
 
                 let (instantiated_adt_type, new_instantiated) =
                     self.resolve_type(adt_type.as_ref().unwrap());
-                let adt_type_name =
                 instantiated.merge(new_instantiated);
                 (
                     Rc::new(Expression::ADTTypeConstructor(
@@ -561,7 +569,7 @@ impl InstantiatorState {
             }
             Expression::Record(loc, record_type, record_name, field_expressions) => {
                 let record_definition = self.record_definitions.get(record_name).unwrap();
-                let type_hash = hash(record_type.as_ref().unwrap());
+                let type_hash = hash_type(record_type.as_ref().unwrap());
                 let new_record_name = Rc::new(format!(
                     "{}{}{}",
                     record_name, MONOMORPHIC_PREFIX, type_hash
@@ -781,7 +789,7 @@ impl InstantiatorState {
                     "{}{}{}",
                     record_name,
                     MONOMORPHIC_PREFIX,
-                    hash(record_type.as_ref().unwrap())
+                    hash_type(record_type.as_ref().unwrap())
                 );
                 (
                     Rc::new(Expression::RecordFieldAccess(
@@ -821,16 +829,16 @@ impl InstantiatorState {
         type_information: &HashMap<Rc<String>, Rc<TypeScheme>>,
     ) -> (Rc<String>, Vec<Rc<Expression>>, Instantiated) {
         let function_definition = self.function_definitions.get(name).unwrap();
-        let type_hash = hash(function_type);
+        let type_hash = hash_type(function_type);
         let call_name = Rc::new(format!("{}{}{}", name, MONOMORPHIC_PREFIX, type_hash));
 
         let subs = unify(
-            function_type,
             &function_definition
                 .function_type
                 .as_ref()
                 .unwrap()
                 .enclosed_type,
+            function_type
         )
         .unwrap();
 
@@ -865,10 +873,36 @@ impl InstantiatorState {
     }
 }
 
-fn hash<T: Hash>(t: &Rc<T>) -> String {
-    let mut s = DefaultHasher::new();
-    t.hash(&mut s);
-    format!("{}", s.finish())
+fn hash_type(t : &Rc<Type>) -> String {
+    fn hash<T: Hash>(t: &Rc<T>) -> String {
+        let mut s = DefaultHasher::new();
+        t.hash(&mut s);
+        format!("{}", s.finish())
+    }
+
+    fn replace_variable_types(t: &Rc<Type>) -> Rc<Type> {
+        match t.borrow() {
+            Type::Bool => Rc::new(Type::Bool),
+            Type::Char => Rc::new(Type::Char),
+            Type::String => Rc::new(Type::String),
+            Type::Int => Rc::new(Type::Int),
+            Type::Float => Rc::new(Type::Float),
+            Type::UserType(name, arguments) => {
+                let replaced_arguments = arguments.iter()
+                    .map(|a| replace_variable_types(a))
+                    .collect();
+                Rc::new(Type::UserType(Rc::clone(name), replaced_arguments))
+            },
+            Type::Tuple(element_types) => Rc::new(Type::Tuple(element_types.iter()
+                .map(|et| replace_variable_types(et))
+                .collect())),
+            Type::List(list_type) => Rc::new(Type::List(replace_variable_types(list_type))),
+            Type::Variable(_) => Rc::new(Type::Variable(Rc::new("*".to_string()))),
+            Type::Function(argument_types, result_type) => Rc::new(Type::Function(argument_types.iter().map(|at| replace_variable_types(at)).collect(), replace_variable_types(result_type))),
+        }
+    }
+
+    return hash(&replace_variable_types(t))
 }
 
 fn substitute_function_definition(
@@ -930,18 +964,15 @@ fn substitute_adt_definition(
         constructors: target
             .constructors
             .iter()
-            .map(|(cn, cd)| {
-                (
-                    Rc::clone(cn),
-                    Rc::new(ADTConstructor {
-                        name: Rc::clone(&cd.name),
-                        elements: cd
-                            .elements
-                            .iter()
-                            .map(|t| substitute_type(substitutions, t))
-                            .collect(),
-                    }),
-                )
+            .map( |cd| {
+                Rc::new(ADTConstructor {
+                    name: Rc::clone(&cd.name),
+                    elements: cd
+                        .elements
+                        .iter()
+                        .map(|t| substitute_type(substitutions, t))
+                        .collect(),
+                })
             })
             .collect(),
     })
@@ -1029,12 +1060,13 @@ fn substitute_type_references(adts: &HashMap<Rc<String>, Rc<ADTDefinition>>, rec
         (MatchExpression::LonghandList(l, h, t), Type::List(list_type))
         => Rc::new(MatchExpression::LonghandList(Rc::clone(l), substitute_type_references(adts, records, h, list_type), substitute_type_references(adts, records, t, list_type))),
 
-        (MatchExpression::ADT(l, _, arguments), Type::UserType(name, argument_types))
+        (MatchExpression::ADT(l, constructor_name, arguments), Type::UserType(name, argument_types))
         => {
-            let type_hash = hash(match_type);
+            let type_hash = hash_type(match_type);
+
             Rc::new(MatchExpression::ADT(
                 Rc::clone(l),
-                Rc::new(format!("{}{}{}", &name, MONOMORPHIC_PREFIX, type_hash)),
+                Rc::new(format!("{}{}{}{}{}", name, ADT_SEPARATOR, &constructor_name, MONOMORPHIC_PREFIX, type_hash)),
                 arguments.iter()
                     .zip(argument_types.iter())
                     .map(|(me, mt)| substitute_type_references(adts, records, me, mt))
@@ -1043,7 +1075,7 @@ fn substitute_type_references(adts: &HashMap<Rc<String>, Rc<ADTDefinition>>, rec
 
         (MatchExpression::Record(l, _, fields), Type::UserType(name, _))
         => {
-            let type_hash = hash(match_type);
+            let type_hash = hash_type(match_type);
             Rc::new(MatchExpression::Record(
                 Rc::clone(l),
                 Rc::new(format!("{}{}{}", &name, MONOMORPHIC_PREFIX, type_hash)),

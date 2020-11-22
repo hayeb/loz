@@ -459,15 +459,12 @@ fn prefix_constructor_names(
         constructors: adt_definition
             .constructors
             .iter()
-            .map(|(n, c)| {
-                let prefixed_name = prefix_module_name(module, &n);
-                (
-                    Rc::clone(&prefixed_name),
-                    Rc::new(ADTConstructor {
-                        name: Rc::clone(&prefixed_name),
-                        elements: c.elements.iter().map(Rc::clone).collect(),
-                    }),
-                )
+            .map(|c| {
+                let prefixed_name = prefix_module_name(module, &c.name);
+                Rc::new(ADTConstructor {
+                    name: Rc::clone(&prefixed_name),
+                    elements: c.elements.iter().map(Rc::clone).collect(),
+                })
             })
             .collect(),
         name: adt_definition.name.clone(),

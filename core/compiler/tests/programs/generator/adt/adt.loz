@@ -1,0 +1,7 @@
+:: T = A | B | C
+
+choose A = "Cheese"
+choose B = "Bacon"
+choose C = "A salad"
+
+main = (choose A, choose B, choose C)
