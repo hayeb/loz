@@ -23,3 +23,5 @@ do
     exit 1
   fi
 done <   <(find core/compiler/tests/programs/generator -name '*.loz' -print0)
+
+echo "All tests passed"

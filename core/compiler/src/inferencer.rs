@@ -1953,33 +1953,22 @@ impl InferencerState {
                     &adt_constructor_definition.elements,
                 );
 
-                let mut argument_types = Vec::new();
                 let mut union_subs: Substitutions = Vec::new();
                 let mut inferred_arguments = Vec::new();
-                for arg in arguments {
-                    let fresh = self.fresh();
-                    let (inferred_arg, subs) = self.infer_expression(&arg, &fresh)?;
-                    self.extend_type_environment(&subs);
-                    union_subs.extend(subs.iter().map(|(l, r)| (Rc::clone(l), Rc::clone(r))));
-                    argument_types.push(substitute_type(&subs, &fresh));
-                    inferred_arguments.push(inferred_arg);
-                }
-
-                let mut argument_substitutions = Vec::new();
-                for ((l, r), ex) in argument_types
+                for (arg, arg_type) in arguments
                     .iter()
                     .zip(instantiated_definition_argument_types.iter())
-                    .zip(arguments.iter())
                 {
-                    let subs = map_unify(&ex.locate(), unify(&l, &r))?;
+                    let (inferred_arg, subs) =
+                        self.infer_expression(&arg, &substitute_type(&union_subs, &arg_type))?;
                     self.extend_type_environment(&subs);
                     union_subs.extend(subs.iter().map(|(l, r)| (Rc::clone(l), Rc::clone(r))));
-                    argument_substitutions.extend(subs);
+                    inferred_arguments.push(inferred_arg);
                 }
 
                 type_variable_to_type = type_variable_to_type
                     .iter()
-                    .map(|(name, t)| (Rc::clone(name), substitute_type(&argument_substitutions, t)))
+                    .map(|(name, t)| (Rc::clone(name), substitute_type(&union_subs, t)))
                     .collect();
 
                 let mut concrete_types = Vec::new();

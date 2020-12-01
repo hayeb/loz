@@ -766,7 +766,16 @@ impl<'a> GeneratorState<'a> {
                 }
             }
             MatchExpression::Record(_, record_name, fields) => {
-                let record_definition = self.records.get(record_name).unwrap();
+                let record_definition = self
+                    .records
+                    .get(
+                        &record_name
+                            .split(MONOMORPHIC_PREFIX)
+                            .next()
+                            .unwrap()
+                            .to_string(),
+                    )
+                    .unwrap();
                 for field in fields {
                     let index = record_definition
                         .base
@@ -933,7 +942,10 @@ impl<'a> GeneratorState<'a> {
             }
 
             Expression::Record(_, _, c, d) => {
-                let record_definition = self.records.get(c).unwrap();
+                let record_definition = self
+                    .records
+                    .get(&c.split(MONOMORPHIC_PREFIX).next().unwrap().to_string())
+                    .unwrap();
                 let record_llvm_type = self.module.get_struct_type(c).unwrap();
                 let record_heap_pointer = self
                     .builder
@@ -1249,7 +1261,16 @@ impl<'a> GeneratorState<'a> {
                     Expression::Variable(_, field) => field,
                     _ => unreachable!(),
                 };
-                let record_definition = self.records.get(record_name).unwrap();
+                let record_definition = self
+                    .records
+                    .get(
+                        &record_name
+                            .split(MONOMORPHIC_PREFIX)
+                            .next()
+                            .unwrap()
+                            .to_string(),
+                    )
+                    .unwrap();
                 let record_field_index = record_definition
                     .base
                     .fields
@@ -1510,7 +1531,10 @@ impl<'a> GeneratorState<'a> {
                 } else if self.adts.contains_key(&base_name) {
                     let adt_name_string = self
                         .builder
-                        .build_global_string_ptr(name, &g.var())
+                        .build_global_string_ptr(
+                            name.split(MONOMORPHIC_PREFIX).next().unwrap(),
+                            &g.var(),
+                        )
                         .as_basic_value_enum();
                     self.builder
                         .build_call(printf, &[adt_name_string], &g.var())

@@ -1,0 +1,5 @@
+:: A a = A (B a)
+:: B b = B b (C b)
+:: C c = C (A c) | End c
+
+main = A (B 6 (C (A (B 3 (End 4)))))
