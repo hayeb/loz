@@ -61,7 +61,7 @@ impl Display for Type {
                 t,
                 type_arguments
                     .into_iter()
-                    .map(|(_, e)| e.to_string())
+                    .map(|e| e.to_string())
                     .collect::<Vec<String>>()
                     .join(" ")
             ),

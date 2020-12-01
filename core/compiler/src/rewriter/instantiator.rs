@@ -231,8 +231,7 @@ impl InstantiatorState {
                         record_definition
                             .type_variables
                             .iter()
-                            .enumerate()
-                            .map(|(ti, tv)| (Rc::new(ti), Rc::new(Type::Variable(Rc::clone(tv)))))
+                            .map(|tv| Rc::new(Type::Variable(Rc::clone(tv))))
                             .collect(),
                     ));
                     let subs = unify(loz_type, &record_type).unwrap();
@@ -262,15 +261,8 @@ impl InstantiatorState {
                             record_definition
                                 .type_variables
                                 .iter()
-                                .enumerate()
-                                .map(|(vi, v)| {
-                                    (
-                                        Rc::new(vi),
-                                        substitute_type(
-                                            &subs,
-                                            &Rc::new(Type::Variable(Rc::clone(v))),
-                                        ),
-                                    )
+                                .map(|v| {
+                                    substitute_type(&subs, &Rc::new(Type::Variable(Rc::clone(v))))
                                 })
                                 .collect(),
                         )),
@@ -282,8 +274,7 @@ impl InstantiatorState {
                         adt_definition
                             .type_variables
                             .iter()
-                            .enumerate()
-                            .map(|(ti, tv)| (Rc::new(ti), Rc::new(Type::Variable(Rc::clone(tv)))))
+                            .map(|tv| Rc::new(Type::Variable(Rc::clone(tv))))
                             .collect(),
                     ));
                     let subs = unify(loz_type, &adt_type).unwrap();
@@ -323,15 +314,8 @@ impl InstantiatorState {
                             adt_definition
                                 .type_variables
                                 .iter()
-                                .enumerate()
-                                .map(|(vi, v)| {
-                                    (
-                                        Rc::new(vi),
-                                        substitute_type(
-                                            &subs,
-                                            &Rc::new(Type::Variable(Rc::clone(v))),
-                                        ),
-                                    )
+                                .map(|v| {
+                                    substitute_type(&subs, &Rc::new(Type::Variable(Rc::clone(v))))
                                 })
                                 .collect(),
                         )),
@@ -601,8 +585,7 @@ impl InstantiatorState {
                         record_definition
                             .type_variables
                             .iter()
-                            .enumerate()
-                            .map(|(ti, tv)| (Rc::new(ti), Rc::new(Type::Variable(Rc::clone(tv)))))
+                            .map(|tv| Rc::new(Type::Variable(Rc::clone(tv))))
                             .collect(),
                     )),
                 )
@@ -916,7 +899,7 @@ fn hash_type(t: &Rc<Type>) -> String {
             Type::UserType(name, arguments) => {
                 let replaced_arguments = arguments
                     .iter()
-                    .map(|(ai, a)| (Rc::clone(ai), replace_variable_types(a)))
+                    .map(|a| replace_variable_types(a))
                     .collect();
                 Rc::new(Type::UserType(Rc::clone(name), replaced_arguments))
             }
@@ -984,32 +967,6 @@ fn substitute_record_definition(
             .fields
             .iter()
             .map(|(n, t)| (Rc::clone(n), substitute_type(substitutions, t)))
-            .collect(),
-    })
-}
-
-fn substitute_adt_definition(
-    new_name: &Rc<String>,
-    substitutions: &Substitutions,
-    target: &Rc<ADTDefinition>,
-) -> Rc<ADTDefinition> {
-    Rc::new(ADTDefinition {
-        location: Rc::clone(&target.location),
-        name: Rc::clone(new_name),
-        type_variables: Vec::new(),
-        constructors: target
-            .constructors
-            .iter()
-            .map(|cd| {
-                Rc::new(ADTConstructor {
-                    name: Rc::clone(&cd.name),
-                    elements: cd
-                        .elements
-                        .iter()
-                        .map(|t| substitute_type(substitutions, t))
-                        .collect(),
-                })
-            })
             .collect(),
     })
 }
@@ -1125,10 +1082,7 @@ fn substitute_type_references(
             ))
         }
 
-        (
-            MatchExpression::ADT(l, constructor_name, arguments),
-            Type::UserType(name, argument_types),
-        ) => {
+        (MatchExpression::ADT(l, constructor_name, arguments), Type::UserType(name, _)) => {
             let type_hash = hash_type(match_type);
 
             let adt_definition = adts.get(name).unwrap();
@@ -1147,8 +1101,7 @@ fn substitute_type_references(
                     adt_definition
                         .type_variables
                         .iter()
-                        .enumerate()
-                        .map(|(ti, tv)| (Rc::new(ti), Rc::new(Type::Variable(tv.clone()))))
+                        .map(|tv| Rc::new(Type::Variable(tv.clone())))
                         .collect(),
                 )),
             )

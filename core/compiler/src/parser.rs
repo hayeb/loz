@@ -935,9 +935,8 @@ fn to_type(pair: Pair<Rule>) -> Type {
             let name = elements.next().unwrap().as_str().to_string();
 
             let mut type_arguments = Vec::new();
-            let mut i = 0;
             while let Some(e) = elements.next() {
-                type_arguments.push((Rc::new(i), Rc::new(to_type(e))))
+                type_arguments.push(Rc::new(to_type(e)))
             }
             Type::UserType(Rc::new(name), type_arguments)
         }

@@ -45,7 +45,7 @@ fn apply_substitution(v: &Rc<TypeVar>, t: &Rc<Type>, target: &Rc<Type>) -> Rc<Ty
             Rc::clone(name),
             argument_types
                 .into_iter()
-                .map(|(tv, target)| (tv.clone(), apply_substitution(v, t, target)))
+                .map(|target| apply_substitution(v, t, target))
                 .collect(),
         )),
 

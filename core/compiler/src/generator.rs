@@ -149,7 +149,7 @@ impl<'a> GeneratorState<'a> {
             function_name_to_type: runtime_module
                 .functions
                 .iter()
-                .flat_map(|(n, m)| m.instances.iter())
+                .flat_map(|(_, m)| m.instances.iter())
                 .map(|(n, d)| {
                     (
                         Rc::clone(n),
@@ -193,7 +193,7 @@ impl<'a> GeneratorState<'a> {
         let print_function = self.generate_print(g, main_type, print_bool_function);
         self.generate_function_definitions(g);
         let mut llvm_main_function = None;
-        for (n, fd) in self.functions.values().flat_map(|m| m.instances.iter()) {
+        for (_, fd) in self.functions.values().flat_map(|m| m.instances.iter()) {
             let bla = self.generate_function(g, fd);
             if bla.get_name().to_str().unwrap() == &main_function_name {
                 llvm_main_function = Some(bla);
@@ -319,7 +319,7 @@ impl<'a> GeneratorState<'a> {
                 let constructor_struct_type = self
                     .llvm_context
                     .opaque_struct_type(&constructor_struct_name);
-                let mut argument_types = constructor
+                let argument_types = constructor
                     .elements
                     .iter()
                     .map(|e| self.to_llvm_type(e).as_basic_type_enum())
@@ -670,7 +670,7 @@ impl<'a> GeneratorState<'a> {
                     .constructors
                     .iter()
                     .enumerate()
-                    .filter(|(i, c)| &c.name == &Rc::new(constructor_name.to_string()))
+                    .filter(|(_, c)| &c.name == &Rc::new(constructor_name.to_string()))
                     .map(|(i, _)| i)
                     .next()
                     .unwrap();
@@ -730,7 +730,7 @@ impl<'a> GeneratorState<'a> {
 
                     let argument_blocks: Vec<BasicBlock> = arguments
                         .iter()
-                        .map(|a| {
+                        .map(|_| {
                             self.llvm_context
                                 .append_basic_block(match_block.get_parent().unwrap(), &g.var())
                         })
@@ -862,7 +862,7 @@ impl<'a> GeneratorState<'a> {
             Expression::LonghandListLiteral(_, _, _) => unimplemented!(""),
             Expression::ADTTypeConstructor(_, adt_type, name, arguments) => {
                 let adt_name = match adt_type.as_ref().unwrap().borrow() {
-                    Type::UserType(name, args) => name,
+                    Type::UserType(name, _) => name,
                     _ => unreachable!("ADTTypeConstuctor without Type::UserType type"),
                 };
                 let adt_definition = self

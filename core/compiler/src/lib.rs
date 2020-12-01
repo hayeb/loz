@@ -54,7 +54,7 @@ pub enum Type {
 
     // :: A b c d = A a | B b | C c
     // :: A b c d = {a :: a, b :: b, c :: c, d :: d}
-    UserType(Rc<String>, Vec<(Rc<usize>, Rc<Type>)>),
+    UserType(Rc<String>, Vec<Rc<Type>>),
     Tuple(Vec<Rc<Type>>),
     List(Rc<Type>),
     Variable(Rc<TypeVar>),
@@ -101,7 +101,7 @@ impl Type {
             Type::Float => HashSet::new(),
             Type::UserType(_, argument_types) => {
                 let mut variables = HashSet::new();
-                for (_, t) in argument_types {
+                for t in argument_types {
                     for v in t.collect_free_type_variables() {
                         variables.insert(v);
                     }
@@ -145,7 +145,7 @@ impl Type {
             Type::UserType(name, arguments) => {
                 let mut types: HashSet<Rc<String>> = HashSet::new();
                 types.insert(Rc::clone(name));
-                for (_, a) in arguments {
+                for a in arguments {
                     types.extend(a.referenced_custom_types());
                 }
                 types
