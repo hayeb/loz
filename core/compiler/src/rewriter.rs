@@ -37,6 +37,7 @@ pub fn rewrite(
     modules_by_name: HashMap<Rc<String>, Rc<Module>>,
 ) -> Rc<RuntimeModule> {
     println!("Building runtime module..");
+    println!("Main module: {:#?}", main_module);
 
     let main_module_name = Rc::clone(&main_module.name);
     let main_function_name = Rc::new(format!("{}::main", &main_module_name));
@@ -71,34 +72,58 @@ pub fn rewrite(
                 .unwrap()
                 .enclosed_type,
         ),
-        functions: functions.iter()
-            .map(|(name, definition)| (Rc::clone(name), Monomorphized {
-                base: Rc::clone(definition),
-                instances: instantiated.functions.iter()
-                    .filter(|(n, _)| n.starts_with(&name.to_string()))
-                    .map(|(_, d)| (Rc::clone(&d.name), Rc::clone(d)))
-                    .collect()
-            }))
+        functions: functions
+            .iter()
+            .map(|(name, definition)| {
+                (
+                    Rc::clone(name),
+                    Monomorphized {
+                        base: Rc::clone(definition),
+                        instances: instantiated
+                            .functions
+                            .iter()
+                            .filter(|(n, _)| n.starts_with(&name.to_string()))
+                            .map(|(_, d)| (Rc::clone(&d.name), Rc::clone(d)))
+                            .collect(),
+                    },
+                )
+            })
             .filter(|(_, m)| m.instances.len() > 0)
             .collect(),
-        adts: combined_adts.iter()
-            .map(|(name, definition)| (Rc::clone(name), Monomorphized {
-                base: Rc::clone(definition),
-                instances: instantiated.adts.iter()
-                    .filter(|(n, _)| n.starts_with(&name.to_string()))
-                    .map(|(_, d)| (Rc::clone(&d.name),Rc::clone(d)))
-                    .collect()
-            }))
+        adts: combined_adts
+            .iter()
+            .map(|(name, definition)| {
+                (
+                    Rc::clone(name),
+                    Monomorphized {
+                        base: Rc::clone(definition),
+                        instances: instantiated
+                            .adts
+                            .iter()
+                            .filter(|(n, _)| n.starts_with(&name.to_string()))
+                            .map(|(_, d)| (Rc::clone(&d.name), Rc::clone(d)))
+                            .collect(),
+                    },
+                )
+            })
             .filter(|(_, m)| m.instances.len() > 0)
             .collect(),
-        records: combined_records.iter()
-            .map(|(name, definition)| (Rc::clone(name), Monomorphized {
-                base: Rc::clone(definition),
-                instances: instantiated.records.iter()
-                    .filter(|(n, _)| n.starts_with(&name.to_string()))
-                    .map(|(_, d)| (Rc::clone(&d.name),Rc::clone(d)))
-                    .collect()
-            }))
+        records: combined_records
+            .iter()
+            .map(|(name, definition)| {
+                (
+                    Rc::clone(name),
+                    Monomorphized {
+                        base: Rc::clone(definition),
+                        instances: instantiated
+                            .records
+                            .iter()
+                            .filter(|(n, _)| n.starts_with(&name.to_string()))
+                            .map(|(_, d)| (Rc::clone(&d.name), Rc::clone(d)))
+                            .collect(),
+                    },
+                )
+            })
             .filter(|(_, m)| m.instances.len() > 0)
             .collect(),
     };

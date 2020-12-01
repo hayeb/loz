@@ -257,8 +257,16 @@ impl RenamerState {
                 self.rewrite_type_name(name, current_scope_name, imported_modules, module_aliases),
                 arguments
                     .iter()
-                    .map(|a| {
-                        self.rewrite_type(a, current_scope_name, imported_modules, module_aliases)
+                    .map(|(v, a)| {
+                        (
+                            v.clone(),
+                            self.rewrite_type(
+                                a,
+                                current_scope_name,
+                                imported_modules,
+                                module_aliases,
+                            ),
+                        )
                     })
                     .collect(),
             )),

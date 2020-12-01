@@ -1,0 +1,7 @@
+:: A a = AC (B a)
+:: B b = BC (C b)
+:: C c = CC c
+
+f (AC (BC (CC c))) = c
+
+main = f (AC (BC (CC 135)))

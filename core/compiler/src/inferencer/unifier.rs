@@ -24,7 +24,10 @@ pub fn unify(
                     Rc::clone(b),
                 ))
             } else {
-                unify_types(a_argument_types, b_argument_types)
+                unify_types(
+                    &a_argument_types.iter().map(|(_, t)| t.clone()).collect(),
+                    &b_argument_types.iter().map(|(_, t)| t.clone()).collect(),
+                )
             }
         }
 
@@ -286,17 +289,26 @@ mod tests {
     fn test_unify_custom_type() {
         let adt_a = Rc::new(Type::UserType(
             Rc::new("A".to_string()),
-            vec![Rc::new(Type::Bool), Rc::new(Type::Int)],
+            vec![
+                (Rc::new(1), Rc::new(Type::Bool)),
+                (Rc::new(2), Rc::new(Type::Int)),
+            ],
         ));
         let adt_b = Rc::new(Type::UserType(
             Rc::new("B".to_string()),
-            vec![Rc::new(Type::String)],
+            vec![(Rc::new(3), Rc::new(Type::String))],
         ));
         let adt_c = Rc::new(Type::UserType(
             Rc::new("A".to_string()),
             vec![
-                Rc::new(Type::Variable(Rc::new("a".to_string()))),
-                Rc::new(Type::Variable(Rc::new("b".to_string()))),
+                (
+                    Rc::new(1),
+                    Rc::new(Type::Variable(Rc::new("a".to_string()))),
+                ),
+                (
+                    Rc::new(1),
+                    Rc::new(Type::Variable(Rc::new("b".to_string()))),
+                ),
             ],
         ));
 

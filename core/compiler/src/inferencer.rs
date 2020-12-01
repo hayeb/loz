@@ -1147,8 +1147,12 @@ impl InferencerState {
                             )]);
                         }
                     };
-                let adt_constructor_definition =
-                    adt_definition.constructors.iter().filter(|c| &c.name == constructor_name).next().unwrap();
+                let adt_constructor_definition = adt_definition
+                    .constructors
+                    .iter()
+                    .filter(|c| &c.name == constructor_name)
+                    .next()
+                    .unwrap();
 
                 if adt_constructor_definition.elements.len() != constructor_arguments.len() {
                     return Err(vec![InferenceError::from_loc(
@@ -1205,8 +1209,9 @@ impl InferencerState {
                     .collect();
 
                 let mut concrete_types = Vec::new();
-                for tv in &adt_definition.type_variables {
-                    concrete_types.push(type_variable_to_type.get(tv).unwrap().clone());
+                for (ti, tv) in adt_definition.type_variables.iter().enumerate() {
+                    concrete_types
+                        .push((Rc::new(ti), type_variable_to_type.get(tv).unwrap().clone()));
                 }
 
                 map_unify(
@@ -1277,9 +1282,9 @@ impl InferencerState {
                 // >>>> :: Data v0 v1 v2 = {alpha: v0, beta: v1, gamma: v2}
                 let mut type_variable_to_type = HashMap::new();
                 let mut variables = Vec::new();
-                for tv in &record_definition.type_variables {
+                for (ti, tv) in record_definition.type_variables.iter().enumerate() {
                     let fresh = self.fresh();
-                    variables.push(Rc::clone(&fresh));
+                    variables.push((Rc::new(ti), Rc::clone(&fresh)));
                     type_variable_to_type.insert(Rc::clone(tv), Rc::clone(&fresh));
                 }
 
@@ -1778,8 +1783,15 @@ impl InferencerState {
                             record_definition
                                 .type_variables
                                 .iter()
-                                .map(|tv| {
-                                    substitute_type(&subs, &Rc::new(Type::Variable(Rc::clone(tv))))
+                                .enumerate()
+                                .map(|(ti, tv)| {
+                                    (
+                                        Rc::new(ti),
+                                        substitute_type(
+                                            &subs,
+                                            &Rc::new(Type::Variable(Rc::clone(tv))),
+                                        ),
+                                    )
                                 })
                                 .collect(),
                         ))),
@@ -1891,7 +1903,12 @@ impl InferencerState {
                         )]);
                     }
                 };
-                let adt_constructor_definition = adt_definition.constructors.iter().filter(|c| &c.name == name).next().unwrap();
+                let adt_constructor_definition = adt_definition
+                    .constructors
+                    .iter()
+                    .filter(|c| &c.name == name)
+                    .next()
+                    .unwrap();
 
                 if adt_constructor_definition.elements.len() != arguments.len() {
                     return Err(vec![InferenceError::from_loc(
@@ -1974,8 +1991,9 @@ impl InferencerState {
                     .collect();
 
                 let mut concrete_types = Vec::new();
-                for tv in &adt_definition.type_variables {
-                    concrete_types.push(type_variable_to_type.get(tv).unwrap().clone());
+                for (ti, tv) in adt_definition.type_variables.iter().enumerate() {
+                    concrete_types
+                        .push((Rc::new(ti), type_variable_to_type.get(tv).unwrap().clone()));
                 }
 
                 let concrete_user_type = Rc::new(Type::UserType(
@@ -2110,8 +2128,11 @@ impl InferencerState {
                 union_subs.extend(field_substitutions.into_iter());
 
                 let mut concrete_types = Vec::new();
-                for tv in &record_definition.type_variables {
-                    concrete_types.push(type_variable_to_type.get(tv).map(Rc::clone).unwrap());
+                for (ti, tv) in record_definition.type_variables.iter().enumerate() {
+                    concrete_types.push((
+                        Rc::new(ti),
+                        type_variable_to_type.get(tv).map(Rc::clone).unwrap(),
+                    ));
                 }
 
                 let concrete_user_type = Rc::new(Type::UserType(

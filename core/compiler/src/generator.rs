@@ -48,17 +48,21 @@ use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 use itertools::{EitherOrBoth, Itertools};
 
 use crate::ast::{Expression, FunctionBody, FunctionDefinition, FunctionRule, MatchExpression};
-use crate::rewriter::{RuntimeModule, Monomorphized};
-use crate::{ADTDefinition, RecordDefinition, Type, MODULE_SEPARATOR, MONOMORPHIC_PREFIX, ADT_SEPARATOR};
+use crate::rewriter::{Monomorphized, RuntimeModule};
+use crate::{
+    ADTDefinition, RecordDefinition, Type, ADT_SEPARATOR, MODULE_SEPARATOR, MONOMORPHIC_PREFIX,
+};
 
 pub fn generate(runtime_module: Rc<RuntimeModule>, output_directory: &Path) -> Result<(), String> {
     let context = Context::create();
     let module_name = runtime_module.name.clone();
 
+    println!("Module: {:#?}", &runtime_module);
     let state = GeneratorState::new(&context, runtime_module);
 
     // Generate the ${MODULE_NAME}.o object file
     println!("Generating module..");
+
     state.generate_module(&mut VarGenerator { n: 0 }, module_name.clone());
     let mut object_path = output_directory.to_path_buf();
     object_path.push(format!("{}.o", &module_name));
@@ -176,9 +180,11 @@ impl<'a> GeneratorState<'a> {
             .next()
             .as_ref()
             .unwrap()
-
             .1
-            .base
+            .instances
+            .values()
+            .next()
+            .unwrap()
             .function_type
             .as_ref()
             .unwrap()
@@ -291,25 +297,47 @@ impl<'a> GeneratorState<'a> {
 
     fn generate_adts(&self, _g: &mut VarGenerator) {
         for adt in self.adts.values().flat_map(|a| a.instances.values()) {
+            println!("Adding struct '{}' for ADT {}", &adt.name, &adt.name);
+            self.llvm_context.opaque_struct_type(&adt.name);
+        }
+
+        for adt in self.adts.values().flat_map(|a| a.instances.values()) {
             let field_tag_type = self.llvm_context.i8_type().as_basic_type_enum();
-            let field_content_size = adt.constructors.iter()
+            let field_content_size = adt
+                .constructors
+                .iter()
                 .map(|c| c.elements.iter().map(|e| self.llvm_type_size(e)).sum())
                 .max()
                 .unwrap();
 
             for constructor in adt.constructors.iter() {
                 let constructor_struct_name = format!("{}__{}", adt.name, &constructor.name);
-                println!("Adding struct '{}' for ADT constructor {}", &constructor_struct_name, &constructor.name);
-                let constructor_struct_type = self.llvm_context.opaque_struct_type(&constructor_struct_name);
-                let mut argument_types = constructor.elements.iter()
+                println!(
+                    "Adding struct '{}' for ADT constructor {}",
+                    &constructor_struct_name, &constructor.name
+                );
+                let constructor_struct_type = self
+                    .llvm_context
+                    .opaque_struct_type(&constructor_struct_name);
+                let mut argument_types = constructor
+                    .elements
+                    .iter()
                     .map(|e| self.to_llvm_type(e).as_basic_type_enum())
                     .collect::<Vec<BasicTypeEnum>>();
                 constructor_struct_type.set_body(argument_types.as_slice(), false);
             }
 
-            println!("Adding struct '{}' for ADT {}", &adt.name, &adt.name);
-            let adt_struct_type = self.llvm_context.opaque_struct_type(&adt.name);
-            adt_struct_type.set_body(&[field_tag_type, self.llvm_context.i8_type().array_type(field_content_size).as_basic_type_enum()], false);
+            let adt_struct_type = self.module.get_struct_type(&adt.name).unwrap();
+            adt_struct_type.set_body(
+                &[
+                    field_tag_type,
+                    self.llvm_context
+                        .i8_type()
+                        .array_type(field_content_size)
+                        .as_basic_type_enum(),
+                ],
+                false,
+            );
         }
     }
 
@@ -637,47 +665,106 @@ impl<'a> GeneratorState<'a> {
                 let type_str = bla.next().unwrap();
 
                 let adt_definition = self.adts.get(&adt_name.to_string()).unwrap();
-                let constructor_index = adt_definition.base.constructors.iter()
+                let constructor_index = adt_definition
+                    .base
+                    .constructors
+                    .iter()
                     .enumerate()
                     .filter(|(i, c)| &c.name == &Rc::new(constructor_name.to_string()))
                     .map(|(i, _)| i)
-                    .next().unwrap();
+                    .next()
+                    .unwrap();
 
                 // 1. Check whether the tag field of the matched ADT value struct corresponds with the match
                 //    expression.
-                let tag_pointer = self.builder.build_struct_gep(match_value.into_pointer_value(), 0 as u32, &g.var()).unwrap();
+                let tag_pointer = self
+                    .builder
+                    .build_struct_gep(match_value.into_pointer_value(), 0 as u32, &g.var())
+                    .unwrap();
                 let tag_value = self.builder.build_load(tag_pointer, &g.var());
-                let tag_matches_value = self.builder.build_int_compare(IntPredicate::EQ, tag_value.into_int_value(), self.llvm_context.i8_type().const_int(constructor_index as u64, true), &g.var());
+                let tag_matches_value = self.builder.build_int_compare(
+                    IntPredicate::EQ,
+                    tag_value.into_int_value(),
+                    self.llvm_context
+                        .i8_type()
+                        .const_int(constructor_index as u64, true),
+                    &g.var(),
+                );
 
                 if arguments.len() == 0 {
-                    self.builder.build_conditional_branch(tag_matches_value, match_block, no_match_block);
+                    self.builder.build_conditional_branch(
+                        tag_matches_value,
+                        match_block,
+                        no_match_block,
+                    );
                 } else {
-                    let argument_preparation_block = self.llvm_context.append_basic_block(match_block.get_parent().unwrap(), &g.var());
-                    self.builder.build_conditional_branch(tag_matches_value, argument_preparation_block, no_match_block);
+                    let argument_preparation_block = self
+                        .llvm_context
+                        .append_basic_block(match_block.get_parent().unwrap(), &g.var());
+                    self.builder.build_conditional_branch(
+                        tag_matches_value,
+                        argument_preparation_block,
+                        no_match_block,
+                    );
 
                     self.builder.position_at_end(argument_preparation_block);
-                    let value_pointer = self.builder.build_struct_gep(match_value.into_pointer_value(), 1 as u32, &g.var()).unwrap();
+                    let value_pointer = self
+                        .builder
+                        .build_struct_gep(match_value.into_pointer_value(), 1 as u32, &g.var())
+                        .unwrap();
 
-                    let struct_name = format!("{}{}{}__{}", adt_name, MONOMORPHIC_PREFIX, type_str, constructor_name);
-                    println!("Retrieving struct type for ADT Match expression: {}", &struct_name);
-                    let value_struct_pointer_type = self.module.get_struct_type(&struct_name).unwrap().ptr_type(AddressSpace::Generic);
+                    let struct_name = format!(
+                        "{}{}{}__{}",
+                        adt_name, MONOMORPHIC_PREFIX, type_str, constructor_name
+                    );
+                    println!(
+                        "Retrieving struct type for ADT Match expression: {}",
+                        &struct_name
+                    );
+                    let value_struct_pointer_type = self
+                        .module
+                        .get_struct_type(&struct_name)
+                        .unwrap()
+                        .ptr_type(AddressSpace::Generic);
                     let value_struct_pointer = value_pointer.const_cast(value_struct_pointer_type);
 
-                    let argument_blocks: Vec<BasicBlock> = arguments.iter().map(|a| self.llvm_context.append_basic_block(match_block.get_parent().unwrap(), &g.var())).collect();
-                    self.builder.build_unconditional_branch(argument_blocks.get(0).unwrap().clone());
+                    let argument_blocks: Vec<BasicBlock> = arguments
+                        .iter()
+                        .map(|a| {
+                            self.llvm_context
+                                .append_basic_block(match_block.get_parent().unwrap(), &g.var())
+                        })
+                        .collect();
+                    self.builder
+                        .build_unconditional_branch(argument_blocks.get(0).unwrap().clone());
 
-                    for (i, (argument, block)) in arguments.iter().zip(argument_blocks.iter()).enumerate() {
+                    for (i, (argument, block)) in
+                        arguments.iter().zip(argument_blocks.iter()).enumerate()
+                    {
                         self.builder.position_at_end(block.clone());
 
-                        let argument_value_pointer = self.builder.build_struct_gep(value_struct_pointer, i as u32, &g.var()).unwrap();
-                        let argument_value = self.builder.build_load(argument_value_pointer, &g.var());
+                        let argument_value_pointer = self
+                            .builder
+                            .build_struct_gep(value_struct_pointer, i as u32, &g.var())
+                            .unwrap();
+                        let argument_value =
+                            self.builder.build_load(argument_value_pointer, &g.var());
 
-                        let next_match_block = argument_blocks.get(i + 1).cloned().unwrap_or_else(|| match_block);
+                        let next_match_block = argument_blocks
+                            .get(i + 1)
+                            .cloned()
+                            .unwrap_or_else(|| match_block);
 
-                        value_information.extend(self.generate_match_expression(g, argument, argument_value, next_match_block, no_match_block));
+                        value_information.extend(self.generate_match_expression(
+                            g,
+                            argument,
+                            argument_value,
+                            next_match_block,
+                            no_match_block,
+                        ));
                     }
                 }
-            },
+            }
             MatchExpression::Record(_, record_name, fields) => {
                 let record_definition = self.records.get(record_name).unwrap();
                 for field in fields {
@@ -773,13 +860,21 @@ impl<'a> GeneratorState<'a> {
             Expression::EmptyListLiteral(_) => unimplemented!(""),
             Expression::ShorthandListLiteral(_, _) => unimplemented!(""),
             Expression::LonghandListLiteral(_, _, _) => unimplemented!(""),
-            Expression::ADTTypeConstructor(_, adt_type, name, arguments)
-            => {
+            Expression::ADTTypeConstructor(_, adt_type, name, arguments) => {
                 let adt_name = match adt_type.as_ref().unwrap().borrow() {
                     Type::UserType(name, args) => name,
-                    _ => unreachable!("ADTTypeConstuctor without Type::UserType type")
+                    _ => unreachable!("ADTTypeConstuctor without Type::UserType type"),
                 };
-                let adt_definition = self.adts.get(&adt_name.split(MONOMORPHIC_PREFIX).next().unwrap().to_string()).unwrap();
+                let adt_definition = self
+                    .adts
+                    .get(
+                        &adt_name
+                            .split(MONOMORPHIC_PREFIX)
+                            .next()
+                            .unwrap()
+                            .to_string(),
+                    )
+                    .unwrap();
                 let adt_llvm_type = self.module.get_struct_type(adt_name).unwrap();
 
                 let adt_value_pointer = self
@@ -795,23 +890,38 @@ impl<'a> GeneratorState<'a> {
                     .into_pointer_value()
                     .const_cast(adt_llvm_type.ptr_type(AddressSpace::Generic));
 
-                let adt_constructor_llvm_type = self.module.get_struct_type(&format!("{}__{}", adt_name, name)).unwrap();
-                let constructor_index = adt_definition.base.constructors.iter()
+                let adt_constructor_llvm_type = self
+                    .module
+                    .get_struct_type(&format!("{}__{}", adt_name, name))
+                    .unwrap();
+                let constructor_index = adt_definition
+                    .base
+                    .constructors
+                    .iter()
                     .enumerate()
                     .filter(|(_, c)| &c.name == name)
                     .map(|(i, _)| i)
                     .next()
                     .unwrap();
 
-                let tag_pointer = self.builder.build_struct_gep(adt_value_pointer, 0 as u32, &g.var()).unwrap();
-                self.builder.build_store(tag_pointer, self.llvm_context.i8_type().const_int(constructor_index as u64, false));
+                let tag_pointer = self
+                    .builder
+                    .build_struct_gep(adt_value_pointer, 0 as u32, &g.var())
+                    .unwrap();
+                self.builder.build_store(
+                    tag_pointer,
+                    self.llvm_context
+                        .i8_type()
+                        .const_int(constructor_index as u64, false),
+                );
 
-                let adt_constructor_value_pointer = self.builder.build_struct_gep(adt_value_pointer, 1 as u32, &g.var())
+                let adt_constructor_value_pointer = self
+                    .builder
+                    .build_struct_gep(adt_value_pointer, 1 as u32, &g.var())
                     .unwrap()
                     .const_cast(adt_constructor_llvm_type.ptr_type(AddressSpace::Generic));
 
-                for (i, argument_expression) in arguments.iter().enumerate()
-                {
+                for (i, argument_expression) in arguments.iter().enumerate() {
                     let v = self.generate_expression(g, argument_expression, value_information);
                     let field_ptr = self
                         .builder
@@ -820,7 +930,7 @@ impl<'a> GeneratorState<'a> {
                     self.builder.build_store(field_ptr, v);
                 }
                 adt_value_pointer.as_basic_value_enum()
-            },
+            }
 
             Expression::Record(_, _, c, d) => {
                 let record_definition = self.records.get(c).unwrap();
@@ -838,8 +948,12 @@ impl<'a> GeneratorState<'a> {
                     .into_pointer_value()
                     .const_cast(record_llvm_type.ptr_type(AddressSpace::Generic));
 
-                for (i, (_, (_, field_expression))) in
-                    record_definition.base.fields.iter().zip(d.iter()).enumerate()
+                for (i, (_, (_, field_expression))) in record_definition
+                    .base
+                    .fields
+                    .iter()
+                    .zip(d.iter())
+                    .enumerate()
                 {
                     let v = self.generate_expression(g, field_expression, value_information);
                     let field_ptr = self
@@ -1337,17 +1451,15 @@ impl<'a> GeneratorState<'a> {
                 &g.var(),
             ),
             Type::UserType(name, _) => {
-                if self.records.contains_key(name) {
+                let base_name = name.split(MONOMORPHIC_PREFIX).next().unwrap().to_string();
+                if self.records.contains_key(&base_name) {
                     let print_string = self
                         .builder
                         .build_global_string_ptr("%s", "print_string")
                         .as_basic_value_enum();
                     let record_prefix = self
                         .builder
-                        .build_global_string_ptr(
-                            &format!("{{{}|", sanitize_name(name)),
-                            "record_prefix",
-                        )
+                        .build_global_string_ptr(&format!("{{{}|", sanitize_name(name)), &g.var())
                         .as_basic_value_enum();
                     let record_suffix = self
                         .builder
@@ -1364,11 +1476,14 @@ impl<'a> GeneratorState<'a> {
                     self.builder
                         .build_call(printf, &[print_string, record_prefix], &g.var());
 
-
-                    let record_definition = self.records.get(&name.split(MONOMORPHIC_PREFIX).next().unwrap().to_string()).unwrap();
+                    let record_definition = self
+                        .records
+                        .get(&name.split(MONOMORPHIC_PREFIX).next().unwrap().to_string())
+                        .unwrap();
                     let record_instance_definition = record_definition.instances.get(name).unwrap();
                     let struct_value = value.into_pointer_value();
-                    for (i, (field_name, field_type)) in record_instance_definition.fields.iter().enumerate()
+                    for (i, (field_name, field_type)) in
+                        record_instance_definition.fields.iter().enumerate()
                     {
                         let field_pointer = self
                             .builder
@@ -1392,6 +1507,13 @@ impl<'a> GeneratorState<'a> {
                         }
                     }
                     self.builder.build_call(printf, &[record_suffix], &g.var())
+                } else if self.adts.contains_key(&base_name) {
+                    let adt_name_string = self
+                        .builder
+                        .build_global_string_ptr(name, &g.var())
+                        .as_basic_value_enum();
+                    self.builder
+                        .build_call(printf, &[adt_name_string], &g.var())
                 } else {
                     unimplemented!("Printing ADTs")
                 }

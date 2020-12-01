@@ -1,8 +1,8 @@
 :: T a b c = A a | B b
 
 f (A a) = a
-g (B b) = b
+f (B b) = b
 //h (C c) = c
 
 main
-= (f (A 18))
+= (f (A 18), f (B 'c'), f (A "Test"), f (B 0.5))

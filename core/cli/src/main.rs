@@ -77,7 +77,7 @@ fn main() {
         Err(_) => {
             let pb = PathBuf::from(DEFAULT_LOZ_HOME);
             if !pb.is_dir() {
-                println!("Default for does $LOZ_HOME '{}' does not point to a directory. Unable to find StdLib.", DEFAULT_LOZ_HOME);
+                println!("Default for $LOZ_HOME '{}' does not point to a directory. Unable to find StdLib.", DEFAULT_LOZ_HOME);
                 exit(3)
             }
             pb
