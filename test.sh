@@ -8,7 +8,7 @@ cargo build --release
 while IFS= read -r -d '' file
 do
   echo "Testing file $file"
-  ./target/release/cloz $file || exit 1
+  LOZ_HOME=core/compiler/lib ./target/release/cloz $file || exit 1
   echo "Exit code: $?"
   filename="$(basename -s .loz $file)"
   output=$(./target/$filename)

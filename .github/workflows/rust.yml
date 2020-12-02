@@ -13,7 +13,5 @@ jobs:
       run: cargo build --verbose
     - name: Run unittests
       run: cargo test --verbose
-    - name: Install LLVM
-      run: sudo apt install llvm-9 llvm-9-dev llvm-9-runtime
     - name: Run integration tests
       run: ./test.sh
