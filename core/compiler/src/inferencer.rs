@@ -238,7 +238,6 @@ fn add_inferred_type(
     existing_type: Option<Rc<TypeScheme>>,
 ) -> Option<Rc<TypeScheme>> {
     if let Some(t) = existing_type {
-        println!("Adding inferred type to {}: {}", name, &t);
         return Some(t);
     }
     return toplevel_frame

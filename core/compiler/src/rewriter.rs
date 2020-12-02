@@ -37,7 +37,6 @@ pub fn rewrite(
     modules_by_name: HashMap<Rc<String>, Rc<Module>>,
 ) -> Rc<RuntimeModule> {
     println!("Building runtime module..");
-    println!("Main module: {:#?}", main_module);
 
     let main_module_name = Rc::clone(&main_module.name);
     let main_function_name = Rc::new(format!("{}::main", &main_module_name));

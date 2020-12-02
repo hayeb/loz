@@ -57,7 +57,6 @@ pub fn generate(runtime_module: Rc<RuntimeModule>, output_directory: &Path) -> R
     let context = Context::create();
     let module_name = runtime_module.name.clone();
 
-    println!("Module: {:#?}", &runtime_module);
     let state = GeneratorState::new(&context, runtime_module);
 
     // Generate the ${MODULE_NAME}.o object file
@@ -297,7 +296,6 @@ impl<'a> GeneratorState<'a> {
 
     fn generate_adts(&self, _g: &mut VarGenerator) {
         for adt in self.adts.values().flat_map(|a| a.instances.values()) {
-            println!("Adding struct '{}' for ADT {}", &adt.name, &adt.name);
             self.llvm_context.opaque_struct_type(&adt.name);
         }
 
@@ -312,10 +310,6 @@ impl<'a> GeneratorState<'a> {
 
             for constructor in adt.constructors.iter() {
                 let constructor_struct_name = format!("{}__{}", adt.name, &constructor.name);
-                println!(
-                    "Adding struct '{}' for ADT constructor {}",
-                    &constructor_struct_name, &constructor.name
-                );
                 let constructor_struct_type = self
                     .llvm_context
                     .opaque_struct_type(&constructor_struct_name);
@@ -365,10 +359,6 @@ impl<'a> GeneratorState<'a> {
                 function_type,
                 Some(Linkage::External),
             ));
-            println!(
-                "Added function declaration for {}",
-                &function_definition.name
-            )
         }
         function_values
     }
@@ -657,7 +647,6 @@ impl<'a> GeneratorState<'a> {
             MatchExpression::LonghandList(_, _, _) => unimplemented!(""),
             MatchExpression::Wildcard(_) => unimplemented!(""),
             MatchExpression::ADT(_, adt_constructor_name, arguments) => {
-                println!("Generating ADT constructor match {}", adt_constructor_name);
                 let mut bla = adt_constructor_name.split(MONOMORPHIC_PREFIX);
                 let mut blie = bla.next().unwrap().split(ADT_SEPARATOR);
                 let adt_name = blie.next().unwrap();
@@ -716,10 +705,6 @@ impl<'a> GeneratorState<'a> {
                     let struct_name = format!(
                         "{}{}{}__{}",
                         adt_name, MONOMORPHIC_PREFIX, type_str, constructor_name
-                    );
-                    println!(
-                        "Retrieving struct type for ADT Match expression: {}",
-                        &struct_name
                     );
                     let value_struct_pointer_type = self
                         .module
@@ -1293,7 +1278,6 @@ impl<'a> GeneratorState<'a> {
     }
 
     fn write_module_object(&self, object_file: &Path) -> Result<(), String> {
-        println!("LLMVM IR:\n{}", self.module.print_to_string().to_string());
         Target::initialize_x86(&InitializationConfig::default());
 
         let opt = OptimizationLevel::Aggressive;
