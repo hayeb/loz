@@ -1832,12 +1832,18 @@ impl InferencerState {
                     subs,
                 )
             }
-            Expression::EmptyListLiteral(loc) => {
-                let fresh = self.fresh();
-                let subs = map_unify(loc, unify(&Rc::new(Type::List(fresh)), &expected_type))?;
-                (Expression::EmptyListLiteral(Rc::clone(loc)), subs)
+            Expression::EmptyListLiteral(loc, _) => {
+                let fresh_list_type = Rc::new(Type::List(self.fresh()));
+                let subs = map_unify(loc, unify(&fresh_list_type, &expected_type))?;
+                (
+                    Expression::EmptyListLiteral(
+                        Rc::clone(loc),
+                        Some(substitute_type(&subs, &fresh_list_type)),
+                    ),
+                    subs,
+                )
             }
-            Expression::ShorthandListLiteral(loc, elements) => {
+            Expression::ShorthandListLiteral(loc, _, elements) => {
                 let mut list_type = self.fresh();
                 let mut union_subs = Vec::new();
                 let mut inferred_elements = Vec::new();
@@ -1848,17 +1854,27 @@ impl InferencerState {
                     list_type = substitute_type(&subs, &list_type);
                     inferred_elements.push(inferred_e);
                 }
-                let subs = map_unify(loc, unify(&Rc::new(Type::List(list_type)), &expected_type))
-                    .map(|mut r| {
+                let subs = map_unify(
+                    loc,
+                    unify(&Rc::new(Type::List(list_type.clone())), &expected_type),
+                )
+                .map(|mut r| {
                     r.extend(union_subs);
                     r
                 })?;
                 (
-                    Expression::ShorthandListLiteral(Rc::clone(loc), inferred_elements),
+                    Expression::ShorthandListLiteral(
+                        Rc::clone(loc),
+                        Some(substitute_type(
+                            &subs,
+                            &Rc::new(Type::List(Rc::clone(&list_type))),
+                        )),
+                        inferred_elements,
+                    ),
                     subs,
                 )
             }
-            Expression::LonghandListLiteral(loc, head, tail) => {
+            Expression::LonghandListLiteral(loc, _, head, tail) => {
                 let fresh = self.fresh();
                 let (inferred_head, head_subs) = self.infer_expression(&head, &fresh)?;
                 self.extend_type_environment(&head_subs);
@@ -1880,7 +1896,12 @@ impl InferencerState {
                     nr
                 })?;
                 (
-                    Expression::LonghandListLiteral(Rc::clone(loc), inferred_head, inferred_tail),
+                    Expression::LonghandListLiteral(
+                        Rc::clone(loc),
+                        Some(substitute_type(&subs, &tail_type)),
+                        inferred_head,
+                        inferred_tail,
+                    ),
                     subs,
                 )
             }

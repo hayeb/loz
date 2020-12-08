@@ -694,9 +694,12 @@ impl RenamerState {
                     })
                     .collect(),
             ),
-            Expression::EmptyListLiteral(l) => Expression::EmptyListLiteral(Rc::clone(l)),
-            Expression::ShorthandListLiteral(l, es) => Expression::ShorthandListLiteral(
+            Expression::EmptyListLiteral(l, list_type) => {
+                Expression::EmptyListLiteral(Rc::clone(l), list_type.clone())
+            }
+            Expression::ShorthandListLiteral(l, list_type, es) => Expression::ShorthandListLiteral(
                 Rc::clone(l),
+                list_type.clone(),
                 es.iter()
                     .map(|e| {
                         self.rewrite_expression(
@@ -708,11 +711,24 @@ impl RenamerState {
                     })
                     .collect(),
             ),
-            Expression::LonghandListLiteral(l, he, te) => Expression::LonghandListLiteral(
-                Rc::clone(l),
-                self.rewrite_expression(he, current_scope_name, imported_modules, module_aliases),
-                self.rewrite_expression(te, current_scope_name, imported_modules, module_aliases),
-            ),
+            Expression::LonghandListLiteral(l, list_type, he, te) => {
+                Expression::LonghandListLiteral(
+                    Rc::clone(l),
+                    list_type.clone(),
+                    self.rewrite_expression(
+                        he,
+                        current_scope_name,
+                        imported_modules,
+                        module_aliases,
+                    ),
+                    self.rewrite_expression(
+                        te,
+                        current_scope_name,
+                        imported_modules,
+                        module_aliases,
+                    ),
+                )
+            }
             Expression::ADTTypeConstructor(l, user_type, name, es) => {
                 Expression::ADTTypeConstructor(
                     Rc::clone(l),

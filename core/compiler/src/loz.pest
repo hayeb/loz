@@ -103,7 +103,7 @@ list_type = { "[" ~ loz_top_type ~ "]"}
 custom_type = { qualifiable_capital_identifier ~ loz_type_term*}
 custom_type_single = {qualifiable_capital_identifier}
 function_type = {
-    ((custom_type_single | loz_type_term )~ NEWLINE*)+ ~ NEWLINE? ~ "->" ~ NEWLINE? ~ (loz_top_type | custom_type | custom_type_single)
+    ((loz_type_term | custom_type_single)~ NEWLINE*)+ ~ NEWLINE? ~ "->" ~ NEWLINE? ~ (loz_top_type | custom_type | custom_type_single)
 }
 
 tuple_type = { "(" ~ loz_type_term ~ ("," ~ loz_type_term)+ ~ ")" }

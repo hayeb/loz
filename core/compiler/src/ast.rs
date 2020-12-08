@@ -45,9 +45,14 @@ pub enum Expression {
 
     TupleLiteral(Rc<Location>, Vec<Rc<Expression>>),
 
-    EmptyListLiteral(Rc<Location>),
-    ShorthandListLiteral(Rc<Location>, Vec<Rc<Expression>>),
-    LonghandListLiteral(Rc<Location>, Rc<Expression>, Rc<Expression>),
+    EmptyListLiteral(Rc<Location>, Option<Rc<Type>>),
+    ShorthandListLiteral(Rc<Location>, Option<Rc<Type>>, Vec<Rc<Expression>>),
+    LonghandListLiteral(
+        Rc<Location>,
+        Option<Rc<Type>>,
+        Rc<Expression>,
+        Rc<Expression>,
+    ),
 
     ADTTypeConstructor(
         Rc<Location>,

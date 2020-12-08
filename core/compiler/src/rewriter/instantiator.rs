@@ -1,9 +1,6 @@
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-
 use crate::inferencer::substitutor::{substitute, substitute_type, Substitutions};
 use crate::inferencer::unifier::unify;
-use crate::{ADT_SEPARATOR, MONOMORPHIC_PREFIX};
+use crate::{hash_type, ADT_SEPARATOR, MONOMORPHIC_PREFIX};
 
 use super::*;
 
@@ -509,11 +506,14 @@ impl InstantiatorState {
                     instantiated,
                 )
             }
-            Expression::EmptyListLiteral(loc) => (
-                Rc::new(Expression::EmptyListLiteral(Rc::clone(loc))),
+            Expression::EmptyListLiteral(loc, list_type) => (
+                Rc::new(Expression::EmptyListLiteral(
+                    Rc::clone(loc),
+                    list_type.clone(),
+                )),
                 Instantiated::new(),
             ),
-            Expression::ShorthandListLiteral(loc, elements) => {
+            Expression::ShorthandListLiteral(loc, list_type, elements) => {
                 let mut instantiated_elements = Vec::new();
                 let mut instantiated = Instantiated::new();
                 for element in elements {
@@ -525,12 +525,13 @@ impl InstantiatorState {
                 (
                     Rc::new(Expression::ShorthandListLiteral(
                         Rc::clone(loc),
+                        list_type.clone(),
                         instantiated_elements,
                     )),
                     instantiated,
                 )
             }
-            Expression::LonghandListLiteral(loc, h, t) => {
+            Expression::LonghandListLiteral(loc, list_type, h, t) => {
                 let mut instantiated = Instantiated::new();
                 let (instantiated_h, new_instantiated) =
                     self.resolve_expression(h, type_information);
@@ -541,6 +542,7 @@ impl InstantiatorState {
                 (
                     Rc::new(Expression::LonghandListLiteral(
                         Rc::clone(loc),
+                        list_type.clone(),
                         instantiated_h,
                         instantiated_t,
                     )),
@@ -882,48 +884,6 @@ impl InstantiatorState {
     }
 }
 
-fn hash_type(t: &Rc<Type>) -> String {
-    fn hash<T: Hash>(t: &Rc<T>) -> String {
-        let mut s = DefaultHasher::new();
-        t.hash(&mut s);
-        format!("{}", s.finish())
-    }
-
-    fn replace_variable_types(t: &Rc<Type>) -> Rc<Type> {
-        match t.borrow() {
-            Type::Bool => Rc::new(Type::Bool),
-            Type::Char => Rc::new(Type::Char),
-            Type::String => Rc::new(Type::String),
-            Type::Int => Rc::new(Type::Int),
-            Type::Float => Rc::new(Type::Float),
-            Type::UserType(name, arguments) => {
-                let replaced_arguments = arguments
-                    .iter()
-                    .map(|a| replace_variable_types(a))
-                    .collect();
-                Rc::new(Type::UserType(Rc::clone(name), replaced_arguments))
-            }
-            Type::Tuple(element_types) => Rc::new(Type::Tuple(
-                element_types
-                    .iter()
-                    .map(|et| replace_variable_types(et))
-                    .collect(),
-            )),
-            Type::List(list_type) => Rc::new(Type::List(replace_variable_types(list_type))),
-            Type::Variable(_) => Rc::new(Type::Variable(Rc::new("*".to_string()))),
-            Type::Function(argument_types, result_type) => Rc::new(Type::Function(
-                argument_types
-                    .iter()
-                    .map(|at| replace_variable_types(at))
-                    .collect(),
-                replace_variable_types(result_type),
-            )),
-        }
-    }
-
-    return hash(&replace_variable_types(t));
-}
-
 fn substitute_function_definition(
     adts: &HashMap<Rc<String>, Rc<ADTDefinition>>,
     records: &HashMap<Rc<String>, Rc<RecordDefinition>>,
@@ -1162,16 +1122,29 @@ fn substitute_expression(substitutions: &Substitutions, target: &Rc<Expression>)
                 .map(|e| substitute_expression(substitutions, e))
                 .collect(),
         ),
-        Expression::EmptyListLiteral(loc) => Expression::EmptyListLiteral(Rc::clone(loc)),
-        Expression::ShorthandListLiteral(loc, elements) => Expression::ShorthandListLiteral(
+        Expression::EmptyListLiteral(loc, list_type) => Expression::EmptyListLiteral(
             Rc::clone(loc),
-            elements
-                .iter()
-                .map(|e| substitute_expression(substitutions, e))
-                .collect(),
+            list_type
+                .as_ref()
+                .map(|t| substitute_type(&substitutions, t)),
         ),
-        Expression::LonghandListLiteral(loc, h, t) => Expression::LonghandListLiteral(
+        Expression::ShorthandListLiteral(loc, list_type, elements) => {
+            Expression::ShorthandListLiteral(
+                Rc::clone(loc),
+                list_type
+                    .as_ref()
+                    .map(|t| substitute_type(&substitutions, t)),
+                elements
+                    .iter()
+                    .map(|e| substitute_expression(substitutions, e))
+                    .collect(),
+            )
+        }
+        Expression::LonghandListLiteral(loc, list_type, h, t) => Expression::LonghandListLiteral(
             Rc::clone(loc),
+            list_type
+                .as_ref()
+                .map(|t| substitute_type(&substitutions, t)),
             substitute_expression(substitutions, h),
             substitute_expression(substitutions, t),
         ),

@@ -10,6 +10,8 @@ use std::rc::Rc;
 
 use crate::ast::{Expression, FunctionBody, FunctionDefinition, FunctionRule, MatchExpression};
 use crate::Expression::*;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 pub mod ast;
 pub mod generator;
@@ -177,9 +179,9 @@ impl Expression {
             IntegerLiteral(loc, _) => Rc::clone(loc),
             FloatLiteral(loc, _) => Rc::clone(loc),
             TupleLiteral(loc, _) => Rc::clone(loc),
-            EmptyListLiteral(loc) => Rc::clone(loc),
-            ShorthandListLiteral(loc, _) => Rc::clone(loc),
-            LonghandListLiteral(loc, _, _) => Rc::clone(loc),
+            EmptyListLiteral(loc, _) => Rc::clone(loc),
+            ShorthandListLiteral(loc, _, _) => Rc::clone(loc),
+            LonghandListLiteral(loc, _, _, _) => Rc::clone(loc),
             ADTTypeConstructor(loc, _, _, _) => Rc::clone(loc),
             Record(loc, _, _, _) => Rc::clone(loc),
             Case(loc, _, _) => Rc::clone(loc),
@@ -236,11 +238,11 @@ impl Expression {
             Expression::TupleLiteral(_, expressions) => {
                 Expression::list_references(expressions, include_variables)
             }
-            Expression::EmptyListLiteral(_) => HashSet::new(),
-            Expression::ShorthandListLiteral(_, expressions) => {
+            Expression::EmptyListLiteral(_, _) => HashSet::new(),
+            Expression::ShorthandListLiteral(_, _, expressions) => {
                 Expression::list_references(expressions, include_variables)
             }
-            Expression::LonghandListLiteral(_, e1, e2) => {
+            Expression::LonghandListLiteral(_, _, e1, e2) => {
                 Expression::dual_references(e1, e2, include_variables)
             }
             Expression::ADTTypeConstructor(_, _, _, expressions) => {
@@ -401,4 +403,46 @@ pub fn body_references(
         .into_iter()
         .filter(|(v, _)| !local_references.contains(v))
         .collect()
+}
+
+fn hash_type(t: &Rc<Type>) -> String {
+    fn hash<T: Hash>(t: &Rc<T>) -> String {
+        let mut s = DefaultHasher::new();
+        t.hash(&mut s);
+        format!("{}", s.finish())
+    }
+
+    fn replace_variable_types(t: &Rc<Type>) -> Rc<Type> {
+        match t.borrow() {
+            Type::Bool => Rc::new(Type::Bool),
+            Type::Char => Rc::new(Type::Char),
+            Type::String => Rc::new(Type::String),
+            Type::Int => Rc::new(Type::Int),
+            Type::Float => Rc::new(Type::Float),
+            Type::UserType(name, arguments) => {
+                let replaced_arguments = arguments
+                    .iter()
+                    .map(|a| replace_variable_types(a))
+                    .collect();
+                Rc::new(Type::UserType(Rc::clone(name), replaced_arguments))
+            }
+            Type::Tuple(element_types) => Rc::new(Type::Tuple(
+                element_types
+                    .iter()
+                    .map(|et| replace_variable_types(et))
+                    .collect(),
+            )),
+            Type::List(list_type) => Rc::new(Type::List(replace_variable_types(list_type))),
+            Type::Variable(_) => Rc::new(Type::Variable(Rc::new("*".to_string()))),
+            Type::Function(argument_types, result_type) => Rc::new(Type::Function(
+                argument_types
+                    .iter()
+                    .map(|at| replace_variable_types(at))
+                    .collect(),
+                replace_variable_types(result_type),
+            )),
+        }
+    }
+
+    return hash(&replace_variable_types(t));
 }

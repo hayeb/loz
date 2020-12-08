@@ -1,0 +1,4 @@
+f :: Int -> [Int]
+f _ = []
+
+main = f 18

@@ -42,15 +42,16 @@ use inkwell::module::{Linkage, Module};
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
 };
-use inkwell::types::{BasicType, BasicTypeEnum};
-use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue};
+use inkwell::types::{BasicType, BasicTypeEnum, PointerType};
+use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 use itertools::{EitherOrBoth, Itertools};
 
 use crate::ast::{Expression, FunctionBody, FunctionDefinition, FunctionRule, MatchExpression};
 use crate::rewriter::{Monomorphized, RuntimeModule};
 use crate::{
-    ADTDefinition, RecordDefinition, Type, ADT_SEPARATOR, MODULE_SEPARATOR, MONOMORPHIC_PREFIX,
+    hash_type, ADTDefinition, RecordDefinition, Type, ADT_SEPARATOR, MODULE_SEPARATOR,
+    MONOMORPHIC_PREFIX,
 };
 
 pub fn generate(runtime_module: Rc<RuntimeModule>, output_directory: &Path) -> Result<(), String> {
@@ -188,8 +189,8 @@ impl<'a> GeneratorState<'a> {
             .as_ref()
             .unwrap()
             .enclosed_type;
-        let print_bool_function = self.generate_print_bool(g);
-        let print_function = self.generate_print(g, main_type, print_bool_function);
+        self.generate_print_bool(g);
+        let print_function = self.generate_print(g, main_type);
         self.generate_function_definitions(g);
         let mut llvm_main_function = None;
         for (_, fd) in self.functions.values().flat_map(|m| m.instances.iter()) {
@@ -851,9 +852,68 @@ impl<'a> GeneratorState<'a> {
                 }
                 tuple_pointer.as_basic_value_enum()
             }
-            Expression::EmptyListLiteral(_) => unimplemented!(""),
-            Expression::ShorthandListLiteral(_, _) => unimplemented!(""),
-            Expression::LonghandListLiteral(_, _, _) => unimplemented!(""),
+            Expression::EmptyListLiteral(_, Some(list_type)) => {
+                let element_type = match list_type.borrow() {
+                    Type::List(element_type) => element_type,
+                    _ => unreachable!("List literal without list type"),
+                };
+                self.retrieve_list_type(element_type)
+                    .const_null()
+                    .as_basic_value_enum()
+            }
+            Expression::ShorthandListLiteral(_, Some(list_type), arguments) => {
+                let element_type = match list_type.borrow() {
+                    Type::List(element_type) => element_type,
+                    _ => unreachable!("List literal without list type"),
+                };
+
+                let list_pointer_type = self.retrieve_list_type(element_type);
+                let list_struct_type = list_pointer_type.get_element_type().into_struct_type();
+
+                let mut first_node_pointer: Option<PointerValue> = None;
+                let mut previous_node_pointer: Option<PointerValue> = None;
+                for argument in arguments {
+                    let argument_value = self.generate_expression(g, argument, value_information);
+                    let list_node_struct_pointer = self
+                        .builder
+                        .build_call(
+                            self.module.get_function("malloc").unwrap(),
+                            &[list_struct_type.size_of().unwrap().as_basic_value_enum()],
+                            &g.var(),
+                        )
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap()
+                        .into_pointer_value()
+                        .const_cast(list_struct_type.ptr_type(AddressSpace::Generic));
+                    let list_node_value_pointer = self
+                        .builder
+                        .build_struct_gep(list_node_struct_pointer, 0, &g.var())
+                        .unwrap();
+                    self.builder
+                        .build_store(list_node_value_pointer, argument_value);
+
+                    if let None = first_node_pointer {
+                        first_node_pointer = Some(list_node_struct_pointer);
+                    }
+
+                    if let Some(previous_node_pointer) = previous_node_pointer {
+                        let previous_node_next_pointer = self
+                            .builder
+                            .build_struct_gep(previous_node_pointer, 1, &g.var())
+                            .unwrap();
+                        self.builder.build_store(
+                            previous_node_next_pointer,
+                            list_node_struct_pointer.as_basic_value_enum(),
+                        );
+                    }
+
+                    previous_node_pointer = Some(list_node_struct_pointer)
+                }
+
+                first_node_pointer.unwrap().as_basic_value_enum()
+            }
+            Expression::LonghandListLiteral(_, _, _, _) => unimplemented!(""),
             Expression::ADTTypeConstructor(_, adt_type, name, arguments) => {
                 let adt_name = match adt_type.as_ref().unwrap().borrow() {
                     Type::UserType(name, _) => name,
@@ -1274,11 +1334,14 @@ impl<'a> GeneratorState<'a> {
                 self.builder.build_load(field_pointer.unwrap(), &g.var())
             }
             Expression::Lambda(_, _, _, _) => unimplemented!(""),
+            t => unreachable!("generating expression for {:#?}", t),
         }
     }
 
     fn write_module_object(&self, object_file: &Path) -> Result<(), String> {
         Target::initialize_x86(&InitializationConfig::default());
+
+        println!("LLMVM IR:\n{}", self.module.print_to_string().to_string());
 
         let opt = OptimizationLevel::Aggressive;
         let reloc = RelocMode::Default;
@@ -1319,12 +1382,7 @@ impl<'a> GeneratorState<'a> {
         self.builder.build_unreachable();
     }
 
-    fn generate_print(
-        &self,
-        g: &mut VarGenerator,
-        type_to_print: &Rc<Type>,
-        print_bool_function: FunctionValue,
-    ) -> FunctionValue {
+    fn generate_print(&self, g: &mut VarGenerator, type_to_print: &Rc<Type>) -> FunctionValue {
         let print_value_type = self.llvm_context.void_type().fn_type(
             &[self.to_llvm_type(type_to_print).as_basic_type_enum()],
             false,
@@ -1343,7 +1401,6 @@ impl<'a> GeneratorState<'a> {
                 .get_nth_param(0)
                 .unwrap()
                 .as_basic_value_enum(),
-            print_bool_function,
         );
         self.builder.build_call(
             self.module.get_function("printf").unwrap(),
@@ -1406,55 +1463,63 @@ impl<'a> GeneratorState<'a> {
         &self,
         g: &mut VarGenerator,
         type_to_print: &Rc<Type>,
-        value: BasicValueEnum,
-        print_bool_function: FunctionValue,
+        value: BasicValueEnum<'a>,
     ) {
         let printf = self.module.get_function("printf").unwrap();
+        let print_bool = self.module.get_function("print_bool").unwrap();
         match type_to_print.borrow() {
-            Type::Bool => self
-                .builder
-                .build_call(print_bool_function, &[value], &g.var()),
+            Type::Bool => {
+                self.builder.build_call(print_bool, &[value], &g.var());
+            }
 
-            Type::Char => self.builder.build_call(
-                printf,
-                &[
-                    self.builder
-                        .build_global_string_ptr("'%s'", "char_format_string")
-                        .as_basic_value_enum(),
-                    value,
-                ],
-                &g.var(),
-            ),
-            Type::String => self.builder.build_call(
-                printf,
-                &[
-                    self.builder
-                        .build_global_string_ptr("\"%s\"", "string_format_string")
-                        .as_basic_value_enum(),
-                    value,
-                ],
-                &g.var(),
-            ),
-            Type::Int => self.builder.build_call(
-                printf,
-                &[
-                    self.builder
-                        .build_global_string_ptr("%d", "int_format_string")
-                        .as_basic_value_enum(),
-                    value,
-                ],
-                &g.var(),
-            ),
-            Type::Float => self.builder.build_call(
-                printf,
-                &[
-                    self.builder
-                        .build_global_string_ptr("%f", "float_format_string")
-                        .as_basic_value_enum(),
-                    value,
-                ],
-                &g.var(),
-            ),
+            Type::Char => {
+                self.builder.build_call(
+                    printf,
+                    &[
+                        self.builder
+                            .build_global_string_ptr("'%s'", "char_format_string")
+                            .as_basic_value_enum(),
+                        value,
+                    ],
+                    &g.var(),
+                );
+            }
+            Type::String => {
+                self.builder.build_call(
+                    printf,
+                    &[
+                        self.builder
+                            .build_global_string_ptr("\"%s\"", "string_format_string")
+                            .as_basic_value_enum(),
+                        value,
+                    ],
+                    &g.var(),
+                );
+            }
+            Type::Int => {
+                self.builder.build_call(
+                    printf,
+                    &[
+                        self.builder
+                            .build_global_string_ptr("%d", "int_format_string")
+                            .as_basic_value_enum(),
+                        value,
+                    ],
+                    &g.var(),
+                );
+            }
+            Type::Float => {
+                self.builder.build_call(
+                    printf,
+                    &[
+                        self.builder
+                            .build_global_string_ptr("%f", "float_format_string")
+                            .as_basic_value_enum(),
+                        value,
+                    ],
+                    &g.var(),
+                );
+            }
             Type::UserType(name, _) => {
                 let base_name = name.split(MONOMORPHIC_PREFIX).next().unwrap().to_string();
                 if self.records.contains_key(&base_name) {
@@ -1505,13 +1570,13 @@ impl<'a> GeneratorState<'a> {
                             ],
                             &g.var(),
                         );
-                        self.generate_print_code(g, field_type, field_value, print_bool_function);
+                        self.generate_print_code(g, field_type, field_value);
                         if i < record_instance_definition.fields.len() - 1 {
                             self.builder
                                 .build_call(printf, &[record_field_separator], &g.var());
                         }
                     }
-                    self.builder.build_call(printf, &[record_suffix], &g.var())
+                    self.builder.build_call(printf, &[record_suffix], &g.var());
                 } else if self.adts.contains_key(&base_name) {
                     let adt_name_string = self
                         .builder
@@ -1521,7 +1586,7 @@ impl<'a> GeneratorState<'a> {
                         )
                         .as_basic_value_enum();
                     self.builder
-                        .build_call(printf, &[adt_name_string], &g.var())
+                        .build_call(printf, &[adt_name_string], &g.var());
                 } else {
                     unimplemented!("Printing ADTs")
                 }
@@ -1546,18 +1611,134 @@ impl<'a> GeneratorState<'a> {
                         .build_struct_gep(value.into_pointer_value(), i as u32, &g.var())
                         .unwrap();
                     let element_value = self.builder.build_load(element_pointer, &g.var());
-                    self.generate_print_code(g, element_type, element_value, print_bool_function);
+                    self.generate_print_code(g, element_type, element_value);
                     if i < elements.len() - 1 {
                         self.builder
                             .build_call(printf, &[tuple_separator], &g.var());
                     }
                 }
-                self.builder.build_call(printf, &[tuple_suffix], &g.var())
+                self.builder.build_call(printf, &[tuple_suffix], &g.var());
             }
-            Type::List(_) => unimplemented!(""),
+            Type::List(element_type) => {
+                let list_open = self
+                    .builder
+                    .build_global_string_ptr("[", "list_open")
+                    .as_basic_value_enum();
+                self.builder.build_call(printf, &[list_open], &g.var());
+
+                let print_list_function = self.generate_print_list(g, element_type);
+                self.builder
+                    .build_call(print_list_function, &[value], &g.var());
+
+                let list_close = self
+                    .builder
+                    .build_global_string_ptr("]", "list_close")
+                    .as_basic_value_enum();
+                self.builder.build_call(printf, &[list_close], &g.var());
+            }
             Type::Variable(_) => unimplemented!(""),
             Type::Function(_, _) => unreachable!("Printing function not supported."),
         };
+    }
+
+    fn generate_print_list(&self, g: &mut VarGenerator, element_type: &Rc<Type>) -> FunctionValue {
+        let current_block = self.builder.get_insert_block().unwrap();
+        let printf = self.module.get_function("printf").unwrap();
+
+        let type_hash = hash_type(element_type);
+        let print_list_function = self.module.add_function(
+            &format!("__print__list__{}", type_hash),
+            self.llvm_context.void_type().fn_type(
+                &[self
+                    .to_llvm_type(&Rc::new(Type::List(Rc::clone(element_type))))
+                    .as_basic_type_enum()],
+                false,
+            ),
+            Some(Linkage::External),
+        );
+
+        let print_list_null_block = self
+            .llvm_context
+            .append_basic_block(print_list_function, "Null");
+        let print_list_value_block = self
+            .llvm_context
+            .append_basic_block(print_list_function, "Entry");
+        let print_list_next_block = self
+            .llvm_context
+            .append_basic_block(print_list_function, "Next");
+        let print_list_end_block = self
+            .llvm_context
+            .append_basic_block(print_list_function, "End");
+        self.builder.position_at_end(print_list_null_block);
+
+        let argument_pointer = print_list_function
+            .get_nth_param(0)
+            .unwrap()
+            .into_pointer_value();
+        let argument_pointer_int =
+            self.builder
+                .build_ptr_to_int(argument_pointer, self.llvm_context.i64_type(), &g.var());
+        let argument_is_null = self.builder.build_int_compare(
+            IntPredicate::EQ,
+            argument_pointer_int,
+            self.llvm_context.i64_type().const_int(0, false),
+            &g.var(),
+        );
+
+        self.builder.build_conditional_branch(
+            argument_is_null,
+            print_list_end_block,
+            print_list_value_block,
+        );
+        self.builder.position_at_end(print_list_value_block);
+
+        let current_value_pointer = self
+            .builder
+            .build_struct_gep(argument_pointer, 0, &g.var())
+            .unwrap();
+        let current_value = self.builder.build_load(current_value_pointer, &g.var());
+        self.generate_print_code(g, element_type, current_value);
+
+        let next_pointer_pointer = self
+            .builder
+            .build_struct_gep(argument_pointer, 1, &g.var())
+            .unwrap();
+        let next_pointer = self.builder.build_load(next_pointer_pointer, &g.var());
+
+        let next_pointer_int = self.builder.build_ptr_to_int(
+            next_pointer.into_pointer_value(),
+            self.llvm_context.i64_type(),
+            &g.var(),
+        );
+
+        let has_next = self.builder.build_int_compare(
+            IntPredicate::NE,
+            next_pointer_int,
+            self.llvm_context.i64_type().const_int(0, false),
+            &g.var(),
+        );
+
+        self.builder.build_conditional_branch(
+            has_next,
+            print_list_next_block,
+            print_list_end_block,
+        );
+
+        self.builder.position_at_end(print_list_end_block);
+        self.builder.build_return(None);
+
+        self.builder.position_at_end(print_list_next_block);
+        let list_separator = self
+            .builder
+            .build_global_string_ptr(", ", "list_separator")
+            .as_basic_value_enum();
+        self.builder.build_call(printf, &[list_separator], &g.var());
+        self.builder
+            .build_call(print_list_function, &[next_pointer], &g.var());
+        self.builder.build_return(None);
+
+        self.builder.position_at_end(current_block);
+        print_list_function
     }
 
     fn llvm_type_size(&self, loz_type: &Rc<Type>) -> u32 {
@@ -1611,7 +1792,30 @@ impl<'a> GeneratorState<'a> {
                     .ptr_type(AddressSpace::Generic),
             ),
             Type::Variable(_) => Box::new(self.llvm_context.i8_type().as_basic_type_enum()),
+            Type::List(element_type) => {
+                Box::new(self.retrieve_list_type(element_type).as_basic_type_enum())
+            }
             _ => unimplemented!("{:?}", loz_type),
+        }
+    }
+
+    fn retrieve_list_type(&self, element_type: &Rc<Type>) -> PointerType<'a> {
+        let list_struct_name = format!("__list__{}", hash_type(element_type));
+        if let Some(bla) = self.module.get_struct_type(&list_struct_name) {
+            return bla.ptr_type(AddressSpace::Generic);
+        } else {
+            let list_struct_type = self.llvm_context.opaque_struct_type(&list_struct_name);
+            let llvm_element_type = self.to_llvm_type(element_type).as_basic_type_enum();
+            list_struct_type.set_body(
+                &[
+                    llvm_element_type,
+                    list_struct_type
+                        .ptr_type(AddressSpace::Generic)
+                        .as_basic_type_enum(),
+                ],
+                false,
+            );
+            return list_struct_type.ptr_type(AddressSpace::Generic);
         }
     }
 }

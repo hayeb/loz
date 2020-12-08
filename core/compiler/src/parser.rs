@@ -568,9 +568,10 @@ fn to_term(
                 .map(|te| Rc::new(to_expression(te, module_name, function_name, line_starts)))
                 .collect(),
         ),
-        Rule::list_empty => EmptyListLiteral(loc_info),
+        Rule::list_empty => EmptyListLiteral(loc_info, None),
         Rule::list_singleton => ShorthandListLiteral(
             loc_info,
+            None,
             vec![Rc::new(to_expression(
                 sub.into_inner().nth(0).unwrap(),
                 module_name,
@@ -580,6 +581,7 @@ fn to_term(
         ),
         Rule::list_shorthand => ShorthandListLiteral(
             loc_info,
+            None,
             sub.into_inner()
                 .map(|te| Rc::new(to_expression(te, module_name, function_name, line_starts)))
                 .collect(),
@@ -590,6 +592,7 @@ fn to_term(
             let tail = children.next().unwrap();
             LonghandListLiteral(
                 loc_info,
+                None,
                 Rc::new(to_expression(head, module_name, function_name, line_starts)),
                 Rc::new(to_expression(tail, module_name, function_name, line_starts)),
             )
