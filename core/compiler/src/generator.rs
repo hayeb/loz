@@ -913,7 +913,49 @@ impl<'a> GeneratorState<'a> {
 
                 first_node_pointer.unwrap().as_basic_value_enum()
             }
-            Expression::LonghandListLiteral(_, _, _, _) => unimplemented!(""),
+            Expression::LonghandListLiteral(
+                _,
+                Some(list_type),
+                head_expression,
+                tail_list_expression,
+            ) => {
+                let element_type = match list_type.borrow() {
+                    Type::List(element_type) => element_type,
+                    _ => unreachable!("List literal without list type"),
+                };
+
+                let list_pointer_type = self.retrieve_list_type(element_type);
+                let list_struct_type = list_pointer_type.get_element_type().into_struct_type();
+
+                let head_value = self.generate_expression(g, head_expression, value_information);
+                let tail_list_value =
+                    self.generate_expression(g, tail_list_expression, value_information);
+                let list_node_struct_pointer = self
+                    .builder
+                    .build_call(
+                        self.module.get_function("malloc").unwrap(),
+                        &[list_struct_type.size_of().unwrap().as_basic_value_enum()],
+                        &g.var(),
+                    )
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_pointer_value()
+                    .const_cast(list_struct_type.ptr_type(AddressSpace::Generic));
+
+                let value_pointer = self
+                    .builder
+                    .build_struct_gep(list_node_struct_pointer, 0, &g.var())
+                    .unwrap();
+                self.builder.build_store(value_pointer, head_value);
+                let next_pointer = self
+                    .builder
+                    .build_struct_gep(list_node_struct_pointer, 1, &g.var())
+                    .unwrap();
+                self.builder.build_store(next_pointer, tail_list_value);
+
+                list_node_struct_pointer.as_basic_value_enum()
+            }
             Expression::ADTTypeConstructor(_, adt_type, name, arguments) => {
                 let adt_name = match adt_type.as_ref().unwrap().borrow() {
                     Type::UserType(name, _) => name,

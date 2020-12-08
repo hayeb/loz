@@ -1,0 +1,4 @@
+f :: Int Int -> [Int]
+f n m = [n : [m]]
+
+main = f 18 19
