@@ -681,7 +681,9 @@ impl<'a> GeneratorState<'a> {
             }
             MatchExpression::ShorthandList(_, _) => unimplemented!(""),
             MatchExpression::LonghandList(_, _, _) => unimplemented!(""),
-            MatchExpression::Wildcard(_) => unimplemented!(""),
+            MatchExpression::Wildcard(_) => {
+                self.builder.build_unconditional_branch(match_block);
+            }
             MatchExpression::ADT(_, adt_constructor_name, arguments) => {
                 let mut bla = adt_constructor_name.split(MONOMORPHIC_PREFIX);
                 let mut blie = bla.next().unwrap().split(ADT_SEPARATOR);
