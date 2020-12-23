@@ -643,7 +643,42 @@ impl<'a> GeneratorState<'a> {
                 value_information.insert(Rc::clone(name), match_value);
                 self.builder.build_unconditional_branch(match_block);
             }
-            MatchExpression::Tuple(_, _) => unimplemented!(""),
+            MatchExpression::Tuple(_, elements) => {
+                let element_blocks: Vec<BasicBlock> = elements
+                    .iter()
+                    .map(|_| {
+                        self.llvm_context
+                            .append_basic_block(match_block.get_parent().unwrap(), &g.var())
+                    })
+                    .collect();
+
+                self.builder
+                    .build_unconditional_branch(element_blocks.get(0).unwrap().clone());
+
+                for (index, (element, element_match_block)) in
+                    elements.iter().zip(element_blocks.iter()).enumerate()
+                {
+                    self.builder.position_at_end(element_match_block.clone());
+                    let element_pointer = self.builder.build_struct_gep(
+                        match_value.into_pointer_value(),
+                        index as u32,
+                        &g.var(),
+                    );
+                    let element_value = self.builder.build_load(element_pointer.unwrap(), &g.var());
+                    let next_match_block = element_blocks
+                        .get(index + 1)
+                        .cloned()
+                        .unwrap_or_else(|| match_block);
+
+                    value_information.extend(self.generate_match_expression(
+                        g,
+                        element,
+                        element_value,
+                        next_match_block,
+                        no_match_block,
+                    ));
+                }
+            }
             MatchExpression::ShorthandList(_, _) => unimplemented!(""),
             MatchExpression::LonghandList(_, _, _) => unimplemented!(""),
             MatchExpression::Wildcard(_) => unimplemented!(""),
