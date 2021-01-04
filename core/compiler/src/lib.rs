@@ -184,7 +184,7 @@ impl Expression {
             LonghandListLiteral(loc, _, _, _) => Rc::clone(loc),
             ADTTypeConstructor(loc, _, _, _) => Rc::clone(loc),
             Record(loc, _, _, _) => Rc::clone(loc),
-            Case(loc, _, _) => Rc::clone(loc),
+            Case(loc, _, _, _) => Rc::clone(loc),
             Call(loc, _, _, _) => Rc::clone(loc),
             Variable(loc, _) => Rc::clone(loc),
             Negation(loc, _) => Rc::clone(loc),
@@ -252,7 +252,7 @@ impl Expression {
                 &expressions.into_iter().map(|(_, e)| e.clone()).collect(),
                 include_variables,
             ),
-            Expression::Case(_, e, rules) => {
+            Expression::Case(_, e, rules, _) => {
                 let mut fs = e.references(include_variables);
 
                 for r in rules {

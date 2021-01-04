@@ -620,7 +620,7 @@ impl InstantiatorState {
                     instantiated,
                 )
             }
-            Expression::Case(loc, expression, rules) => {
+            Expression::Case(loc, expression, rules, result_type) => {
                 let mut instantiated = Instantiated::new();
                 let (instantiated_expression, new_instantiated) =
                     self.resolve_expression(expression, type_information);
@@ -650,6 +650,7 @@ impl InstantiatorState {
                         Rc::clone(loc),
                         instantiated_expression,
                         instantiated_rules,
+                        result_type.clone(),
                     )),
                     instantiated,
                 )
@@ -1175,7 +1176,7 @@ fn substitute_expression(substitutions: &Substitutions, target: &Rc<Expression>)
                 .collect(),
         ),
 
-        Expression::Case(loc, expression, rules) => Expression::Case(
+        Expression::Case(loc, expression, rules, result_type) => Expression::Case(
             Rc::clone(loc),
             substitute_expression(substitutions, expression),
             rules
@@ -1193,6 +1194,9 @@ fn substitute_expression(substitutions: &Substitutions, target: &Rc<Expression>)
                     })
                 })
                 .collect(),
+            result_type
+                .as_ref()
+                .map(|rt| substitute_type(substitutions, rt)),
         ),
         Expression::Call(loc, function_type, name, arguments) => Expression::Call(
             loc.clone(),

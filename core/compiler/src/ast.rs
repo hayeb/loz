@@ -67,7 +67,12 @@ pub enum Expression {
         Vec<(Rc<String>, Rc<Expression>)>,
     ),
 
-    Case(Rc<Location>, Rc<Expression>, Vec<Rc<CaseRule>>),
+    Case(
+        Rc<Location>,
+        Rc<Expression>,
+        Vec<Rc<CaseRule>>,
+        Option<Rc<Type>>,
+    ),
 
     Call(
         Rc<Location>,

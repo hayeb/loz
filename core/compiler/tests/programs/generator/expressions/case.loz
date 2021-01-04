@@ -1,0 +1,6 @@
+f bla = case bla of
+    [a, b, c] => c,
+    [a, b] => b,
+    [a] => a
+
+main = f [1, 2, 3]

@@ -1289,7 +1289,97 @@ impl<'a> GeneratorState<'a> {
                 }
                 record_heap_pointer.as_basic_value_enum()
             }
-            Expression::Case(_, _, _) => unimplemented!(""),
+            Expression::Case(_, e, rules, result_type) => {
+                let ev = self.generate_expression(g, e, value_information);
+                let current_function = self
+                    .builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_parent()
+                    .unwrap();
+                let rule_blocks: Vec<(BasicBlock, BasicBlock)> = rules
+                    .iter()
+                    .map(|_| {
+                        let match_block = self
+                            .llvm_context
+                            .append_basic_block(current_function, &g.var());
+                        let result_block = self
+                            .llvm_context
+                            .append_basic_block(current_function, &g.var());
+                        (match_block, result_block)
+                    })
+                    .collect();
+                let current_block = self.builder.get_insert_block().unwrap();
+                let no_match_block = self
+                    .llvm_context
+                    .append_basic_block(current_function, &g.var());
+                let case_result_block = self
+                    .llvm_context
+                    .append_basic_block(current_function, &g.var());
+                self.builder.position_at_end(no_match_block);
+                self.generate_abort(g, String::from("No matching case rule"), 1);
+                self.builder.position_at_end(current_block);
+
+                let result_variable = self.builder.build_alloca(
+                    self.to_llvm_type(result_type.as_ref().unwrap())
+                        .as_basic_type_enum(),
+                    &g.var(),
+                );
+
+                self.builder
+                    .build_unconditional_branch(rule_blocks.first().unwrap().0.clone());
+
+                for bla in rules
+                    .iter()
+                    .zip(rule_blocks.iter())
+                    .zip_longest(rule_blocks.iter().skip(1))
+                {
+                    let (rule, match_block, result_block, next_match_block) = match bla {
+                        EitherOrBoth::Both(
+                            (rule, (match_block, result_block)),
+                            (next_match_block, _),
+                        ) => (
+                            rule,
+                            match_block.clone(),
+                            result_block.clone(),
+                            next_match_block.clone(),
+                        ),
+                        EitherOrBoth::Left((rule, (match_block, result_block))) => (
+                            rule,
+                            match_block.clone(),
+                            result_block.clone(),
+                            no_match_block,
+                        ),
+                        EitherOrBoth::Right(_) => unreachable!(),
+                    };
+                    self.builder.position_at_end(match_block);
+                    let match_value_information = self.generate_match_expression(
+                        g,
+                        &rule.case_rule,
+                        ev,
+                        result_block,
+                        next_match_block,
+                    );
+
+                    self.builder.position_at_end(result_block);
+                    let mut combined_value_information = HashMap::new();
+                    combined_value_information.extend(
+                        value_information
+                            .iter()
+                            .map(|(l, r)| (l.clone(), r.clone()))
+                            .collect::<HashMap<Rc<String>, BasicValueEnum>>(),
+                    );
+                    combined_value_information.extend(match_value_information);
+
+                    let value =
+                        self.generate_expression(g, &rule.result_rule, &combined_value_information);
+                    self.builder.build_store(result_variable, value);
+                    self.builder.build_unconditional_branch(case_result_block);
+                }
+                self.builder.position_at_end(case_result_block);
+                let result = self.builder.build_load(result_variable, &g.var());
+                result
+            }
             Expression::Call(_, _, b, arguments) => {
                 let mut llvm_argument_values = Vec::new();
                 for a in arguments {

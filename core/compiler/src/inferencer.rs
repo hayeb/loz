@@ -2280,39 +2280,6 @@ impl InferencerState {
                     subs,
                 )
             }
-            Expression::Case(loc, expression, rules) => {
-                let fresh = self.fresh();
-                let (inferred_expression, subs) = self.infer_expression(expression, &fresh)?;
-                self.extend_type_environment(&subs);
-
-                let mut match_type = substitute_type(&subs, &fresh);
-                let mut return_type = self.fresh();
-                let mut inferred_case_rules = Vec::new();
-                for rule in rules {
-                    self.push_frame();
-                    let subs = self.infer_match_expression(&rule.case_rule, &match_type)?;
-                    self.extend_type_environment(&subs);
-                    match_type = substitute_type(&subs, &match_type);
-
-                    let (inferred_result_rule, subs) =
-                        self.infer_expression(&rule.result_rule, &return_type)?;
-                    self.extend_type_environment(&subs);
-                    return_type = substitute_type(&subs, &return_type);
-                    let type_information = self.pop_frame().unwrap().type_scheme_context;
-                    inferred_case_rules.push(Rc::new(CaseRule {
-                        loc_info: Rc::clone(&rule.loc_info),
-                        type_information,
-                        case_rule: Rc::clone(&rule.case_rule),
-                        result_rule: inferred_result_rule,
-                    }))
-                }
-
-                let subs = map_unify(loc, unify(&return_type, &expected_type))?;
-                (
-                    Expression::Case(Rc::clone(loc), inferred_expression, inferred_case_rules),
-                    subs,
-                )
-            }
             Expression::Lambda(loc, _, arguments, body) => {
                 let mut argument_types = Vec::new();
                 let mut union_subs = Vec::new();
@@ -2356,6 +2323,66 @@ impl InferencerState {
                         inferred_body,
                     ),
                     subs,
+                )
+            }
+            Expression::Case(loc, expression, rules, _) => {
+                let fresh = self.fresh();
+                let mut union_subs = Vec::new();
+                let (inferred_expression, subs) = self.infer_expression(expression, &fresh)?;
+                self.extend_type_environment(&subs);
+                union_subs.extend(
+                    subs.iter()
+                        .map(|(v, t)| (v.clone(), t.clone()))
+                        .collect::<Substitutions>(),
+                );
+
+                let mut match_type = substitute_type(&subs, &fresh);
+                let mut return_type = self.fresh();
+                let mut inferred_case_rules = Vec::new();
+                for rule in rules {
+                    self.push_frame();
+                    let subs = self.infer_match_expression(&rule.case_rule, &match_type)?;
+                    self.extend_type_environment(&subs);
+                    union_subs.extend(
+                        subs.iter()
+                            .map(|(v, t)| (v.clone(), t.clone()))
+                            .collect::<Substitutions>(),
+                    );
+                    match_type = substitute_type(&subs, &match_type);
+
+                    let (inferred_result_rule, subs) =
+                        self.infer_expression(&rule.result_rule, &return_type)?;
+                    self.extend_type_environment(&subs);
+                    union_subs.extend(
+                        subs.iter()
+                            .map(|(v, t)| (v.clone(), t.clone()))
+                            .collect::<Substitutions>(),
+                    );
+                    return_type = substitute_type(&subs, &return_type);
+                    match_type = substitute_type(&subs, &match_type);
+                    let type_information = self.pop_frame().unwrap().type_scheme_context;
+                    inferred_case_rules.push(Rc::new(CaseRule {
+                        loc_info: Rc::clone(&rule.loc_info),
+                        type_information,
+                        case_rule: Rc::clone(&rule.case_rule),
+                        result_rule: inferred_result_rule,
+                    }))
+                }
+
+                let subs = map_unify(loc, unify(&return_type, &expected_type))?;
+                union_subs.extend(
+                    subs.iter()
+                        .map(|(v, t)| (v.clone(), t.clone()))
+                        .collect::<Substitutions>(),
+                );
+                (
+                    Expression::Case(
+                        Rc::clone(loc),
+                        inferred_expression,
+                        inferred_case_rules,
+                        Some(substitute_type(&subs, &return_type)),
+                    ),
+                    union_subs,
                 )
             }
         };

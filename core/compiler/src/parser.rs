@@ -631,7 +631,7 @@ fn to_term(
                     })
                 })
                 .collect();
-            Case(loc_info, Rc::new(expression), rules)
+            Case(loc_info, Rc::new(expression), rules, None)
         }
         Rule::adt_term => {
             let mut elements = sub.into_inner();

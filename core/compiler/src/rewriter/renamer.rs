@@ -774,7 +774,7 @@ impl RenamerState {
                     })
                     .collect(),
             ),
-            Expression::Case(l, e, rules) => Expression::Case(
+            Expression::Case(l, e, rules, result_type) => Expression::Case(
                 Rc::clone(l),
                 self.rewrite_expression(e, current_scope_name, imported_modules, module_aliases),
                 rules
@@ -818,6 +818,9 @@ impl RenamerState {
                         res
                     })
                     .collect(),
+                result_type.as_ref().map(|rt| {
+                    self.rewrite_type(rt, current_scope_name, imported_modules, module_aliases)
+                }),
             ),
             Expression::Call(l, function_type, function_name, es) => Expression::Call(
                 Rc::clone(l),
