@@ -1,6 +1,6 @@
 f list
-# [1, 2, 3] = list
-= 1 + 2 + 3
+# [a, b, c] = list
+= a + b + c
 
 
 main = f [1, 2, 3]

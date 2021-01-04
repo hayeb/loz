@@ -901,20 +901,26 @@ impl InferencerState {
                 .collect();
 
             let mut inferred_rules = Vec::new();
+            let mut rule_subs: Substitutions = Vec::new();
             for r in &body.rules {
                 match r.borrow() {
                     FunctionRule::ConditionalRule(loc, condition, expression) => {
                         let (inferred_condition, subs) =
                             self.infer_expression(&condition, &Rc::new(Type::Bool))?;
+
                         self.extend_type_environment(&subs);
                         current_match_types = substitute_list(&subs, &current_match_types);
                         current_return_type = substitute_type(&subs, &current_return_type);
+                        rule_subs.extend(subs);
 
                         let (inferred_expression, subs) =
                             self.infer_expression(&expression, &current_return_type)?;
+
                         self.extend_type_environment(&subs);
                         current_return_type = substitute_type(&subs, &current_return_type);
                         current_match_types = substitute_list(&subs, &current_match_types);
+                        rule_subs.extend(subs);
+
                         inferred_rules.push(Rc::new(FunctionRule::ConditionalRule(
                             Rc::clone(loc),
                             inferred_condition,
@@ -924,10 +930,12 @@ impl InferencerState {
                     FunctionRule::ExpressionRule(loc, expression) => {
                         let (inferred_expression, subs) =
                             self.infer_expression(&expression, &current_return_type)?;
-                        self.extend_type_environment(&subs);
 
+                        self.extend_type_environment(&subs);
                         current_return_type = substitute_type(&subs, &current_return_type);
                         current_match_types = substitute_list(&subs, &current_match_types);
+                        rule_subs.extend(subs);
+
                         inferred_rules.push(Rc::new(FunctionRule::ExpressionRule(
                             Rc::clone(loc),
                             inferred_expression,
@@ -937,17 +945,23 @@ impl InferencerState {
                         self.push_frame();
                         let fresh = self.fresh();
                         let subs = self.infer_match_expression(&match_expression, &fresh)?;
+
                         self.extend_type_environment(&subs);
                         current_match_types = substitute_list(&subs, &current_match_types);
                         current_return_type = substitute_type(&subs, &current_return_type);
-
                         let rhs_type = substitute_type(&subs, &fresh);
+                        rule_subs.extend(subs);
+
                         let (inferred_expression, subs) =
                             self.infer_expression(&expression, &rhs_type)?;
+
                         self.extend_type_environment(&subs);
                         current_match_types = substitute_list(&subs, &current_match_types);
                         current_return_type = substitute_type(&subs, &current_return_type);
-                        let type_information = self.pop_frame().unwrap().type_scheme_context;
+                        rule_subs.extend(subs);
+
+                        let type_information =
+                            self.frames.last().unwrap().type_scheme_context.clone();
                         inferred_rules.push(Rc::new(FunctionRule::LetRule(
                             Rc::clone(loc),
                             type_information,
@@ -957,6 +971,33 @@ impl InferencerState {
                     }
                 }
             }
+
+            let inferred_rules: Vec<Rc<FunctionRule>> = inferred_rules
+                .into_iter()
+                .map(|rule| match rule.borrow() {
+                    FunctionRule::ConditionalRule(_, _, _) => rule,
+                    FunctionRule::ExpressionRule(_, _) => rule,
+                    FunctionRule::LetRule(l, ti, lhs, rhs) => Rc::new(FunctionRule::LetRule(
+                        l.clone(),
+                        ti.iter()
+                            .map(|(tv, ts)| {
+                                (
+                                    tv.clone(),
+                                    Rc::new(TypeScheme {
+                                        bound_variables: HashSet::new(),
+                                        enclosed_type: substitute_type(
+                                            &rule_subs,
+                                            &ts.enclosed_type,
+                                        ),
+                                    }),
+                                )
+                            })
+                            .collect(),
+                        lhs.clone(),
+                        rhs.clone(),
+                    )),
+                })
+                .collect();
 
             let type_information = self.pop_frame().unwrap().type_scheme_context;
 
