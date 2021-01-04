@@ -125,13 +125,13 @@ impl VarGenerator {
     fn var(&mut self) -> String {
         let n = self.n;
         self.n += 1;
-        format!("v{}$$", n)
+        format!("v{}___", n)
     }
 
     fn global(&mut self) -> String {
         let n = self.n;
         self.n += 1;
-        format!("g{}$$", n)
+        format!("g{}___", n)
     }
 }
 
@@ -679,7 +679,118 @@ impl<'a> GeneratorState<'a> {
                     ));
                 }
             }
-            MatchExpression::ShorthandList(_, _) => unimplemented!(""),
+            MatchExpression::ShorthandList(_, elements) => {
+                // match_value: *{element: T, next: *List<T>}
+                let list_pointer_value = match_value.into_pointer_value();
+                let list_ptr_int = self.builder.build_ptr_to_int(
+                    list_pointer_value,
+                    self.llvm_context.i64_type(),
+                    &g.var(),
+                );
+                let element_is_null = self.builder.build_int_compare(
+                    IntPredicate::EQ,
+                    list_ptr_int,
+                    self.llvm_context.i64_type().const_int(0, false),
+                    &g.var(),
+                );
+
+                let element_match_blocks: Vec<(BasicBlock, BasicBlock)> = elements
+                    .iter()
+                    .map(|_| {
+                        (
+                            self.llvm_context
+                                .append_basic_block(match_block.get_parent().unwrap(), &g.var()),
+                            self.llvm_context
+                                .append_basic_block(match_block.get_parent().unwrap(), &g.var()),
+                        )
+                    })
+                    .collect();
+
+                if elements.len() == 0 {
+                    self.builder.build_conditional_branch(
+                        element_is_null,
+                        match_block,
+                        no_match_block,
+                    );
+                } else {
+                    self.builder.build_conditional_branch(
+                        element_is_null,
+                        no_match_block,
+                        element_match_blocks.get(0).unwrap().0.clone(),
+                    );
+                }
+
+                if elements.len() > 0 {
+                    let mut current_node_pointer = list_pointer_value;
+                    for bla in elements
+                        .iter()
+                        .enumerate()
+                        .zip(element_match_blocks.iter())
+                        .zip_longest(element_match_blocks.iter().skip(1))
+                    {
+                        let (
+                            (match_index, match_expression),
+                            (current_value_block, current_next_node_block),
+                            match_block,
+                        ) = match bla {
+                            EitherOrBoth::Both((me, cb), (mb, _)) => (me, cb.clone(), mb.clone()),
+                            EitherOrBoth::Left((me, cb)) => (me, cb.clone(), match_block),
+                            EitherOrBoth::Right(_) => panic!(""),
+                        };
+                        self.builder.position_at_end(current_value_block.clone());
+                        let element_value_pointer = self
+                            .builder
+                            .build_struct_gep(current_node_pointer, 0, &g.var())
+                            .unwrap();
+                        let element_value =
+                            self.builder.build_load(element_value_pointer, &g.var());
+                        value_information.extend(self.generate_match_expression(
+                            g,
+                            match_expression,
+                            element_value,
+                            current_next_node_block,
+                            no_match_block,
+                        ));
+
+                        self.builder.position_at_end(current_next_node_block);
+                        let next_node_pointer = self
+                            .builder
+                            .build_struct_gep(current_node_pointer, 1, &g.var())
+                            .unwrap();
+                        let next_node_pointer_value = self
+                            .builder
+                            .build_load(next_node_pointer, &g.var())
+                            .into_pointer_value();
+                        let next_pointer_int = self.builder.build_ptr_to_int(
+                            next_node_pointer_value,
+                            self.llvm_context.i64_type(),
+                            &g.var(),
+                        );
+                        let next_is_null = self.builder.build_int_compare(
+                            IntPredicate::EQ,
+                            next_pointer_int,
+                            self.llvm_context.i64_type().const_int(0, false),
+                            &g.var(),
+                        );
+
+                        if match_index + 1 == elements.len() {
+                            self.builder.build_conditional_branch(
+                                next_is_null,
+                                match_block,
+                                no_match_block,
+                            );
+                        } else {
+                            self.builder.build_conditional_branch(
+                                next_is_null,
+                                no_match_block,
+                                match_block,
+                            );
+                        }
+
+                        current_node_pointer = next_node_pointer_value;
+                    }
+                }
+            }
             MatchExpression::LonghandList(_, _, _) => unimplemented!(""),
             MatchExpression::Wildcard(_) => {
                 self.builder.build_unconditional_branch(match_block);
