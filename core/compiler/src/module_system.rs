@@ -99,7 +99,7 @@ pub struct CompilerOptions {
 
     pub print_ast: bool,
     pub print_types: bool,
-    pub execute: bool,
+    pub emit_llvm_ir: bool,
 }
 
 pub fn compile_modules(

@@ -53,10 +53,9 @@ fn main() {
             .long("print-inferred-types")
             .help("Toggles whether to print the inferred types of functions without a type declaration"))
 
-        .arg(Arg::with_name("execute")
-             .short("x")
-             .long("execute")
-             .help("Whether to execute the module"))
+        .arg(Arg::with_name("emit-llvm-ir")
+             .long("emit-llvm-ir")
+             .help("Emit a LLVM IR file next to the generated executable"))
 
         .get_matches();
 
@@ -91,7 +90,7 @@ fn main() {
         extra_module_search_path: module_search_path,
         print_ast: matches.is_present("print_ast"),
         print_types: matches.is_present("print_inferred_types"),
-        execute: matches.is_present("execute"),
+        emit_llvm_ir: matches.is_present("emit-llvm-ir"),
     };
 
     let (typed_main_module, typed_modules) =
@@ -106,7 +105,7 @@ fn main() {
         };
 
     let runtime_module = rewrite(typed_main_module, typed_modules);
-    match generate(runtime_module, &Path::new("target/")) {
+    match generate(runtime_module, &Path::new("target/"), &compiler_options) {
         Ok(_) => return,
         Err(msg) => eprintln!("Error during code generation: {}", msg),
     }

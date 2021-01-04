@@ -1038,7 +1038,7 @@ fn substitute_type_references(
             Rc::new(MatchExpression::LonghandList(
                 Rc::clone(l),
                 substitute_type_references(type_information, adts, records, h, list_type),
-                substitute_type_references(&type_information, adts, records, t, list_type),
+                substitute_type_references(&type_information, adts, records, t, match_type),
             ))
         }
 

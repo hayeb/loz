@@ -48,13 +48,21 @@ use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 use itertools::{EitherOrBoth, Itertools};
 
 use crate::ast::{Expression, FunctionBody, FunctionDefinition, FunctionRule, MatchExpression};
+use crate::module_system::CompilerOptions;
 use crate::rewriter::{Monomorphized, RuntimeModule};
 use crate::{
     hash_type, ADTDefinition, RecordDefinition, Type, ADT_SEPARATOR, MODULE_SEPARATOR,
     MONOMORPHIC_PREFIX,
 };
+use number_prefix::NumberPrefix;
+use std::fs::File;
+use std::io::Write;
 
-pub fn generate(runtime_module: Rc<RuntimeModule>, output_directory: &Path) -> Result<(), String> {
+pub fn generate(
+    runtime_module: Rc<RuntimeModule>,
+    output_directory: &Path,
+    compiler_options: &CompilerOptions,
+) -> Result<(), String> {
     let context = Context::create();
     let module_name = runtime_module.name.clone();
 
@@ -67,19 +75,11 @@ pub fn generate(runtime_module: Rc<RuntimeModule>, output_directory: &Path) -> R
     let mut object_path = output_directory.to_path_buf();
     object_path.push(format!("{}.o", &module_name));
 
-    println!(
-        "Writing module to file {}..",
-        object_path.to_str().unwrap().to_string()
-    );
-    state.write_module_object(object_path.as_path())?;
+    state.write_module_object(object_path.as_path(), compiler_options)?;
 
     // Generate the ${MODULE_NAME} executable
     let mut executable_path = output_directory.to_path_buf();
     executable_path.push(module_name.to_string());
-    println!(
-        "Linking module to executable {}",
-        executable_path.to_str().unwrap().to_string()
-    );
     link(object_path.as_path(), executable_path.as_path())
 }
 
@@ -97,9 +97,23 @@ fn link(object_path: &Path, executable_path: &Path) -> Result<(), String> {
         .output()
     {
         Ok(r) => {
-            println!("ld code: {}", r.status);
-            println!("ld output: {}", String::from_utf8(r.stderr).unwrap());
-            Ok(())
+            if r.status.success() {
+                let executable_size = File::open(executable_path)
+                    .unwrap()
+                    .metadata()
+                    .unwrap()
+                    .len();
+                println!(
+                    "Linked executable {} ({})",
+                    executable_path.display(),
+                    format_size(executable_size as usize)
+                );
+                Ok(())
+            } else {
+                println!("ld error code: {}", r.status);
+                println!("ld error output: {}", String::from_utf8(r.stderr).unwrap());
+                Err(format!("Error linking, see previous output."))
+            }
         }
         Err(e) => Err(e.to_string()),
     }
@@ -125,13 +139,13 @@ impl VarGenerator {
     fn var(&mut self) -> String {
         let n = self.n;
         self.n += 1;
-        format!("v{}___", n)
+        format!("v{}$$", n)
     }
 
     fn global(&mut self) -> String {
         let n = self.n;
         self.n += 1;
-        format!("g{}___", n)
+        format!("g{}$$", n)
     }
 }
 
@@ -510,7 +524,7 @@ impl<'a> GeneratorState<'a> {
         value_information: &HashMap<Rc<String>, BasicValueEnum<'a>>,
         label_prefix: &str,
     ) {
-        let combined_value_information: HashMap<Rc<String>, BasicValueEnum<'a>> =
+        let mut combined_value_information: HashMap<Rc<String>, BasicValueEnum<'a>> =
             value_information.clone();
 
         let no_rules_match_block = self
@@ -537,7 +551,6 @@ impl<'a> GeneratorState<'a> {
             self.builder.position_at_end(current_rule_block);
             match rule.borrow() {
                 FunctionRule::ConditionalRule(_, condition, result) => {
-                    self.builder.position_at_end(current_rule_block.clone());
                     let cv = self.generate_expression(g, condition, &combined_value_information);
 
                     let result_block = self.llvm_context.append_basic_block(
@@ -556,11 +569,19 @@ impl<'a> GeneratorState<'a> {
                     );
                 }
                 FunctionRule::ExpressionRule(_, e) => {
-                    self.builder.position_at_end(current_rule_block);
                     let ev = self.generate_expression(g, e, &combined_value_information);
                     self.builder.build_return(Some(&ev));
                 }
-                FunctionRule::LetRule(_, _, _, _) => unimplemented!("LetRule"),
+                FunctionRule::LetRule(_, _, lhs, rhs) => {
+                    let value = self.generate_expression(g, rhs, &combined_value_information);
+                    combined_value_information.extend(self.generate_match_expression(
+                        g,
+                        lhs,
+                        value,
+                        next_rule_block,
+                        no_rules_match_block,
+                    ));
+                }
             }
         }
     }
@@ -791,7 +812,64 @@ impl<'a> GeneratorState<'a> {
                     }
                 }
             }
-            MatchExpression::LonghandList(_, _, _) => unimplemented!(""),
+            MatchExpression::LonghandList(_, h, t) => {
+                let match_head_block = self
+                    .llvm_context
+                    .append_basic_block(match_block.get_parent().unwrap(), &g.var());
+                let match_tail_block = self
+                    .llvm_context
+                    .append_basic_block(match_block.get_parent().unwrap(), &g.var());
+
+                // match_value: *{element: T, next: *List<T>}
+                let list_pointer_value = match_value.into_pointer_value();
+                let list_ptr_int = self.builder.build_ptr_to_int(
+                    list_pointer_value,
+                    self.llvm_context.i64_type(),
+                    &g.var(),
+                );
+                let list_pointer_is_null = self.builder.build_int_compare(
+                    IntPredicate::EQ,
+                    list_ptr_int,
+                    self.llvm_context.i64_type().const_int(0, false),
+                    &g.var(),
+                );
+
+                self.builder.build_conditional_branch(
+                    list_pointer_is_null,
+                    no_match_block,
+                    match_head_block,
+                );
+
+                self.builder.position_at_end(match_head_block);
+                let head_value_pointer = self
+                    .builder
+                    .build_struct_gep(list_pointer_value, 0, &g.var())
+                    .unwrap();
+                let head_value = self.builder.build_load(head_value_pointer, &g.var());
+                value_information.extend(self.generate_match_expression(
+                    g,
+                    h,
+                    head_value,
+                    match_tail_block,
+                    no_match_block,
+                ));
+
+                self.builder.position_at_end(match_tail_block);
+                let next_element_pointer_pointer = self
+                    .builder
+                    .build_struct_gep(list_pointer_value, 1, &g.var())
+                    .unwrap();
+                let next_element_pointer = self
+                    .builder
+                    .build_load(next_element_pointer_pointer, &g.var());
+                value_information.extend(self.generate_match_expression(
+                    g,
+                    t,
+                    next_element_pointer.as_basic_value_enum(),
+                    match_block,
+                    no_match_block,
+                ))
+            }
             MatchExpression::Wildcard(_) => {
                 self.builder.build_unconditional_branch(match_block);
             }
@@ -1528,10 +1606,40 @@ impl<'a> GeneratorState<'a> {
         }
     }
 
-    fn write_module_object(&self, object_file: &Path) -> Result<(), String> {
+    fn write_module_object(
+        &self,
+        object_file_path: &Path,
+        compiler_options: &CompilerOptions,
+    ) -> Result<(), String> {
         Target::initialize_x86(&InitializationConfig::default());
 
-        println!("LLMVM IR:\n{}", self.module.print_to_string().to_string());
+        if compiler_options.emit_llvm_ir {
+            let llvm_ir_file_path = object_file_path.with_extension("ll");
+            let llvm_ir_string = self.module.print_to_string();
+            let llvm_ir_bytes = llvm_ir_string.to_bytes();
+            match File::create(llvm_ir_file_path.clone()) {
+                Ok(mut file) => {
+                    file.write_all(llvm_ir_bytes).map_err(|e| {
+                        format!(
+                            "Unable to write to LLVM IR file {}: {}",
+                            llvm_ir_file_path.display(),
+                            e
+                        )
+                    })?;
+                    let bytes_string = format_size(llvm_ir_bytes.len());
+                    println!(
+                        "Wrote LLVM IR to {} ({})",
+                        llvm_ir_file_path.display(),
+                        bytes_string
+                    );
+                }
+                Err(e) => eprintln!(
+                    "Unable to create LLVM IR file {}: {}",
+                    llvm_ir_file_path.display(),
+                    e
+                ),
+            }
+        }
 
         let opt = OptimizationLevel::Aggressive;
         let reloc = RelocMode::Default;
@@ -1548,10 +1656,23 @@ impl<'a> GeneratorState<'a> {
             )
             .unwrap();
 
-        println!("Writing to file..");
         target_machine
-            .write_to_file(&self.module, FileType::Object, object_file)
-            .map_err(|e| e.to_string())
+            .write_to_file(&self.module, FileType::Object, object_file_path)
+            .map_err(|e| {
+                format!(
+                    "Error writing to object file {}: {}",
+                    object_file_path.display(),
+                    e.to_string()
+                )
+            })?;
+
+        let object_file = File::open(object_file_path).unwrap();
+        println!(
+            "Wrote to object file {} ({})",
+            object_file_path.display(),
+            format_size(object_file.metadata().unwrap().len() as usize)
+        );
+        Ok(())
     }
 
     fn generate_abort(&self, g: &mut VarGenerator, message: String, exitcode: i32) {
@@ -1768,6 +1889,7 @@ impl<'a> GeneratorState<'a> {
                     }
                     self.builder.build_call(printf, &[record_suffix], &g.var());
                 } else if self.adts.contains_key(&base_name) {
+                    // TODO: Extend printing ADTs with their respective constructors.
                     let adt_name_string = self
                         .builder
                         .build_global_string_ptr(
@@ -1778,7 +1900,7 @@ impl<'a> GeneratorState<'a> {
                     self.builder
                         .build_call(printf, &[adt_name_string], &g.var());
                 } else {
-                    unimplemented!("Printing ADTs")
+                    unreachable!("Printing ADTs")
                 }
             }
             Type::Tuple(elements) => {
@@ -1826,8 +1948,8 @@ impl<'a> GeneratorState<'a> {
                     .as_basic_value_enum();
                 self.builder.build_call(printf, &[list_close], &g.var());
             }
-            Type::Variable(_) => unimplemented!(""),
-            Type::Function(_, _) => unreachable!("Printing function not supported."),
+            Type::Variable(_) => unreachable!("Printing variable type"),
+            Type::Function(_, _) => unreachable!("Printing function type"),
         };
     }
 
@@ -1985,7 +2107,7 @@ impl<'a> GeneratorState<'a> {
             Type::List(element_type) => {
                 Box::new(self.retrieve_list_type(element_type).as_basic_type_enum())
             }
-            _ => unimplemented!("{:?}", loz_type),
+            Type::Function(_, _) => unreachable!("Function type"),
         }
     }
 
@@ -2017,4 +2139,11 @@ fn sanitize_name(name: &str) -> &str {
         .split(MONOMORPHIC_PREFIX)
         .next()
         .unwrap()
+}
+
+fn format_size(size: usize) -> String {
+    match NumberPrefix::binary(size as f64) {
+        NumberPrefix::Standalone(bytes) => format!("{} bytes", bytes),
+        NumberPrefix::Prefixed(prefix, n) => format!("{:.1} {}B", n, prefix),
+    }
 }
