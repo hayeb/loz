@@ -4,11 +4,12 @@ use std::fmt::{Display, Error, Formatter};
 use std::rc::Rc;
 
 use crate::ast::{
-    CaseRule, Expression, FunctionBody, FunctionDefinition, FunctionRule, MatchExpression, Module,
+    ADTDefinition, CaseRule, Expression, FunctionBody, FunctionDefinition, FunctionRule,
+    MatchExpression, Module, RecordDefinition,
 };
 use crate::inferencer::substitutor::{substitute, substitute_list, substitute_type, Substitutions};
 use crate::inferencer::unifier::{unify, unify_one_of};
-use crate::{ADTDefinition, Location, RecordDefinition, Type, TypeScheme};
+use crate::{Location, Type, TypeScheme};
 
 mod grapher;
 pub mod substitutor;
@@ -2280,7 +2281,7 @@ impl InferencerState {
                     subs,
                 )
             }
-            Expression::Lambda(loc, _, arguments, body) => {
+            Expression::Lambda(loc, _, _, arguments, body) => {
                 let mut argument_types = Vec::new();
                 let mut union_subs = Vec::new();
                 self.push_frame();
@@ -2301,14 +2302,9 @@ impl InferencerState {
                 argument_types = substitute_list(&subs, &argument_types);
                 let type_information = self.pop_frame().unwrap().type_scheme_context;
 
-                let subs = map_unify(
-                    loc,
-                    unify(
-                        &Rc::new(Type::Function(argument_types, return_type)),
-                        &expected_type,
-                    ),
-                )
-                .map(|rs| {
+                let function_type = Rc::new(Type::Function(argument_types, return_type));
+
+                let subs = map_unify(loc, unify(&function_type, &expected_type)).map(|rs| {
                     let mut ns = Vec::new();
                     ns.extend(union_subs);
                     ns.extend(subs);
@@ -2318,6 +2314,7 @@ impl InferencerState {
                 (
                     Expression::Lambda(
                         Rc::clone(loc),
+                        Some(substitute_type(&subs, &function_type)),
                         type_information,
                         arguments.iter().cloned().collect(),
                         inferred_body,

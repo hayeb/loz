@@ -1,4 +1,5 @@
 use super::*;
+use crate::ast::ADTConstructor;
 
 struct RenamerState {
     original_modules: HashMap<Rc<String>, Rc<Module>>,
@@ -957,8 +958,9 @@ impl RenamerState {
                     ),
                 )
             }
-            Expression::Lambda(l, type_information, es, e) => Expression::Lambda(
+            Expression::Lambda(l, function_type, type_information, es, e) => Expression::Lambda(
                 Rc::clone(l),
+                function_type.clone(),
                 type_information.clone(),
                 es.iter()
                     .map(|e| {

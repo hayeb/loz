@@ -1,0 +1,3 @@
+apply a f = f a
+
+main = apply 1 (\x. x + 1)

@@ -4,11 +4,11 @@ use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use crate::ast::{FunctionDefinition, Module};
+use crate::ast::{ADTConstructor, ADTDefinition, FunctionDefinition, Module, RecordDefinition};
 use crate::inferencer::{infer, ExternalDefinitions, InferencerOptions};
 use crate::module_system::ModuleErrorType::ModuleNotFound;
 use crate::parser::parse;
-use crate::{parser, ADTConstructor, ADTDefinition, Import, Location, RecordDefinition};
+use crate::{parser, Import, Location};
 
 #[derive(Debug)]
 pub enum Error {

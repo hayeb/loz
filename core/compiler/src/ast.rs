@@ -1,7 +1,29 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::{ADTDefinition, Import, Location, RecordDefinition, Type, TypeScheme};
+use crate::{Import, Location, Type, TypeScheme};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordDefinition {
+    pub name: Rc<String>,
+    pub location: Rc<Location>,
+    pub type_variables: Vec<Rc<String>>,
+    pub fields: Vec<(Rc<String>, Rc<Type>)>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ADTDefinition {
+    pub name: Rc<String>,
+    pub location: Rc<Location>,
+    pub type_variables: Vec<Rc<String>>,
+    pub constructors: Vec<Rc<ADTConstructor>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ADTConstructor {
+    pub name: Rc<String>,
+    pub elements: Vec<Rc<Type>>,
+}
 
 #[derive(Debug, Clone)]
 pub struct FunctionDefinition {
@@ -116,6 +138,7 @@ pub enum Expression {
 
     Lambda(
         Rc<Location>,
+        Option<Rc<Type>>,
         HashMap<Rc<String>, Rc<TypeScheme>>,
         Vec<Rc<MatchExpression>>,
         Rc<Expression>,

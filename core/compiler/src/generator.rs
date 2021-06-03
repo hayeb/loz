@@ -47,19 +47,23 @@ use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 use itertools::{EitherOrBoth, Itertools};
 
-use crate::ast::{Expression, FunctionBody, FunctionDefinition, FunctionRule, MatchExpression};
-use crate::module_system::CompilerOptions;
-use crate::rewriter::{Monomorphized, RuntimeModule};
-use crate::{
-    hash_type, ADTDefinition, RecordDefinition, Type, ADT_SEPARATOR, MODULE_SEPARATOR,
-    MONOMORPHIC_PREFIX,
+use crate::generator::ir::{
+    IRADTDefinition, IRExpression, IRFunctionBody, IRFunctionDefinition, IRFunctionRule,
+    IRMatchExpression, IRRecordDefinition, IRType,
 };
+use crate::module_system::CompilerOptions;
+use crate::rewriter::{IRModule, Monomorphized};
+use crate::{ADT_SEPARATOR, MODULE_SEPARATOR, MONOMORPHIC_PREFIX};
 use number_prefix::NumberPrefix;
+use std::collections::hash_map::DefaultHasher;
 use std::fs::File;
+use std::hash::{Hash, Hasher};
 use std::io::Write;
 
+pub mod ir;
+
 pub fn generate(
-    runtime_module: Rc<RuntimeModule>,
+    runtime_module: Rc<IRModule>,
     output_directory: &Path,
     compiler_options: &CompilerOptions,
 ) -> Result<(), String> {
@@ -120,11 +124,11 @@ fn link(object_path: &Path, executable_path: &Path) -> Result<(), String> {
 }
 
 struct GeneratorState<'a> {
-    functions: HashMap<Rc<String>, Monomorphized<FunctionDefinition>>,
-    function_name_to_type: HashMap<Rc<String>, Rc<Type>>,
+    functions: HashMap<Rc<String>, Rc<IRFunctionDefinition>>,
+    function_name_to_type: HashMap<Rc<String>, Rc<IRType>>,
 
-    records: HashMap<Rc<String>, Monomorphized<RecordDefinition>>,
-    adts: HashMap<Rc<String>, Monomorphized<ADTDefinition>>,
+    records: HashMap<Rc<String>, Monomorphized<IRRecordDefinition>>,
+    adts: HashMap<Rc<String>, Monomorphized<IRADTDefinition>>,
 
     llvm_context: &'a Context,
     module: Module<'a>,
@@ -150,7 +154,7 @@ impl VarGenerator {
 }
 
 impl<'a> GeneratorState<'a> {
-    fn new(context: &'a Context, runtime_module: Rc<RuntimeModule>) -> Self {
+    fn new(context: &'a Context, runtime_module: Rc<IRModule>) -> Self {
         let module = context.create_module(&runtime_module.name);
         let builder = context.create_builder();
 
@@ -163,13 +167,7 @@ impl<'a> GeneratorState<'a> {
             function_name_to_type: runtime_module
                 .functions
                 .iter()
-                .flat_map(|(_, m)| m.instances.iter())
-                .map(|(n, d)| {
-                    (
-                        Rc::clone(n),
-                        Rc::clone(&d.function_type.as_ref().unwrap().enclosed_type),
-                    )
-                })
+                .map(|(n, d)| (Rc::clone(n), Rc::clone(&d.function_type)))
                 .collect(),
             llvm_context: context,
             module,
@@ -195,19 +193,12 @@ impl<'a> GeneratorState<'a> {
             .as_ref()
             .unwrap()
             .1
-            .instances
-            .values()
-            .next()
-            .unwrap()
-            .function_type
-            .as_ref()
-            .unwrap()
-            .enclosed_type;
+            .function_type;
         self.generate_print_bool(g);
         let print_function = self.generate_print(g, main_type);
         self.generate_function_definitions(g);
         let mut llvm_main_function = None;
-        for (_, fd) in self.functions.values().flat_map(|m| m.instances.iter()) {
+        for (_, fd) in self.functions.iter() {
             let bla = self.generate_function(g, fd);
             if bla.get_name().to_str().unwrap() == &main_function_name {
                 llvm_main_function = Some(bla);
@@ -352,13 +343,13 @@ impl<'a> GeneratorState<'a> {
 
     fn generate_function_definitions(&self, _g: &mut VarGenerator) -> Vec<FunctionValue> {
         let mut function_values = Vec::new();
-        for function_definition in self.functions.values().flat_map(|r| r.instances.values()) {
+        for (_, function_definition) in self.functions.iter() {
             let function_type = self
                 .function_name_to_type
                 .get(&function_definition.name)
                 .unwrap();
             let (return_type, arguments) = match function_type.borrow() {
-                Type::Function(args, return_type) => (return_type, args.iter().collect()),
+                IRType::Function(args, return_type) => (return_type, args.iter().collect()),
                 _ => (function_type, vec![]),
             };
             let llvm_arguments = arguments
@@ -381,7 +372,7 @@ impl<'a> GeneratorState<'a> {
     fn generate_function(
         &self,
         g: &mut VarGenerator,
-        function_definition: &Rc<FunctionDefinition>,
+        function_definition: &Rc<IRFunctionDefinition>,
     ) -> FunctionValue {
         let llvm_function = self.module.get_function(&function_definition.name).unwrap();
 
@@ -461,7 +452,7 @@ impl<'a> GeneratorState<'a> {
         &self,
         g: &mut VarGenerator,
         llvm_function: FunctionValue<'a>,
-        function_body: &Rc<FunctionBody>,
+        function_body: &Rc<IRFunctionBody>,
         match_blocks: Vec<BasicBlock>,
         next_function_body: BasicBlock,
         label_prefix: &str,
@@ -520,7 +511,7 @@ impl<'a> GeneratorState<'a> {
         g: &mut VarGenerator,
         llvm_function: FunctionValue<'a>,
         rule_blocks: &Vec<BasicBlock>,
-        function_rules: &Vec<Rc<FunctionRule>>,
+        function_rules: &Vec<Rc<IRFunctionRule>>,
         value_information: &HashMap<Rc<String>, BasicValueEnum<'a>>,
         label_prefix: &str,
     ) {
@@ -550,7 +541,7 @@ impl<'a> GeneratorState<'a> {
             };
             self.builder.position_at_end(current_rule_block);
             match rule.borrow() {
-                FunctionRule::ConditionalRule(_, condition, result) => {
+                IRFunctionRule::ConditionalRule(_, condition, result) => {
                     let cv = self.generate_expression(g, condition, &combined_value_information);
 
                     let result_block = self.llvm_context.append_basic_block(
@@ -568,11 +559,11 @@ impl<'a> GeneratorState<'a> {
                         next_rule_block,
                     );
                 }
-                FunctionRule::ExpressionRule(_, e) => {
+                IRFunctionRule::ExpressionRule(_, e) => {
                     let ev = self.generate_expression(g, e, &combined_value_information);
                     self.builder.build_return(Some(&ev));
                 }
-                FunctionRule::LetRule(_, _, lhs, rhs) => {
+                IRFunctionRule::LetRule(_, lhs, rhs) => {
                     let value = self.generate_expression(g, rhs, &combined_value_information);
                     combined_value_information.extend(self.generate_match_expression(
                         g,
@@ -589,14 +580,14 @@ impl<'a> GeneratorState<'a> {
     fn generate_match_expression(
         &self,
         g: &mut VarGenerator,
-        me: &Rc<MatchExpression>,
+        me: &Rc<IRMatchExpression>,
         match_value: BasicValueEnum<'a>,
         match_block: BasicBlock,
         no_match_block: BasicBlock,
     ) -> HashMap<Rc<String>, BasicValueEnum<'a>> {
         let mut value_information = HashMap::new();
         match me.borrow() {
-            MatchExpression::IntLiteral(_, i) => {
+            IRMatchExpression::IntLiteral(_, i) => {
                 let matches = self.builder.build_int_compare(
                     IntPredicate::EQ,
                     self.llvm_context.i64_type().const_int(*i as u64, true),
@@ -606,7 +597,7 @@ impl<'a> GeneratorState<'a> {
                 self.builder
                     .build_conditional_branch(matches, match_block, no_match_block);
             }
-            MatchExpression::CharLiteral(_, c) => {
+            IRMatchExpression::CharLiteral(_, c) => {
                 let mut bla = [0; 4];
                 let str = c.encode_utf8(&mut bla);
                 let bla = self.builder.build_global_string_ptr(str, &g.var());
@@ -628,7 +619,7 @@ impl<'a> GeneratorState<'a> {
                 self.builder
                     .build_conditional_branch(eq, match_block, no_match_block);
             }
-            MatchExpression::StringLiteral(_, s) => {
+            IRMatchExpression::StringLiteral(_, s) => {
                 let bla = self.builder.build_global_string_ptr(s, &g.var());
                 let strcmp = self.module.get_function("strcmp").unwrap();
                 let compared = self
@@ -648,7 +639,7 @@ impl<'a> GeneratorState<'a> {
                 self.builder
                     .build_conditional_branch(eq, match_block, no_match_block);
             }
-            MatchExpression::BoolLiteral(_, b) => {
+            IRMatchExpression::BoolLiteral(_, b) => {
                 let eq = self.builder.build_int_compare(
                     IntPredicate::EQ,
                     self.llvm_context
@@ -660,11 +651,11 @@ impl<'a> GeneratorState<'a> {
                 self.builder
                     .build_conditional_branch(eq, match_block, no_match_block);
             }
-            MatchExpression::Identifier(_, name) => {
+            IRMatchExpression::Identifier(_, name) => {
                 value_information.insert(Rc::clone(name), match_value);
                 self.builder.build_unconditional_branch(match_block);
             }
-            MatchExpression::Tuple(_, elements) => {
+            IRMatchExpression::Tuple(_, elements) => {
                 let element_blocks: Vec<BasicBlock> = elements
                     .iter()
                     .map(|_| {
@@ -700,7 +691,7 @@ impl<'a> GeneratorState<'a> {
                     ));
                 }
             }
-            MatchExpression::ShorthandList(_, elements) => {
+            IRMatchExpression::ShorthandList(_, elements) => {
                 // match_value: *{element: T, next: *List<T>}
                 let list_pointer_value = match_value.into_pointer_value();
                 let list_ptr_int = self.builder.build_ptr_to_int(
@@ -812,7 +803,7 @@ impl<'a> GeneratorState<'a> {
                     }
                 }
             }
-            MatchExpression::LonghandList(_, h, t) => {
+            IRMatchExpression::LonghandList(_, h, t) => {
                 let match_head_block = self
                     .llvm_context
                     .append_basic_block(match_block.get_parent().unwrap(), &g.var());
@@ -870,10 +861,10 @@ impl<'a> GeneratorState<'a> {
                     no_match_block,
                 ))
             }
-            MatchExpression::Wildcard(_) => {
+            IRMatchExpression::Wildcard(_) => {
                 self.builder.build_unconditional_branch(match_block);
             }
-            MatchExpression::ADT(_, adt_constructor_name, arguments) => {
+            IRMatchExpression::ADT(_, adt_constructor_name, arguments) => {
                 let mut bla = adt_constructor_name.split(MONOMORPHIC_PREFIX);
                 let mut blie = bla.next().unwrap().split(ADT_SEPARATOR);
                 let adt_name = blie.next().unwrap();
@@ -977,7 +968,7 @@ impl<'a> GeneratorState<'a> {
                     }
                 }
             }
-            MatchExpression::Record(_, record_name, fields) => {
+            IRMatchExpression::Record(_, record_name, fields) => {
                 let record_definition = self
                     .records
                     .get(
@@ -1014,36 +1005,36 @@ impl<'a> GeneratorState<'a> {
     fn generate_expression(
         &self,
         g: &mut VarGenerator,
-        expression: &Rc<Expression>,
+        expression: &Rc<IRExpression>,
         value_information: &HashMap<Rc<String>, BasicValueEnum<'a>>,
     ) -> BasicValueEnum<'a> {
         match expression.borrow() {
-            Expression::BoolLiteral(_, b) => self
+            IRExpression::BoolLiteral(_, b) => self
                 .llvm_context
                 .bool_type()
                 .const_int(if *b { 1 } else { 0 }, false)
                 .as_basic_value_enum(),
-            Expression::StringLiteral(_, string) => {
+            IRExpression::StringLiteral(_, string) => {
                 let llvm_string = self.builder.build_global_string_ptr(&string, &g.global());
                 llvm_string.as_basic_value_enum()
             }
-            Expression::CharacterLiteral(_, character) => {
+            IRExpression::CharacterLiteral(_, character) => {
                 let mut b = [0; 4];
                 let str = character.encode_utf8(&mut b);
                 let llvm_string = self.builder.build_global_string_ptr(str, &g.global());
                 llvm_string.as_basic_value_enum()
             }
-            Expression::IntegerLiteral(_, i) => self
+            IRExpression::IntegerLiteral(_, i) => self
                 .llvm_context
                 .i64_type()
                 .const_int(*i as u64, true)
                 .as_basic_value_enum(),
-            Expression::FloatLiteral(_, f) => self
+            IRExpression::FloatLiteral(_, f) => self
                 .llvm_context
                 .f64_type()
                 .const_float(*f)
                 .as_basic_value_enum(),
-            Expression::TupleLiteral(_, elements) => {
+            IRExpression::TupleLiteral(_, elements) => {
                 let mut element_values = Vec::new();
                 for e in elements {
                     element_values.push(self.generate_expression(g, e, value_information));
@@ -1078,18 +1069,18 @@ impl<'a> GeneratorState<'a> {
                 }
                 tuple_pointer.as_basic_value_enum()
             }
-            Expression::EmptyListLiteral(_, Some(list_type)) => {
+            IRExpression::EmptyListLiteral(_, list_type) => {
                 let element_type = match list_type.borrow() {
-                    Type::List(element_type) => element_type,
+                    IRType::List(element_type) => element_type,
                     _ => unreachable!("List literal without list type"),
                 };
                 self.retrieve_list_type(element_type)
                     .const_null()
                     .as_basic_value_enum()
             }
-            Expression::ShorthandListLiteral(_, Some(list_type), arguments) => {
+            IRExpression::ShorthandListLiteral(_, list_type, arguments) => {
                 let element_type = match list_type.borrow() {
-                    Type::List(element_type) => element_type,
+                    IRType::List(element_type) => element_type,
                     _ => unreachable!("List literal without list type"),
                 };
 
@@ -1139,14 +1130,14 @@ impl<'a> GeneratorState<'a> {
 
                 first_node_pointer.unwrap().as_basic_value_enum()
             }
-            Expression::LonghandListLiteral(
+            IRExpression::LonghandListLiteral(
                 _,
-                Some(list_type),
+                list_type,
                 head_expression,
                 tail_list_expression,
             ) => {
                 let element_type = match list_type.borrow() {
-                    Type::List(element_type) => element_type,
+                    IRType::List(element_type) => element_type,
                     _ => unreachable!("List literal without list type"),
                 };
 
@@ -1182,9 +1173,9 @@ impl<'a> GeneratorState<'a> {
 
                 list_node_struct_pointer.as_basic_value_enum()
             }
-            Expression::ADTTypeConstructor(_, adt_type, name, arguments) => {
-                let adt_name = match adt_type.as_ref().unwrap().borrow() {
-                    Type::UserType(name, _) => name,
+            IRExpression::ADTTypeConstructor(_, adt_type, name, arguments) => {
+                let adt_name = match adt_type.borrow() {
+                    IRType::UserType(name) => name,
                     _ => unreachable!("ADTTypeConstuctor without Type::UserType type"),
                 };
                 let adt_definition = self
@@ -1254,7 +1245,7 @@ impl<'a> GeneratorState<'a> {
                 adt_value_pointer.as_basic_value_enum()
             }
 
-            Expression::Record(_, _, c, d) => {
+            IRExpression::Record(_, _, c, d) => {
                 let record_definition = self
                     .records
                     .get(&c.split(MONOMORPHIC_PREFIX).next().unwrap().to_string())
@@ -1289,7 +1280,7 @@ impl<'a> GeneratorState<'a> {
                 }
                 record_heap_pointer.as_basic_value_enum()
             }
-            Expression::Case(_, e, rules, result_type) => {
+            IRExpression::Case(_, e, rules, result_type) => {
                 let ev = self.generate_expression(g, e, value_information);
                 let current_function = self
                     .builder
@@ -1321,8 +1312,7 @@ impl<'a> GeneratorState<'a> {
                 self.builder.position_at_end(current_block);
 
                 let result_variable = self.builder.build_alloca(
-                    self.to_llvm_type(result_type.as_ref().unwrap())
-                        .as_basic_type_enum(),
+                    self.to_llvm_type(result_type).as_basic_type_enum(),
                     &g.var(),
                 );
 
@@ -1380,7 +1370,7 @@ impl<'a> GeneratorState<'a> {
                 let result = self.builder.build_load(result_variable, &g.var());
                 result
             }
-            Expression::Call(_, _, b, arguments) => {
+            IRExpression::Call(_, _, b, arguments) => {
                 let mut llvm_argument_values = Vec::new();
                 for a in arguments {
                     let llvm_a = self.generate_expression(g, a, value_information);
@@ -1394,8 +1384,8 @@ impl<'a> GeneratorState<'a> {
                     .left()
                     .unwrap()
             }
-            Expression::Variable(_, v) => value_information.get(v).unwrap().clone(),
-            Expression::Negation(_, e) => {
+            IRExpression::Variable(_, v) => value_information.get(v).unwrap().clone(),
+            IRExpression::Negation(_, e) => {
                 let ev = self.generate_expression(g, e, value_information);
                 self.builder
                     .build_xor(
@@ -1405,7 +1395,7 @@ impl<'a> GeneratorState<'a> {
                     )
                     .as_basic_value_enum()
             }
-            Expression::Minus(_, e) => {
+            IRExpression::Minus(_, e) => {
                 let ev = self.generate_expression(g, e, value_information);
                 if ev.is_int_value() {
                     self.builder
@@ -1427,7 +1417,7 @@ impl<'a> GeneratorState<'a> {
                         .as_basic_value_enum()
                 }
             }
-            Expression::Times(_, l, r) => {
+            IRExpression::Times(_, l, r) => {
                 let el = self.generate_expression(g, l, value_information);
                 let er = self.generate_expression(g, r, value_information);
                 if el.is_int_value() {
@@ -1440,7 +1430,7 @@ impl<'a> GeneratorState<'a> {
                         .as_basic_value_enum()
                 }
             }
-            Expression::Divide(_, l, r) => {
+            IRExpression::Divide(_, l, r) => {
                 let el = self.generate_expression(g, l, value_information);
                 let er = self.generate_expression(g, r, value_information);
                 if el.is_int_value() {
@@ -1453,7 +1443,7 @@ impl<'a> GeneratorState<'a> {
                         .as_basic_value_enum()
                 }
             }
-            Expression::Modulo(_, l, r) => {
+            IRExpression::Modulo(_, l, r) => {
                 let el = self.generate_expression(g, l, value_information);
                 let er = self.generate_expression(g, r, value_information);
                 if el.is_int_value() {
@@ -1466,7 +1456,7 @@ impl<'a> GeneratorState<'a> {
                         .as_basic_value_enum()
                 }
             }
-            Expression::Add(_, l, r) => {
+            IRExpression::Add(_, l, r) => {
                 let el = self.generate_expression(g, l, value_information);
                 let er = self.generate_expression(g, r, value_information);
                 if el.is_int_value() {
@@ -1479,7 +1469,7 @@ impl<'a> GeneratorState<'a> {
                         .as_basic_value_enum()
                 }
             }
-            Expression::Subtract(_, l, r) => {
+            IRExpression::Subtract(_, l, r) => {
                 let el = self.generate_expression(g, l, value_information);
                 let er = self.generate_expression(g, r, value_information);
                 if el.is_int_value() {
@@ -1492,21 +1482,21 @@ impl<'a> GeneratorState<'a> {
                         .as_basic_value_enum()
                 }
             }
-            Expression::ShiftLeft(_, l, r) => {
+            IRExpression::ShiftLeft(_, l, r) => {
                 let el = self.generate_expression(g, l, value_information);
                 let er = self.generate_expression(g, r, value_information);
                 self.builder
                     .build_left_shift(el.into_int_value(), er.into_int_value(), &g.var())
                     .as_basic_value_enum()
             }
-            Expression::ShiftRight(_, l, r) => {
+            IRExpression::ShiftRight(_, l, r) => {
                 let el = self.generate_expression(g, l, value_information);
                 let er = self.generate_expression(g, r, value_information);
                 self.builder
                     .build_right_shift(el.into_int_value(), er.into_int_value(), false, &g.var())
                     .as_basic_value_enum()
             }
-            Expression::Greater(_, l, r) => {
+            IRExpression::Greater(_, l, r) => {
                 let el = self.generate_expression(g, l, value_information);
                 let er = self.generate_expression(g, r, value_information);
                 if el.is_int_value() {
@@ -1529,7 +1519,7 @@ impl<'a> GeneratorState<'a> {
                         .as_basic_value_enum()
                 }
             }
-            Expression::Greq(_, l, r) => {
+            IRExpression::Greq(_, l, r) => {
                 let el = self.generate_expression(g, l, value_information);
                 let er = self.generate_expression(g, r, value_information);
                 if el.is_int_value() {
@@ -1552,7 +1542,7 @@ impl<'a> GeneratorState<'a> {
                         .as_basic_value_enum()
                 }
             }
-            Expression::Leq(_, l, r) => {
+            IRExpression::Leq(_, l, r) => {
                 let el = self.generate_expression(g, l, value_information);
                 let er = self.generate_expression(g, r, value_information);
                 if el.is_int_value() {
@@ -1575,7 +1565,7 @@ impl<'a> GeneratorState<'a> {
                         .as_basic_value_enum()
                 }
             }
-            Expression::Lesser(_, l, r) => {
+            IRExpression::Lesser(_, l, r) => {
                 let el = self.generate_expression(g, l, value_information);
                 let er = self.generate_expression(g, r, value_information);
                 if el.is_int_value() {
@@ -1598,7 +1588,7 @@ impl<'a> GeneratorState<'a> {
                         .as_basic_value_enum()
                 }
             }
-            Expression::Eq(_, l, r) => {
+            IRExpression::Eq(_, l, r) => {
                 let el = self.generate_expression(g, l, value_information);
                 let er = self.generate_expression(g, r, value_information);
                 if el.is_int_value() {
@@ -1621,7 +1611,7 @@ impl<'a> GeneratorState<'a> {
                         .as_basic_value_enum()
                 }
             }
-            Expression::Neq(_, l, r) => {
+            IRExpression::Neq(_, l, r) => {
                 let el = self.generate_expression(g, l, value_information);
                 let er = self.generate_expression(g, r, value_information);
                 if el.is_int_value() {
@@ -1644,24 +1634,24 @@ impl<'a> GeneratorState<'a> {
                         .as_basic_value_enum()
                 }
             }
-            Expression::And(_, l, r) => {
+            IRExpression::And(_, l, r) => {
                 let el = self.generate_expression(g, l, value_information);
                 let er = self.generate_expression(g, r, value_information);
                 self.builder
                     .build_and(el.into_int_value(), er.into_int_value(), &g.var())
                     .as_basic_value_enum()
             }
-            Expression::Or(_, l, r) => {
+            IRExpression::Or(_, l, r) => {
                 let el = self.generate_expression(g, l, value_information);
                 let er = self.generate_expression(g, r, value_information);
                 self.builder
                     .build_or(el.into_int_value(), er.into_int_value(), &g.var())
                     .as_basic_value_enum()
             }
-            Expression::RecordFieldAccess(_, _, record_name, l, r) => {
+            IRExpression::RecordFieldAccess(_, _, record_name, l, r) => {
                 let record_value = self.generate_expression(g, l, value_information);
                 let field_name = match r.borrow() {
-                    Expression::Variable(_, field) => field,
+                    IRExpression::Variable(_, field) => field,
                     _ => unreachable!(),
                 };
                 let record_definition = self
@@ -1691,8 +1681,6 @@ impl<'a> GeneratorState<'a> {
                 );
                 self.builder.build_load(field_pointer.unwrap(), &g.var())
             }
-            Expression::Lambda(_, _, _, _) => unimplemented!(""),
-            t => unreachable!("generating expression for {:#?}", t),
         }
     }
 
@@ -1783,7 +1771,7 @@ impl<'a> GeneratorState<'a> {
         self.builder.build_unreachable();
     }
 
-    fn generate_print(&self, g: &mut VarGenerator, type_to_print: &Rc<Type>) -> FunctionValue {
+    fn generate_print(&self, g: &mut VarGenerator, type_to_print: &Rc<IRType>) -> FunctionValue {
         let print_value_type = self.llvm_context.void_type().fn_type(
             &[self.to_llvm_type(type_to_print).as_basic_type_enum()],
             false,
@@ -1863,17 +1851,17 @@ impl<'a> GeneratorState<'a> {
     fn generate_print_code(
         &self,
         g: &mut VarGenerator,
-        type_to_print: &Rc<Type>,
+        type_to_print: &Rc<IRType>,
         value: BasicValueEnum<'a>,
     ) {
         let printf = self.module.get_function("printf").unwrap();
         let print_bool = self.module.get_function("print_bool").unwrap();
         match type_to_print.borrow() {
-            Type::Bool => {
+            IRType::Bool => {
                 self.builder.build_call(print_bool, &[value], &g.var());
             }
 
-            Type::Char => {
+            IRType::Char => {
                 self.builder.build_call(
                     printf,
                     &[
@@ -1885,7 +1873,7 @@ impl<'a> GeneratorState<'a> {
                     &g.var(),
                 );
             }
-            Type::String => {
+            IRType::String => {
                 self.builder.build_call(
                     printf,
                     &[
@@ -1897,7 +1885,7 @@ impl<'a> GeneratorState<'a> {
                     &g.var(),
                 );
             }
-            Type::Int => {
+            IRType::Int => {
                 self.builder.build_call(
                     printf,
                     &[
@@ -1909,7 +1897,7 @@ impl<'a> GeneratorState<'a> {
                     &g.var(),
                 );
             }
-            Type::Float => {
+            IRType::Float => {
                 self.builder.build_call(
                     printf,
                     &[
@@ -1921,7 +1909,7 @@ impl<'a> GeneratorState<'a> {
                     &g.var(),
                 );
             }
-            Type::UserType(name, _) => {
+            IRType::UserType(name) => {
                 let base_name = name.split(MONOMORPHIC_PREFIX).next().unwrap().to_string();
                 if self.records.contains_key(&base_name) {
                     let print_string = self
@@ -1993,7 +1981,7 @@ impl<'a> GeneratorState<'a> {
                     unreachable!("Printing ADTs")
                 }
             }
-            Type::Tuple(elements) => {
+            IRType::Tuple(elements) => {
                 let tuple_prefix = self
                     .builder
                     .build_global_string_ptr("(", "tuple_prefix")
@@ -2021,7 +2009,7 @@ impl<'a> GeneratorState<'a> {
                 }
                 self.builder.build_call(printf, &[tuple_suffix], &g.var());
             }
-            Type::List(element_type) => {
+            IRType::List(element_type) => {
                 let list_open = self
                     .builder
                     .build_global_string_ptr("[", "list_open")
@@ -2038,21 +2026,24 @@ impl<'a> GeneratorState<'a> {
                     .as_basic_value_enum();
                 self.builder.build_call(printf, &[list_close], &g.var());
             }
-            Type::Variable(_) => unreachable!("Printing variable type"),
-            Type::Function(_, _) => unreachable!("Printing function type"),
+            IRType::Function(_, _) => unreachable!("Printing function type"),
         };
     }
 
-    fn generate_print_list(&self, g: &mut VarGenerator, element_type: &Rc<Type>) -> FunctionValue {
+    fn generate_print_list(
+        &self,
+        g: &mut VarGenerator,
+        element_type: &Rc<IRType>,
+    ) -> FunctionValue {
         let current_block = self.builder.get_insert_block().unwrap();
         let printf = self.module.get_function("printf").unwrap();
 
-        let type_hash = hash_type(element_type);
+        let type_hash = hash_ir_type(element_type);
         let print_list_function = self.module.add_function(
             &format!("__print__list__{}", type_hash),
             self.llvm_context.void_type().fn_type(
                 &[self
-                    .to_llvm_type(&Rc::new(Type::List(Rc::clone(element_type))))
+                    .to_llvm_type(&Rc::new(IRType::List(Rc::clone(element_type))))
                     .as_basic_type_enum()],
                 false,
             ),
@@ -2143,46 +2134,45 @@ impl<'a> GeneratorState<'a> {
         print_list_function
     }
 
-    fn llvm_type_size(&self, loz_type: &Rc<Type>) -> u32 {
+    fn llvm_type_size(&self, loz_type: &Rc<IRType>) -> u32 {
         match loz_type.borrow() {
-            Type::Bool => 8,
-            Type::Char => 64,
-            Type::String => 64,
-            Type::Int => 64,
-            Type::Float => 64,
-            Type::UserType(_, _) => 64,
-            Type::Tuple(_) => 64,
-            Type::List(_) => 64,
-            Type::Variable(_) => 0,
-            Type::Function(_, _) => unreachable!("Function type in generator"),
+            IRType::Bool => 8,
+            IRType::Char => 64,
+            IRType::String => 64,
+            IRType::Int => 64,
+            IRType::Float => 64,
+            IRType::UserType(_) => 64,
+            IRType::Tuple(_) => 64,
+            IRType::List(_) => 64,
+            IRType::Function(_, _) => unreachable!("Function type in generator"),
         }
     }
 
-    fn to_llvm_type(&self, loz_type: &Rc<Type>) -> Box<dyn BasicType<'a> + 'a> {
+    fn to_llvm_type(&self, loz_type: &Rc<IRType>) -> Box<dyn BasicType<'a> + 'a> {
         match loz_type.borrow() {
-            Type::Bool => Box::new(self.llvm_context.bool_type().as_basic_type_enum()),
-            Type::Int => Box::new(self.llvm_context.i64_type().as_basic_type_enum()),
-            Type::Float => Box::new(self.llvm_context.f64_type().as_basic_type_enum()),
-            Type::Char => Box::new(
+            IRType::Bool => Box::new(self.llvm_context.bool_type().as_basic_type_enum()),
+            IRType::Int => Box::new(self.llvm_context.i64_type().as_basic_type_enum()),
+            IRType::Float => Box::new(self.llvm_context.f64_type().as_basic_type_enum()),
+            IRType::Char => Box::new(
                 self.llvm_context
                     .i8_type()
                     .ptr_type(AddressSpace::Generic)
                     .as_basic_type_enum(),
             ),
-            Type::String => Box::new(
+            IRType::String => Box::new(
                 self.llvm_context
                     .i8_type()
                     .ptr_type(AddressSpace::Generic)
                     .as_basic_type_enum(),
             ),
-            Type::UserType(name, _) => Box::new(
+            IRType::UserType(name) => Box::new(
                 self.module
                     .get_struct_type(name)
                     .expect(&format!("Struct type {} not found", name))
                     .ptr_type(AddressSpace::Generic)
                     .as_basic_type_enum(),
             ),
-            Type::Tuple(els) => Box::new(
+            IRType::Tuple(els) => Box::new(
                 self.llvm_context
                     .struct_type(
                         els.iter()
@@ -2193,16 +2183,15 @@ impl<'a> GeneratorState<'a> {
                     )
                     .ptr_type(AddressSpace::Generic),
             ),
-            Type::Variable(_) => Box::new(self.llvm_context.i8_type().as_basic_type_enum()),
-            Type::List(element_type) => {
+            IRType::List(element_type) => {
                 Box::new(self.retrieve_list_type(element_type).as_basic_type_enum())
             }
-            Type::Function(_, _) => unreachable!("Function type"),
+            IRType::Function(_, _) => unreachable!("Function type"),
         }
     }
 
-    fn retrieve_list_type(&self, element_type: &Rc<Type>) -> PointerType<'a> {
-        let list_struct_name = format!("__list__{}", hash_type(element_type));
+    fn retrieve_list_type(&self, element_type: &Rc<IRType>) -> PointerType<'a> {
+        let list_struct_name = format!("__list__{}", hash_ir_type(element_type));
         if let Some(bla) = self.module.get_struct_type(&list_struct_name) {
             return bla.ptr_type(AddressSpace::Generic);
         } else {
@@ -2236,4 +2225,40 @@ fn format_size(size: usize) -> String {
         NumberPrefix::Standalone(bytes) => format!("{} bytes", bytes),
         NumberPrefix::Prefixed(prefix, n) => format!("{:.1} {}B", n, prefix),
     }
+}
+
+fn hash_ir_type(t: &Rc<IRType>) -> String {
+    fn hash<T: Hash>(t: &Rc<T>) -> String {
+        let mut s = DefaultHasher::new();
+        t.hash(&mut s);
+        format!("{}", s.finish())
+    }
+
+    fn replace_variable_types(t: &Rc<IRType>) -> Rc<IRType> {
+        match t.borrow() {
+            IRType::Bool => Rc::new(IRType::Bool),
+            IRType::Char => Rc::new(IRType::Char),
+            IRType::String => Rc::new(IRType::String),
+            IRType::Int => Rc::new(IRType::Int),
+            IRType::Float => Rc::new(IRType::Float),
+            IRType::UserType(name) => Rc::new(IRType::UserType(Rc::clone(name))),
+
+            IRType::Tuple(element_types) => Rc::new(IRType::Tuple(
+                element_types
+                    .iter()
+                    .map(|et| replace_variable_types(et))
+                    .collect(),
+            )),
+            IRType::List(list_type) => Rc::new(IRType::List(replace_variable_types(list_type))),
+            IRType::Function(argument_types, result_type) => Rc::new(IRType::Function(
+                argument_types
+                    .iter()
+                    .map(|at| replace_variable_types(at))
+                    .collect(),
+                replace_variable_types(result_type),
+            )),
+        }
+    }
+
+    return hash(&replace_variable_types(t));
 }

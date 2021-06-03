@@ -3,6 +3,7 @@ use crate::inferencer::unifier::unify;
 use crate::{hash_type, ADT_SEPARATOR, MONOMORPHIC_PREFIX};
 
 use super::*;
+use crate::ast::ADTConstructor;
 
 /// Instantiates calls to functions with a polymorphic type.
 /// For example:
@@ -808,22 +809,7 @@ impl InstantiatorState {
                     new_instantiated,
                 )
             }
-            Expression::Lambda(loc, lambda_type_information, match_expressions, expression) => {
-                let mut combined_type_information = HashMap::new();
-                combined_type_information.extend(type_information.clone());
-                combined_type_information.extend(lambda_type_information.clone());
-                let (instantiated_expression, new_instantiated) =
-                    self.resolve_expression(expression, &combined_type_information);
-                (
-                    Rc::new(Expression::Lambda(
-                        Rc::clone(loc),
-                        lambda_type_information.clone(),
-                        match_expressions.clone(),
-                        instantiated_expression,
-                    )),
-                    new_instantiated,
-                )
-            }
+            Expression::Lambda(_, _, _, _, _) => unreachable!(),
         }
     }
 
@@ -1305,16 +1291,8 @@ fn substitute_expression(substitutions: &Substitutions, target: &Rc<Expression>)
                 Rc::clone(field),
             )
         }
-        Expression::Lambda(loc, type_information, match_expression, expression) => {
-            Expression::Lambda(
-                Rc::clone(loc),
-                type_information
-                    .iter()
-                    .map(|(v, t)| (Rc::clone(v), Rc::new(substitute(substitutions, t))))
-                    .collect(),
-                match_expression.clone(),
-                substitute_expression(substitutions, expression),
-            )
+        Expression::Lambda(loc, _, type_information, match_expression, expression) => {
+            unreachable!()
         }
     })
 }

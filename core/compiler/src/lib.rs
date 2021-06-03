@@ -71,28 +71,6 @@ pub struct TypeScheme {
     pub enclosed_type: Rc<Type>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct RecordDefinition {
-    pub name: Rc<String>,
-    pub location: Rc<Location>,
-    pub type_variables: Vec<Rc<String>>,
-    pub fields: Vec<(Rc<String>, Rc<Type>)>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ADTDefinition {
-    pub name: Rc<String>,
-    pub location: Rc<Location>,
-    pub type_variables: Vec<Rc<String>>,
-    pub constructors: Vec<Rc<ADTConstructor>>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ADTConstructor {
-    pub name: Rc<String>,
-    pub elements: Vec<Rc<Type>>,
-}
-
 impl Type {
     pub fn collect_free_type_variables(&self) -> HashSet<Rc<String>> {
         match self {
@@ -205,7 +183,7 @@ impl Expression {
             And(loc, _, _) => Rc::clone(loc),
             Or(loc, _, _) => Rc::clone(loc),
             RecordFieldAccess(loc, _, _, _, _) => Rc::clone(loc),
-            Lambda(loc, _, _, _) => Rc::clone(loc),
+            Lambda(loc, _, _, _, _) => Rc::clone(loc),
         }
     }
 
@@ -293,7 +271,7 @@ impl Expression {
             Expression::RecordFieldAccess(_, _, _, l, r) => {
                 Expression::dual_references(l, r, include_variables)
             }
-            Expression::Lambda(_, _, me, e) => {
+            Expression::Lambda(_, _, _, me, e) => {
                 let fs = e.references(include_variables);
                 let introduced_variables: HashSet<Rc<String>> = me
                     .iter()

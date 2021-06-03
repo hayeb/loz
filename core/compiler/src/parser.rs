@@ -10,11 +10,12 @@ use pest::prec_climber::*;
 use pest::Parser;
 
 use crate::ast::{
-    CaseRule, Expression, FunctionBody, FunctionDefinition, FunctionRule, MatchExpression, Module,
+    ADTConstructor, ADTDefinition, CaseRule, Expression, FunctionBody, FunctionDefinition,
+    FunctionRule, MatchExpression, Module, RecordDefinition,
 };
 use crate::parser::ParseError::PestError;
 use crate::Expression::*;
-use crate::{ADTConstructor, ADTDefinition, Import, Location, RecordDefinition, Type, TypeScheme};
+use crate::{Import, Location, Type, TypeScheme};
 
 use self::pest::iterators::Pairs;
 
@@ -688,6 +689,7 @@ fn to_term(
             );
             Lambda(
                 loc_info,
+                None,
                 HashMap::new(),
                 argument_match_expressions,
                 Rc::new(body),
