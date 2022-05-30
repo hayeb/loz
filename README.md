@@ -77,3 +77,29 @@ $ cloz test/test.loz
 ```
 
 It currenty does not support any arguments or options :)
+
+## Development on Windows
+1. Install Visual Studio Build Tools
+2. Check if link.exe points to Build Tools version, not the version provided by Git for Windows
+3. `choco install StrawberryPerl`
+4. `choco install cmake.install`
+5. `choco install llvmenv`
+6. `llvmenv init`
+7. Download the desired sources from LLVM GitHub (for instance, https://github.com/llvm/llvm-project/archive/refs/tags/llvmorg-11.1.0.zip)
+8. Extract contents to directory $LLVM_SRC_DIR
+9. Add local entry for llvmenv replace $LLVM_SRC_DIR with actual source directory:
+   ```toml
+   [local-11]
+   path = "$LLVM_SRC_DIR"
+   target = ["X86"]
+   ```
+10. Build from source:
+   ```
+   llvmenv build-entry local-11
+   ```
+   This can take some time :)
+11. Export LLVM prefix environment variable
+   ```
+   setx LLVM_SYS_110_PREFIX "C:\Users\user.name\AppData\Roaming\llvmenv\local-11"
+   ```
+12. `cargo build` should work now!

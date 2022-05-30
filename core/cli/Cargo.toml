@@ -6,7 +6,7 @@ edition = "2018"
 
 [dependencies]
 loz-compiler = {version = "0.1.0", path="../compiler"}
-clap = "2.33.0"
+clap = "3.1.18"
 
 [[bin]]
 name = "cloz"
