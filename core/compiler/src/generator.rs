@@ -31,7 +31,7 @@
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
 use std::rc::Rc;
 
 use inkwell::attributes::AttributeLoc;
@@ -39,11 +39,9 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
-use inkwell::targets::{
-    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
-};
-use inkwell::types::{BasicType, BasicTypeEnum, PointerType};
-use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, PointerValue};
+use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple};
+use inkwell::types::{BasicType, BasicTypeEnum, PointerType, BasicMetadataTypeEnum, AnyType};
+use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, PointerValue, BasicMetadataValueEnum, AnyValue};
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 use itertools::{EitherOrBoth, Itertools};
 
@@ -58,6 +56,7 @@ use number_prefix::NumberPrefix;
 use std::collections::hash_map::DefaultHasher;
 use std::fs::File;
 use std::hash::{Hash, Hasher};
+use std::io;
 use std::io::Write;
 
 pub mod ir;
@@ -87,8 +86,23 @@ pub fn generate(
     link(object_path.as_path(), executable_path.as_path())
 }
 
-fn link(object_path: &Path, executable_path: &Path) -> Result<(), String> {
-    match Command::new("ld")
+#[cfg(target_os = "windows")]
+fn build_command(object_path: &Path, executable_path: &Path) -> io::Result<Output> {
+    Command::new("link")
+        .arg("/NOLOGO")
+        .arg("/LIBPATH:C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.32.31326\\lib\\x64")
+        .arg("/LIBPATH:C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.19041.0\\ucrt\\x64")
+        .arg("/LIBPATH:C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.19041.0\\um\\x64")
+        .arg(format!("/OUT:{}.exe", executable_path.display()))
+        .arg(object_path)
+        .arg("msvcrt.lib")
+        .arg("libucrt.lib")
+        .output()
+}
+
+#[cfg(target_os = "linux")]
+fn build_command(object_path: &Path, executable_path: &Path) -> &mut Command {
+    Command::new("ld")
         .arg("/usr/lib/x86_64-linux-gnu/crti.o")
         .arg("/usr/lib/x86_64-linux-gnu/crtn.o")
         .arg("/usr/lib/x86_64-linux-gnu/crt1.o")
@@ -98,7 +112,10 @@ fn link(object_path: &Path, executable_path: &Path) -> Result<(), String> {
         .arg("-lc")
         .arg("-dynamic-linker")
         .arg("/lib64/ld-linux-x86-64.so.2")
-        .output()
+}
+
+fn link(object_path: &Path, executable_path: &Path) -> Result<(), String> {
+    match build_command(object_path, executable_path)
     {
         Ok(r) => {
             if r.status.success() {
@@ -115,7 +132,8 @@ fn link(object_path: &Path, executable_path: &Path) -> Result<(), String> {
                 Ok(())
             } else {
                 println!("ld error code: {}", r.status);
-                println!("ld error output: {}", String::from_utf8(r.stderr).unwrap());
+                println!("ld error err output: {}", String::from_utf8(r.stderr).unwrap());
+                println!("ld error std output: {}", String::from_utf8(r.stdout).unwrap());
                 Err(format!("Error linking, see previous output."))
             }
         }
@@ -185,6 +203,8 @@ impl<'a> GeneratorState<'a> {
         self.generate_records(g);
         self.generate_adts(g);
 
+        println!("Module: {:#?}", self.functions);
+
         let main_type = &self
             .functions
             .iter()
@@ -213,7 +233,7 @@ impl<'a> GeneratorState<'a> {
             .build_call(llvm_main_function.unwrap(), &[], &main_function_name);
         self.builder.build_call(
             print_function,
-            &[value.try_as_basic_value().left().unwrap()],
+            &[value.try_as_basic_value().left().unwrap().into()],
             "print_result",
         );
         self.builder.build_return(None);
@@ -223,9 +243,9 @@ impl<'a> GeneratorState<'a> {
         self.module.add_function(
             "malloc",
             self.llvm_context
-                .i8_type()
+                .i32_type()
                 .ptr_type(AddressSpace::Generic)
-                .fn_type(&[self.llvm_context.i64_type().as_basic_type_enum()], false),
+                .fn_type(&[self.llvm_context.i64_type().as_basic_type_enum().into()], false),
             Some(Linkage::External),
         );
         self.module.add_function(
@@ -235,7 +255,8 @@ impl<'a> GeneratorState<'a> {
                     .llvm_context
                     .i8_type()
                     .ptr_type(AddressSpace::Generic)
-                    .as_basic_type_enum()],
+                    .as_basic_type_enum()
+                    .into()],
                 false,
             ),
             Some(Linkage::External),
@@ -247,7 +268,8 @@ impl<'a> GeneratorState<'a> {
                     .llvm_context
                     .i8_type()
                     .ptr_type(AddressSpace::Generic)
-                    .as_basic_type_enum()],
+                    .as_basic_type_enum()
+                    .into()],
                 true,
             ),
             Some(Linkage::External),
@@ -260,11 +282,13 @@ impl<'a> GeneratorState<'a> {
                         self.llvm_context
                             .i8_type()
                             .ptr_type(AddressSpace::Generic)
-                            .as_basic_type_enum(),
+                            .as_basic_type_enum()
+                            .into(),
                         self.llvm_context
                             .i8_type()
                             .ptr_type(AddressSpace::Generic)
-                            .as_basic_type_enum(),
+                            .as_basic_type_enum()
+                            .into(),
                     ],
                     false,
                 ),
@@ -279,7 +303,7 @@ impl<'a> GeneratorState<'a> {
                 "exit",
                 self.llvm_context
                     .void_type()
-                    .fn_type(&[self.llvm_context.i32_type().as_basic_type_enum()], false),
+                    .fn_type(&[self.llvm_context.i32_type().as_basic_type_enum().into()], false),
                 Some(Linkage::External),
             )
             .add_attribute(
@@ -354,8 +378,8 @@ impl<'a> GeneratorState<'a> {
             };
             let llvm_arguments = arguments
                 .iter()
-                .map(|a| self.to_llvm_type(a).as_basic_type_enum())
-                .collect::<Vec<BasicTypeEnum>>();
+                .map(|a| self.to_llvm_type(a).as_basic_type_enum().into())
+                .collect::<Vec<BasicMetadataTypeEnum>>();
             let llvm_arguments = llvm_arguments.as_slice();
             let function_type = self
                 .to_llvm_type(return_type)
@@ -604,7 +628,7 @@ impl<'a> GeneratorState<'a> {
                 let strcmp = self.module.get_function("strcmp").unwrap();
                 let compared = self
                     .builder
-                    .build_call(strcmp, &[bla.as_basic_value_enum(), match_value], &g.var())
+                    .build_call(strcmp, &[bla.as_basic_value_enum().into(), match_value.into()], &g.var())
                     .try_as_basic_value()
                     .left()
                     .unwrap()
@@ -624,7 +648,7 @@ impl<'a> GeneratorState<'a> {
                 let strcmp = self.module.get_function("strcmp").unwrap();
                 let compared = self
                     .builder
-                    .build_call(strcmp, &[bla.as_basic_value_enum(), match_value], &g.var())
+                    .build_call(strcmp, &[bla.as_basic_value_enum().into(), match_value.into()], &g.var())
                     .try_as_basic_value()
                     .left()
                     .unwrap()
@@ -1051,7 +1075,7 @@ impl<'a> GeneratorState<'a> {
                     .builder
                     .build_call(
                         self.module.get_function("malloc").unwrap(),
-                        &[tuple_type.size_of().unwrap().as_basic_value_enum()],
+                        &[tuple_type.size_of().unwrap().as_basic_value_enum().into()],
                         &g.var(),
                     )
                     .try_as_basic_value()
@@ -1095,7 +1119,7 @@ impl<'a> GeneratorState<'a> {
                         .builder
                         .build_call(
                             self.module.get_function("malloc").unwrap(),
-                            &[list_struct_type.size_of().unwrap().as_basic_value_enum()],
+                            &[list_struct_type.size_of().unwrap().as_basic_value_enum().into()],
                             &g.var(),
                         )
                         .try_as_basic_value()
@@ -1151,7 +1175,7 @@ impl<'a> GeneratorState<'a> {
                     .builder
                     .build_call(
                         self.module.get_function("malloc").unwrap(),
-                        &[list_struct_type.size_of().unwrap().as_basic_value_enum()],
+                        &[list_struct_type.size_of().unwrap().as_basic_value_enum().into()],
                         &g.var(),
                     )
                     .try_as_basic_value()
@@ -1190,18 +1214,23 @@ impl<'a> GeneratorState<'a> {
                     .unwrap();
                 let adt_llvm_type = self.module.get_struct_type(adt_name).unwrap();
 
-                let adt_value_pointer = self
+                let allocated_pointer = self
                     .builder
                     .build_call(
                         self.module.get_function("malloc").unwrap(),
-                        &[adt_llvm_type.size_of().unwrap().as_basic_value_enum()],
+                        &[adt_llvm_type.size_of().unwrap().as_basic_value_enum().into()],
                         &g.var(),
                     )
                     .try_as_basic_value()
                     .left()
                     .unwrap()
-                    .into_pointer_value()
-                    .const_cast(adt_llvm_type.ptr_type(AddressSpace::Generic));
+                    .into_pointer_value();
+
+                println!("adt_llvm_type: {:#?}", adt_llvm_type);
+                println!("allocated_pointer: {:#?}", allocated_pointer);
+
+                let adt_value_pointer = self.builder.build_bitcast(allocated_pointer, adt_llvm_type.ptr_type(AddressSpace::Generic), &g.var())
+                    .into_pointer_value();
 
                 let adt_constructor_llvm_type = self
                     .module
@@ -1255,7 +1284,7 @@ impl<'a> GeneratorState<'a> {
                     .builder
                     .build_call(
                         self.module.get_function("malloc").unwrap(),
-                        &[record_llvm_type.size_of().unwrap().as_basic_value_enum()],
+                        &[record_llvm_type.size_of().unwrap().as_basic_value_enum().into()],
                         &g.var(),
                     )
                     .try_as_basic_value()
@@ -1371,10 +1400,10 @@ impl<'a> GeneratorState<'a> {
                 result
             }
             IRExpression::Call(_, _, b, arguments) => {
-                let mut llvm_argument_values = Vec::new();
+                let mut llvm_argument_values: Vec<BasicMetadataValueEnum> = Vec::new();
                 for a in arguments {
                     let llvm_a = self.generate_expression(g, a, value_information);
-                    llvm_argument_values.push(llvm_a);
+                    llvm_argument_values.push(llvm_a.into());
                 }
 
                 let llvm_function = self.module.get_function(b).unwrap();
@@ -1719,20 +1748,7 @@ impl<'a> GeneratorState<'a> {
             }
         }
 
-        let opt = OptimizationLevel::Aggressive;
-        let reloc = RelocMode::Default;
-        let model = CodeModel::Default;
-        let target = Target::from_name("x86-64").unwrap();
-        let target_machine = target
-            .create_target_machine(
-                &TargetTriple::create("x86_64-pc-linux-gnu"),
-                "x86-64",
-                "",
-                opt,
-                reloc,
-                model,
-            )
-            .unwrap();
+        let target_machine = Self::configure_target_machine();
 
         target_machine
             .write_to_file(&self.module, FileType::Object, object_file_path)
@@ -1753,11 +1769,51 @@ impl<'a> GeneratorState<'a> {
         Ok(())
     }
 
+    #[cfg(target_os = "linux")]
+    fn configure_target_machine() -> TargetMachine {
+        let opt = OptimizationLevel::Aggressive;
+        let reloc = RelocMode::Default;
+        let model = CodeModel::Default;
+        let target = Target::from_name("x86-64").unwrap();
+        let target_machine = target
+            .create_target_machine(
+                &TargetTriple::create("x86_64-pc-linux-gnu"),
+                "x86-64",
+                "",
+                opt,
+                reloc,
+                model,
+            )
+            .unwrap();
+        target_machine
+    }
+
+    #[cfg(target_os = "windows")]
+    fn configure_target_machine() -> TargetMachine {
+        let opt = OptimizationLevel::Aggressive;
+        let reloc = RelocMode::Default;
+        let model = CodeModel::Default;
+
+        let target = Target::from_name("x86_64").unwrap();
+        let target_machine = target
+            .create_target_machine(
+                &TargetTriple::create("x86_64-pc-windows-msvc"),
+                "x86-64",
+                "",
+                opt,
+                reloc,
+                model,
+            )
+            .unwrap();
+        target_machine
+    }
+
+
     fn generate_abort(&self, g: &mut VarGenerator, message: String, exitcode: i32) {
         let puts = self.module.get_function("puts").unwrap();
         let message_pointer = self.builder.build_global_string_ptr(&message, &g.global());
         self.builder
-            .build_call(puts, &[message_pointer.as_basic_value_enum()], &g.var());
+            .build_call(puts, &[message_pointer.as_basic_value_enum().into()], &g.var());
         let exit = self.module.get_function("exit").unwrap();
         self.builder.build_call(
             exit,
@@ -1773,7 +1829,7 @@ impl<'a> GeneratorState<'a> {
 
     fn generate_print(&self, g: &mut VarGenerator, type_to_print: &Rc<IRType>) -> FunctionValue {
         let print_value_type = self.llvm_context.void_type().fn_type(
-            &[self.to_llvm_type(type_to_print).as_basic_type_enum()],
+            &[self.to_llvm_type(type_to_print).as_basic_type_enum().into()],
             false,
         );
         let function_print_value =
@@ -1796,7 +1852,8 @@ impl<'a> GeneratorState<'a> {
             &[self
                 .builder
                 .build_global_string_ptr("\n", "newline")
-                .as_basic_value_enum()],
+                .as_basic_value_enum()
+                .into()],
             "print_newline",
         );
         self.builder.build_return(None);
@@ -1807,7 +1864,7 @@ impl<'a> GeneratorState<'a> {
         let print_bool_type = self
             .llvm_context
             .void_type()
-            .fn_type(&[self.llvm_context.bool_type().as_basic_type_enum()], false);
+            .fn_type(&[self.llvm_context.bool_type().as_basic_type_enum().into()], false);
         let print_bool =
             self.module
                 .add_function("print_bool", print_bool_type, Some(Linkage::External));
@@ -1829,7 +1886,8 @@ impl<'a> GeneratorState<'a> {
             &[self
                 .builder
                 .build_global_string_ptr("True", "true_string")
-                .as_basic_value_enum()],
+                .as_basic_value_enum()
+                .into()],
             &g.var(),
         );
         self.builder.build_return(None);
@@ -1840,7 +1898,8 @@ impl<'a> GeneratorState<'a> {
             &[self
                 .builder
                 .build_global_string_ptr("False", "false_string")
-                .as_basic_value_enum()],
+                .as_basic_value_enum()
+                .into()],
             &g.var(),
         );
         self.builder.build_return(None);
@@ -1858,7 +1917,7 @@ impl<'a> GeneratorState<'a> {
         let print_bool = self.module.get_function("print_bool").unwrap();
         match type_to_print.borrow() {
             IRType::Bool => {
-                self.builder.build_call(print_bool, &[value], &g.var());
+                self.builder.build_call(print_bool, &[value.into()], &g.var());
             }
 
             IRType::Char => {
@@ -1867,8 +1926,9 @@ impl<'a> GeneratorState<'a> {
                     &[
                         self.builder
                             .build_global_string_ptr("'%s'", "char_format_string")
-                            .as_basic_value_enum(),
-                        value,
+                            .as_basic_value_enum()
+                            .into(),
+                        value.into(),
                     ],
                     &g.var(),
                 );
@@ -1879,8 +1939,9 @@ impl<'a> GeneratorState<'a> {
                     &[
                         self.builder
                             .build_global_string_ptr("\"%s\"", "string_format_string")
-                            .as_basic_value_enum(),
-                        value,
+                            .as_basic_value_enum()
+                            .into(),
+                        value.into(),
                     ],
                     &g.var(),
                 );
@@ -1891,8 +1952,9 @@ impl<'a> GeneratorState<'a> {
                     &[
                         self.builder
                             .build_global_string_ptr("%d", "int_format_string")
-                            .as_basic_value_enum(),
-                        value,
+                            .as_basic_value_enum()
+                            .into(),
+                        value.into(),
                     ],
                     &g.var(),
                 );
@@ -1903,8 +1965,9 @@ impl<'a> GeneratorState<'a> {
                     &[
                         self.builder
                             .build_global_string_ptr("%f", "float_format_string")
-                            .as_basic_value_enum(),
-                        value,
+                            .as_basic_value_enum()
+                            .into(),
+                        value.into(),
                     ],
                     &g.var(),
                 );
@@ -1933,7 +1996,7 @@ impl<'a> GeneratorState<'a> {
                         .build_global_string_ptr(", ", "record_field_separator")
                         .as_basic_value_enum();
                     self.builder
-                        .build_call(printf, &[print_string, record_prefix], &g.var());
+                        .build_call(printf, &[print_string.into(), record_prefix.into()], &g.var());
 
                     let record_definition = self
                         .records
@@ -1952,20 +2015,21 @@ impl<'a> GeneratorState<'a> {
                         self.builder.build_call(
                             printf,
                             &[
-                                record_field_name,
+                                record_field_name.into(),
                                 self.builder
                                     .build_global_string_ptr(field_name, field_name)
-                                    .as_basic_value_enum(),
+                                    .as_basic_value_enum()
+                                    .into(),
                             ],
                             &g.var(),
                         );
                         self.generate_print_code(g, field_type, field_value);
                         if i < record_instance_definition.fields.len() - 1 {
                             self.builder
-                                .build_call(printf, &[record_field_separator], &g.var());
+                                .build_call(printf, &[record_field_separator.into()], &g.var());
                         }
                     }
-                    self.builder.build_call(printf, &[record_suffix], &g.var());
+                    self.builder.build_call(printf, &[record_suffix.into()], &g.var());
                 } else if self.adts.contains_key(&base_name) {
                     // TODO: Extend printing ADTs with their respective constructors.
                     let adt_name_string = self
@@ -1976,7 +2040,7 @@ impl<'a> GeneratorState<'a> {
                         )
                         .as_basic_value_enum();
                     self.builder
-                        .build_call(printf, &[adt_name_string], &g.var());
+                        .build_call(printf, &[adt_name_string.into()], &g.var());
                 } else {
                     unreachable!("Printing ADTs")
                 }
@@ -1994,7 +2058,7 @@ impl<'a> GeneratorState<'a> {
                     .builder
                     .build_global_string_ptr(")", "tuple_suffix")
                     .as_basic_value_enum();
-                self.builder.build_call(printf, &[tuple_prefix], &g.var());
+                self.builder.build_call(printf, &[tuple_prefix.into()], &g.var());
                 for (i, element_type) in elements.iter().enumerate() {
                     let element_pointer = self
                         .builder
@@ -2004,27 +2068,27 @@ impl<'a> GeneratorState<'a> {
                     self.generate_print_code(g, element_type, element_value);
                     if i < elements.len() - 1 {
                         self.builder
-                            .build_call(printf, &[tuple_separator], &g.var());
+                            .build_call(printf, &[tuple_separator.into()], &g.var());
                     }
                 }
-                self.builder.build_call(printf, &[tuple_suffix], &g.var());
+                self.builder.build_call(printf, &[tuple_suffix.into()], &g.var());
             }
             IRType::List(element_type) => {
                 let list_open = self
                     .builder
                     .build_global_string_ptr("[", "list_open")
                     .as_basic_value_enum();
-                self.builder.build_call(printf, &[list_open], &g.var());
+                self.builder.build_call(printf, &[list_open.into()], &g.var());
 
                 let print_list_function = self.generate_print_list(g, element_type);
                 self.builder
-                    .build_call(print_list_function, &[value], &g.var());
+                    .build_call(print_list_function, &[value.into()], &g.var());
 
                 let list_close = self
                     .builder
                     .build_global_string_ptr("]", "list_close")
                     .as_basic_value_enum();
-                self.builder.build_call(printf, &[list_close], &g.var());
+                self.builder.build_call(printf, &[list_close.into()], &g.var());
             }
             IRType::Function(_, _) => unreachable!("Printing function type"),
         };
@@ -2044,7 +2108,8 @@ impl<'a> GeneratorState<'a> {
             self.llvm_context.void_type().fn_type(
                 &[self
                     .to_llvm_type(&Rc::new(IRType::List(Rc::clone(element_type))))
-                    .as_basic_type_enum()],
+                    .as_basic_type_enum()
+                    .into()],
                 false,
             ),
             Some(Linkage::External),
@@ -2125,9 +2190,9 @@ impl<'a> GeneratorState<'a> {
             .builder
             .build_global_string_ptr(", ", "list_separator")
             .as_basic_value_enum();
-        self.builder.build_call(printf, &[list_separator], &g.var());
+        self.builder.build_call(printf, &[list_separator.into()], &g.var());
         self.builder
-            .build_call(print_list_function, &[next_pointer], &g.var());
+            .build_call(print_list_function, &[next_pointer.into()], &g.var());
         self.builder.build_return(None);
 
         self.builder.position_at_end(current_block);
@@ -2156,21 +2221,18 @@ impl<'a> GeneratorState<'a> {
             IRType::Char => Box::new(
                 self.llvm_context
                     .i8_type()
-                    .ptr_type(AddressSpace::Generic)
-                    .as_basic_type_enum(),
+                    .ptr_type(AddressSpace::Generic),
             ),
             IRType::String => Box::new(
                 self.llvm_context
                     .i8_type()
-                    .ptr_type(AddressSpace::Generic)
-                    .as_basic_type_enum(),
+                    .ptr_type(AddressSpace::Generic),
             ),
             IRType::UserType(name) => Box::new(
                 self.module
                     .get_struct_type(name)
                     .expect(&format!("Struct type {} not found", name))
-                    .ptr_type(AddressSpace::Generic)
-                    .as_basic_type_enum(),
+                    .ptr_type(AddressSpace::Generic),
             ),
             IRType::Tuple(els) => Box::new(
                 self.llvm_context

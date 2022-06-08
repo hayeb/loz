@@ -2,44 +2,44 @@ use crate::{Import, Location};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct IRRecordDefinition {
     pub name: Rc<String>,
     pub location: Rc<Location>,
     pub fields: Vec<(Rc<String>, Rc<IRType>)>,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct IRADTDefinition {
     pub name: Rc<String>,
     pub location: Rc<Location>,
     pub constructors: Vec<Rc<IRADTConstructor>>,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct IRADTConstructor {
     pub name: Rc<String>,
     pub elements: Vec<Rc<IRType>>,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct IRFunctionDefinition {
     pub location: Rc<Location>,
     pub name: Rc<String>,
     pub function_type: Rc<IRType>,
     pub function_bodies: Vec<Rc<IRFunctionBody>>,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct IRFunctionBody {
     pub name: Rc<String>,
     pub location: Rc<Location>,
     pub match_expressions: Vec<Rc<IRMatchExpression>>,
     pub rules: Vec<Rc<IRFunctionRule>>,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum IRFunctionRule {
     ConditionalRule(Rc<Location>, Rc<IRExpression>, Rc<IRExpression>),
     ExpressionRule(Rc<Location>, Rc<IRExpression>),
     LetRule(Rc<Location>, Rc<IRMatchExpression>, Rc<IRExpression>),
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum IRExpression {
     BoolLiteral(Rc<Location>, bool),
     StringLiteral(Rc<Location>, Rc<String>),
@@ -103,13 +103,13 @@ pub enum IRExpression {
         Rc<IRExpression>,
     ),
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct IRCaseRule {
     pub loc_info: Rc<Location>,
     pub case_rule: Rc<IRMatchExpression>,
     pub result_rule: Rc<IRExpression>,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum IRMatchExpression {
     IntLiteral(Rc<Location>, i64),
     CharLiteral(Rc<Location>, char),
@@ -123,7 +123,7 @@ pub enum IRMatchExpression {
     ADT(Rc<Location>, Rc<String>, Vec<Rc<IRMatchExpression>>),
     Record(Rc<Location>, Rc<String>, Vec<Rc<String>>),
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct IRModule {
     pub name: Rc<String>,
     pub file_name: Rc<String>,
@@ -132,7 +132,7 @@ pub struct IRModule {
     pub adt_name_to_definition: HashMap<Rc<String>, Rc<IRADTDefinition>>,
     pub record_name_to_definition: HashMap<Rc<String>, Rc<IRRecordDefinition>>,
 }
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum IRType {
     Bool,
     Char,

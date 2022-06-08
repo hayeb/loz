@@ -83,7 +83,7 @@ It currenty does not support any arguments or options :)
 2. Check if link.exe points to Build Tools version, not the version provided by Git for Windows
 3. `choco install StrawberryPerl`
 4. `choco install cmake.install`
-5. `choco install llvmenv`
+5. `cargo install llvmenv`
 6. `llvmenv init`
 7. Download the desired sources from LLVM GitHub (for instance, https://github.com/llvm/llvm-project/archive/refs/tags/llvmorg-11.1.0.zip)
 8. Extract contents to directory $LLVM_SRC_DIR

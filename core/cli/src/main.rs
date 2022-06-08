@@ -1,7 +1,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use clap::{App, Arg};
+use clap::{Command, Arg};
 
 use loz_compiler::generator::generate;
 use loz_compiler::module_system::{compile_modules, CompilerOptions};
@@ -18,42 +18,43 @@ static DEFAULT_LOZ_HOME: &str = "%APPDATA%\\loz";
 static DEFAULT_LOZ_HOME: &str = "/usr/lib/loz";
 
 fn main() {
-    let matches = App::new("Loz Compiler")
+    let matches = Command::new("Loz Compiler")
         .version(VERSION)
         .author("Haye Böhm <haye.bohm@gmail.com>")
         .about("The Loz compiler!")
 
         // Arguments
-        .arg(Arg::with_name("file")
+        .arg(Arg::new("file")
             .index(1)
             .required(true)
             .help("The file to compile"))
 
         // Options with values
-        .arg(Arg::with_name("working_directory")
-            .short("d")
+        .arg(Arg::new("working_directory")
+            .short('d')
             .long("working-directory")
             .help("Working directory of the compiler")
             .takes_value(true))
-        .arg(Arg::with_name("library_path")
-            .short("l")
+        .arg(Arg::new("library_path")
+            .short('l')
             .long("library-path")
             .help("Directory to include in the library path")
             .takes_value(true)
-            .multiple(true)
+            .multiple_occurrences(true)
             .number_of_values(1))
 
         // Options
-        .arg(Arg::with_name("print_ast")
-            .short("p")
+        .arg(Arg::new("print_ast")
+            .short('p')
             .long("print-ast")
             .help("Toggles whether to print the AST as parsed by the parser"))
-        .arg(Arg::with_name("print_inferred_types")
-            .short("t")
+        .arg(Arg::new("print_inferred_types")
+            .short('t')
             .long("print-inferred-types")
             .help("Toggles whether to print the inferred types of functions without a type declaration"))
 
-        .arg(Arg::with_name("emit-llvm-ir")
+        .arg(Arg::new("emit-llvm-ir")
+             .short('e')
              .long("emit-llvm-ir")
              .help("Emit a LLVM IR file next to the generated executable"))
 

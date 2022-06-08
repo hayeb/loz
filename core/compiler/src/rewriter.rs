@@ -10,13 +10,12 @@ use crate::generator::ir::{
     IRADTConstructor, IRADTDefinition, IRCaseRule, IRExpression, IRFunctionBody,
     IRFunctionDefinition, IRFunctionRule, IRMatchExpression, IRRecordDefinition, IRType,
 };
-use crate::rewriter::extractor::extract_closure_variables;
+
 use crate::rewriter::flattener::flatten;
 use crate::rewriter::instantiator::{instantiate, Instantiated};
 use crate::rewriter::renamer::rename;
 use crate::{Import, Type, TypeScheme};
 
-mod extractor;
 mod flattener;
 mod instantiator;
 mod renamer;
@@ -62,7 +61,7 @@ pub fn rewrite(
     //        f g a = f_apply g a
     let (functions, local_adts, local_records) = flatten(functions);
 
-    let functions = add_closure_variables_to_type(functions);
+    //let functions = add_closure_variables_to_type(functions);
 
     // 3. Remove variable types by monomorphization.
     //         f :: [a] Int -> Maybe a
@@ -444,10 +443,10 @@ fn to_ir_types(types: &Vec<Rc<Type>>) -> Vec<Rc<IRType>> {
 fn to_ir_type(loz_type: &Rc<Type>) -> Rc<IRType> {
     Rc::new(match loz_type.borrow() {
         Type::Bool => IRType::Bool,
-        Type::Char => IRType::Bool,
-        Type::String => IRType::Bool,
-        Type::Int => IRType::Bool,
-        Type::Float => IRType::Bool,
+        Type::Char => IRType::Char,
+        Type::String => IRType::String,
+        Type::Int => IRType::Int,
+        Type::Float => IRType::Float,
         Type::UserType(n, _) => IRType::UserType(n.clone()),
         Type::Tuple(elements) => IRType::Tuple(to_ir_types(elements)),
         Type::List(list_type) => IRType::List(to_ir_type(list_type)),
