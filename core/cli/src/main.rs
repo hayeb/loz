@@ -1,7 +1,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use clap::{Command, Arg};
+use clap::{Arg, Command};
 
 use loz_compiler::generator::generate;
 use loz_compiler::module_system::{compile_modules, CompilerOptions};

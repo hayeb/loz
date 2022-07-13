@@ -1,9 +1,11 @@
+use itertools::Either;
+
+use crate::ast::ADTConstructor;
 use crate::inferencer::substitutor::{substitute, substitute_type, Substitutions};
 use crate::inferencer::unifier::unify;
 use crate::{hash_type, ADT_SEPARATOR, MONOMORPHIC_PREFIX};
 
 use super::*;
-use crate::ast::ADTConstructor;
 
 /// Instantiates calls to functions with a polymorphic type.
 /// For example:
@@ -28,46 +30,23 @@ pub fn instantiate(
     functions: HashMap<Rc<String>, Rc<FunctionDefinition>>,
     adts: HashMap<Rc<String>, Rc<ADTDefinition>>,
     records: HashMap<Rc<String>, Rc<RecordDefinition>>,
-) -> Instantiated {
-    InstantiatorState::new(functions, adts, records).instantiate(main_function)
+) -> InstantiatorState {
+    let mut state = InstantiatorState::new(functions, adts, records, main_function);
+    state.instantiate();
+    state
 }
 
-pub struct Instantiated {
+pub struct InstantiatorState {
+    input_function_definitions: HashMap<Rc<String>, Rc<FunctionDefinition>>,
+    input_adt_definitions: HashMap<Rc<String>, Rc<ADTDefinition>>,
+    input_record_definitions: HashMap<Rc<String>, Rc<RecordDefinition>>,
+
+    function_queue: Vec<Rc<FunctionDefinition>>,
+    type_queue: Vec<Either<Rc<RecordDefinition>, Rc<ADTDefinition>>>,
+
     pub functions: HashMap<Rc<String>, Rc<FunctionDefinition>>,
     pub adts: HashMap<Rc<String>, Rc<ADTDefinition>>,
     pub records: HashMap<Rc<String>, Rc<RecordDefinition>>,
-}
-
-impl Instantiated {
-    fn new() -> Self {
-        Instantiated {
-            functions: HashMap::new(),
-            records: HashMap::new(),
-            adts: HashMap::new(),
-        }
-    }
-    fn merge(&mut self, other: Instantiated) {
-        self.functions.extend(
-            other
-                .functions
-                .iter()
-                .map(|(n, d)| (Rc::clone(n), Rc::clone(d))),
-        );
-        self.adts
-            .extend(other.adts.iter().map(|(n, d)| (Rc::clone(n), Rc::clone(d))));
-        self.records.extend(
-            other
-                .records
-                .iter()
-                .map(|(n, d)| (Rc::clone(n), Rc::clone(d))),
-        );
-    }
-}
-
-struct InstantiatorState {
-    function_definitions: HashMap<Rc<String>, Rc<FunctionDefinition>>,
-    adt_definitions: HashMap<Rc<String>, Rc<ADTDefinition>>,
-    record_definitions: HashMap<Rc<String>, Rc<RecordDefinition>>,
 }
 
 impl InstantiatorState {
@@ -75,103 +54,77 @@ impl InstantiatorState {
         function_definitions: HashMap<Rc<String>, Rc<FunctionDefinition>>,
         adt_definitions: HashMap<Rc<String>, Rc<ADTDefinition>>,
         record_definitions: HashMap<Rc<String>, Rc<RecordDefinition>>,
+        main_function: &Rc<String>,
     ) -> Self {
+        let main_function = (&function_definitions).get(main_function).cloned();
+
         InstantiatorState {
-            function_definitions,
-            adt_definitions,
-            record_definitions,
+            input_function_definitions: function_definitions,
+            input_adt_definitions: adt_definitions,
+            input_record_definitions: record_definitions,
+            function_queue: vec![main_function.unwrap()],
+            type_queue: Vec::new(),
+
+            functions: HashMap::new(),
+            adts: HashMap::new(),
+            records: HashMap::new(),
         }
     }
 
-    fn instantiate(&self, main_function: &Rc<String>) -> Instantiated {
-        let mut function_queue: Vec<Rc<FunctionDefinition>> = vec![Rc::clone(
-            self.function_definitions.get(main_function).unwrap(),
-        )];
+    fn add_function(&mut self, function: Rc<FunctionDefinition>) {
+        println!("Adding function definition {:#?}", function);
+        self.function_queue.push(Rc::clone(&function));
+        self.functions
+            .insert(Rc::clone(&function.name), Rc::clone(&function));
+    }
 
-        // We need to deal with (polymorphic) types one at a time because they can be recursive..
-        // It is not sufficient do do all records first, AND THEN all adts.
-        let mut type_queue: Vec<(Option<Rc<RecordDefinition>>, Option<Rc<ADTDefinition>>)> =
-            Vec::new();
+    fn add_record(&mut self, record: Rc<RecordDefinition>) {
+        println!("Adding record definition {:#?}", record);
+        self.type_queue.push(Either::Left(Rc::clone(&record)));
+        self.records
+            .insert(Rc::clone(&record.name), Rc::clone(&record));
+    }
 
-        let mut instantiated_functions: HashMap<Rc<String>, Rc<FunctionDefinition>> =
-            HashMap::new();
-        let mut instantiated_records: HashMap<Rc<String>, Rc<RecordDefinition>> = HashMap::new();
-        let mut instantiated_adts: HashMap<Rc<String>, Rc<ADTDefinition>> = HashMap::new();
+    fn add_adt(&mut self, adt: Rc<ADTDefinition>) {
+        println!("Adding adt definition {:#?}", adt);
+        self.type_queue.push(Either::Right(Rc::clone(&adt)));
+        self.adts.insert(Rc::clone(&adt.name), Rc::clone(&adt));
+    }
 
-        while let Some(d) = function_queue.pop() {
-            if instantiated_functions.contains_key(&d.name) {
-                // Skip function definitions for which we have already generated an instantiated definition.
-                continue;
-            }
-
-            let (d, new_instantiated) = self.resolve_function_definition(&d);
-            for (_, d) in new_instantiated.functions.iter() {
-                function_queue.insert(0, Rc::clone(d))
-            }
-            for (_, d) in new_instantiated.records.iter() {
-                type_queue.insert(0, (Some(Rc::clone(d)), None));
-            }
-            for (_, d) in new_instantiated.adts.iter() {
-                type_queue.insert(0, (None, Some(Rc::clone(d))));
-            }
-            instantiated_functions.insert(Rc::clone(&d.name), d);
+    fn instantiate(&mut self) {
+        while let Some(function_definition) = self.function_queue.pop() {
+            let function_definition = self.resolve_function_definition(&function_definition);
+            println!("Resolved function definition: {:#?}", function_definition);
+            self.functions
+                .insert(Rc::clone(&function_definition.name), function_definition);
         }
 
-        while let Some((l, r)) = type_queue.pop() {
-            if let Some(record_definition) = l {
-                if instantiated_records.contains_key(&record_definition.name) {
-                    continue;
+        while let Some(t) = self.type_queue.pop() {
+            match t.borrow() {
+                Either::Left(r) => {
+                    let record_definition = self.resolve_record_definition(&r);
+                    println!("Resolved record definition: {:#?}", record_definition);
+                    self.records
+                        .insert(Rc::clone(&record_definition.name), record_definition);
                 }
-                let (record_definition, new_instantiated) =
-                    self.resolve_record_definition(&record_definition);
-
-                for (_, d) in new_instantiated.records.iter() {
-                    type_queue.insert(0, (Some(Rc::clone(d)), None));
+                Either::Right(a) => {
+                    let adt_definition = self.resolve_adt_definition(&a);
+                    println!("Resolved adt definition: {:#?}", adt_definition);
+                    self.adts
+                        .insert(Rc::clone(&adt_definition.name), adt_definition);
                 }
-                for (_, d) in new_instantiated.adts.iter() {
-                    type_queue.insert(0, (None, Some(Rc::clone(d))));
-                }
-
-                instantiated_records.insert(Rc::clone(&record_definition.name), record_definition);
             }
-            if let Some(adt_definition) = r {
-                if instantiated_adts.contains_key(&adt_definition.name) {
-                    continue;
-                }
-                let (adt_definition, new_instantiated) =
-                    self.resolve_adt_definition(&adt_definition);
-
-                for (_, d) in new_instantiated.records.iter() {
-                    type_queue.insert(0, (Some(Rc::clone(d)), None));
-                }
-                for (_, d) in new_instantiated.adts.iter() {
-                    type_queue.insert(0, (None, Some(Rc::clone(d))));
-                }
-                instantiated_adts.insert(Rc::clone(&adt_definition.name), adt_definition);
-            }
-        }
-
-        Instantiated {
-            functions: instantiated_functions,
-            adts: instantiated_adts,
-            records: instantiated_records,
         }
     }
 
-    fn resolve_adt_definition(
-        &self,
-        adt_definition: &Rc<ADTDefinition>,
-    ) -> (Rc<ADTDefinition>, Instantiated) {
-        let mut instantiated = Instantiated::new();
-
+    fn resolve_adt_definition(&mut self, adt_definition: &Rc<ADTDefinition>) -> Rc<ADTDefinition> {
         // Type variables should be replace with concrete types earlier
         let mut constructors = Vec::new();
         for constructor in adt_definition.constructors.iter() {
             let mut elements = Vec::new();
             for element in constructor.elements.iter() {
-                let (instantiated_element, new_instantiated) = self.resolve_type(element);
+                let instantiated_element = self.resolve_type(element);
                 elements.push(instantiated_element);
-                instantiated.merge(new_instantiated);
             }
             constructors.push(Rc::new(ADTConstructor {
                 name: Rc::clone(&constructor.name),
@@ -179,51 +132,54 @@ impl InstantiatorState {
             }));
         }
 
-        (
-            Rc::new(ADTDefinition {
-                name: Rc::clone(&adt_definition.name.clone()),
-                location: Rc::clone(&adt_definition.location.clone()),
-                type_variables: vec![],
-                constructors,
-            }),
-            instantiated,
-        )
+        Rc::new(ADTDefinition {
+            name: Rc::clone(&adt_definition.name.clone()),
+            location: Rc::clone(&adt_definition.location.clone()),
+            type_variables: vec![],
+            constructors,
+        })
     }
 
     fn resolve_record_definition(
-        &self,
+        &mut self,
         record_definition: &Rc<RecordDefinition>,
-    ) -> (Rc<RecordDefinition>, Instantiated) {
-        let mut instantiated = Instantiated::new();
+    ) -> Rc<RecordDefinition> {
         // Type variables should be replace with concrete types earlier
         let mut fields = Vec::new();
 
         for (n, field_type) in record_definition.fields.iter() {
-            let (instantiated_field_type, new_instantiated) = self.resolve_type(field_type);
+            let instantiated_field_type = self.resolve_type(field_type);
             fields.push((Rc::clone(n), instantiated_field_type));
-            instantiated.merge(new_instantiated);
         }
 
-        (
-            Rc::new(RecordDefinition {
-                name: Rc::clone(&record_definition.name),
-                location: Rc::clone(&record_definition.location),
-                type_variables: vec![],
-                fields,
-            }),
-            instantiated,
-        )
+        Rc::new(RecordDefinition {
+            name: Rc::clone(&record_definition.name),
+            location: Rc::clone(&record_definition.location),
+            type_variables: vec![],
+            fields,
+        })
     }
 
-    fn resolve_type(&self, loz_type: &Rc<Type>) -> (Rc<Type>, Instantiated) {
+    fn resolve_type(&mut self, loz_type: &Rc<Type>) -> Rc<Type> {
         match loz_type.borrow() {
-            Type::Bool => (Rc::new(Type::Bool), Instantiated::new()),
-            Type::Char => (Rc::new(Type::Char), Instantiated::new()),
-            Type::String => (Rc::new(Type::String), Instantiated::new()),
-            Type::Int => (Rc::new(Type::Int), Instantiated::new()),
-            Type::Float => (Rc::new(Type::Float), Instantiated::new()),
-            Type::UserType(name, _) => {
-                if let Some(record_definition) = self.record_definitions.get(name) {
+            Type::Bool => Rc::new(Type::Bool),
+            Type::Char => Rc::new(Type::Char),
+            Type::String => Rc::new(Type::String),
+            Type::Int => Rc::new(Type::Int),
+            Type::Float => Rc::new(Type::Float),
+            Type::UserType(name, args) => {
+                println!("Resolving type {:#?}", loz_type);
+
+                if let Some(record_definition) = self.input_record_definitions.get(name).cloned() {
+                    let type_hash = hash_type(&loz_type);
+                    let instantiated_record_name =
+                        Rc::new(format!("{}{}{}", &name, MONOMORPHIC_PREFIX, type_hash));
+
+                    if self.records.contains_key(&instantiated_record_name) {
+                        // We have encountered this definition before so we do not resolve a new definition
+                        return Rc::clone(loz_type);
+                    }
+
                     let record_type = Rc::new(Type::UserType(
                         Rc::clone(&name),
                         record_definition
@@ -233,40 +189,44 @@ impl InstantiatorState {
                             .collect(),
                     ));
                     let subs = unify(loz_type, &record_type).unwrap();
+                    let resolved_record_definiton = Rc::new(RecordDefinition {
+                        name: Rc::clone(&instantiated_record_name),
+                        location: Rc::clone(&record_definition.location),
+                        type_variables: Vec::new(),
+                        fields: record_definition
+                            .fields
+                            .iter()
+                            .map(|(v, t)| (Rc::clone(v), substitute_type(&subs, t)))
+                            .collect(),
+                    });
 
-                    let instantiated_type = substitute_type(&subs, &record_type);
-                    let type_hash = hash_type(&instantiated_type);
-                    let instantiated_record_name =
+                    self.add_record(resolved_record_definiton);
+
+                    Rc::new(Type::UserType(
+                        Rc::clone(&instantiated_record_name),
+                        record_definition
+                            .type_variables
+                            .iter()
+                            .map(|v| substitute_type(&subs, &Rc::new(Type::Variable(Rc::clone(v)))))
+                            .collect(),
+                    ))
+                } else if let Some(adt_definition) = self.input_adt_definitions.get(name).cloned() {
+                    println!("resolve_type adt_definition {:#?}", &adt_definition.name);
+                    let type_hash = hash_type(&loz_type);
+                    let instantiated_adt_name =
                         Rc::new(format!("{}{}{}", &name, MONOMORPHIC_PREFIX, type_hash));
 
-                    let mut instantiated = Instantiated::new();
-                    instantiated.records.insert(
-                        Rc::clone(&instantiated_record_name),
-                        Rc::new(RecordDefinition {
-                            name: Rc::clone(&instantiated_record_name),
-                            location: Rc::clone(&record_definition.location),
-                            type_variables: Vec::new(),
-                            fields: record_definition
-                                .fields
-                                .iter()
-                                .map(|(v, t)| (Rc::clone(v), substitute_type(&subs, t)))
-                                .collect(),
-                        }),
-                    );
-                    (
-                        Rc::new(Type::UserType(
-                            Rc::clone(&instantiated_record_name),
-                            record_definition
-                                .type_variables
-                                .iter()
-                                .map(|v| {
-                                    substitute_type(&subs, &Rc::new(Type::Variable(Rc::clone(v))))
-                                })
-                                .collect(),
-                        )),
-                        instantiated,
-                    )
-                } else if let Some(adt_definition) = self.adt_definitions.get(name) {
+                    if self.adts.contains_key(&instantiated_adt_name) {
+                        println!(
+                            "resolve_type adt_definition {:#?} already exists",
+                            &instantiated_adt_name
+                        );
+                        return Rc::new(Type::UserType(
+                            instantiated_adt_name,
+                            args.iter().cloned().collect(),
+                        ));
+                    }
+
                     let adt_type = Rc::new(Type::UserType(
                         Rc::clone(&name),
                         adt_definition
@@ -277,142 +237,95 @@ impl InstantiatorState {
                     ));
                     let subs = unify(loz_type, &adt_type).unwrap();
 
-                    let instantiated_type = substitute_type(&subs, &adt_type);
-                    let type_hash = hash_type(&instantiated_type);
-
-                    let instantiated_adt_name =
-                        Rc::new(format!("{}{}{}", &name, MONOMORPHIC_PREFIX, type_hash));
-
-                    let mut instantiated = Instantiated::new();
-                    instantiated.adts.insert(
+                    let resolved_adt_definition = Rc::new(ADTDefinition {
+                        name: Rc::clone(&instantiated_adt_name),
+                        location: Rc::clone(&adt_definition.location),
+                        type_variables: Vec::new(),
+                        constructors: adt_definition
+                            .constructors
+                            .iter()
+                            .map(|cd| {
+                                Rc::new(ADTConstructor {
+                                    name: Rc::clone(&cd.name),
+                                    elements: cd
+                                        .elements
+                                        .iter()
+                                        .map(|e| substitute_type(&subs, e))
+                                        .collect(),
+                                })
+                            })
+                            .collect(),
+                    });
+                    println!("Resolved adt definition: {:#?}", resolved_adt_definition);
+                    self.add_adt(resolved_adt_definition);
+                    Rc::new(Type::UserType(
                         Rc::clone(&instantiated_adt_name),
-                        Rc::new(ADTDefinition {
-                            name: Rc::clone(&instantiated_adt_name),
-                            location: Rc::clone(&adt_definition.location),
-                            type_variables: Vec::new(),
-                            constructors: adt_definition
-                                .constructors
-                                .iter()
-                                .map(|cd| {
-                                    Rc::new(ADTConstructor {
-                                        name: Rc::clone(&cd.name),
-                                        elements: cd
-                                            .elements
-                                            .iter()
-                                            .map(|e| substitute_type(&subs, e))
-                                            .collect(),
-                                    })
-                                })
-                                .collect(),
-                        }),
-                    );
-                    (
-                        Rc::new(Type::UserType(
-                            Rc::clone(&instantiated_adt_name),
-                            adt_definition
-                                .type_variables
-                                .iter()
-                                .map(|v| {
-                                    substitute_type(&subs, &Rc::new(Type::Variable(Rc::clone(v))))
-                                })
-                                .collect(),
-                        )),
-                        instantiated,
-                    )
+                        adt_definition
+                            .type_variables
+                            .iter()
+                            .map(|v| substitute_type(&subs, &Rc::new(Type::Variable(Rc::clone(v)))))
+                            .collect(),
+                    ))
                 } else {
-                    unreachable!()
+                    panic!("User type")
                 }
             }
-            Type::Tuple(elements) => {
-                let mut initiated = Instantiated::new();
-
-                let mut initiated_elements = Vec::new();
-                for e in elements {
-                    let (initiated_element, new_initiated) = self.resolve_type(e);
-                    initiated_elements.push(initiated_element);
-                    initiated.merge(new_initiated);
-                }
-                (Rc::new(Type::Tuple(initiated_elements)), initiated)
-            }
-            Type::List(e) => {
-                let (initiated_e, initiated) = self.resolve_type(e);
-                (Rc::new(Type::List(initiated_e)), initiated)
-            }
+            Type::Tuple(elements) => Rc::new(Type::Tuple(
+                elements.iter().map(|e| self.resolve_type(e)).collect(),
+            )),
+            Type::List(e) => Rc::new(Type::List(self.resolve_type(e))),
 
             // TODO: Interesting..
-            Type::Variable(_) => (Rc::clone(&loz_type), Instantiated::new()),
+            Type::Variable(_) => Rc::clone(&loz_type),
 
-            Type::Function(arguments, result) => {
-                let mut initiated = Instantiated::new();
-
-                let mut initiated_arguments = Vec::new();
-                for arg in arguments {
-                    let (initiated_arg, new_initiated) = self.resolve_type(arg);
-                    initiated_arguments.push(initiated_arg);
-                    initiated.merge(new_initiated);
-                }
-                let (initiated_result, new_initiated) = self.resolve_type(result);
-                initiated.merge(new_initiated);
-                (
-                    Rc::new(Type::Function(initiated_arguments, initiated_result)),
-                    initiated,
-                )
-            }
+            Type::Function(arguments, result) => Rc::new(Type::Function(
+                arguments.iter().map(|a| self.resolve_type(a)).collect(),
+                self.resolve_type(result),
+            )),
         }
     }
 
     fn resolve_function_definition(
-        &self,
+        &mut self,
         function_definition: &Rc<FunctionDefinition>,
-    ) -> (Rc<FunctionDefinition>, Instantiated) {
-        let mut instantiated = Instantiated::new();
-
+    ) -> Rc<FunctionDefinition> {
         let mut instantiated_bodies = Vec::new();
         for b in function_definition.function_bodies.iter() {
-            let (function_body, new_instantiated) = self.resolve_function_body(b);
-            instantiated.merge(new_instantiated);
-            instantiated_bodies.push(function_body);
+            instantiated_bodies.push(self.resolve_function_body(b));
         }
 
-        let (instantiated_type, new_instantiated) = self.resolve_type(
+        let instantiated_type = self.resolve_type(
             &function_definition
                 .function_type
                 .as_ref()
                 .unwrap()
                 .enclosed_type,
         );
-        instantiated.merge(new_instantiated);
-        (
-            Rc::new(FunctionDefinition {
-                location: Rc::clone(&function_definition.location),
-                name: Rc::clone(&function_definition.name),
-                function_type: Some(Rc::new(TypeScheme {
-                    bound_variables: HashSet::new(),
-                    enclosed_type: instantiated_type,
-                })),
-                function_bodies: instantiated_bodies,
-            }),
-            instantiated,
-        )
+        println!(
+            "resolve_function_definition instantiated_type {:#?}",
+            instantiated_type
+        );
+        Rc::new(FunctionDefinition {
+            location: Rc::clone(&function_definition.location),
+            name: Rc::clone(&function_definition.name),
+            function_type: Some(Rc::new(TypeScheme {
+                bound_variables: HashSet::new(),
+                enclosed_type: instantiated_type,
+            })),
+            function_bodies: instantiated_bodies,
+        })
     }
 
-    fn resolve_function_body(
-        &self,
-        function_body: &Rc<FunctionBody>,
-    ) -> (Rc<FunctionBody>, Instantiated) {
-        let mut instantiated = Instantiated::new();
-
+    fn resolve_function_body(&mut self, function_body: &Rc<FunctionBody>) -> Rc<FunctionBody> {
         let mut instantiated_rules = Vec::new();
         let mut type_information = function_body.type_information.clone();
         for function_rule in function_body.rules.iter() {
             match function_rule.borrow() {
                 FunctionRule::ConditionalRule(loc, condition, expression) => {
-                    let (instantiated_condition, new_instantiated) =
+                    let instantiated_condition =
                         self.resolve_expression(condition, &type_information);
-                    instantiated.merge(new_instantiated);
-                    let (instantiated_expression, new_instantiated) =
+                    let instantiated_expression =
                         self.resolve_expression(expression, &type_information);
-                    instantiated.merge(new_instantiated);
 
                     instantiated_rules.push(Rc::new(FunctionRule::ConditionalRule(
                         Rc::clone(loc),
@@ -421,9 +334,8 @@ impl InstantiatorState {
                     )))
                 }
                 FunctionRule::ExpressionRule(loc, expression) => {
-                    let (instantiated_expression, new_instantiated) =
+                    let instantiated_expression =
                         self.resolve_expression(expression, &type_information);
-                    instantiated.merge(new_instantiated);
                     instantiated_rules.push(Rc::new(FunctionRule::ExpressionRule(
                         Rc::clone(loc),
                         instantiated_expression,
@@ -435,9 +347,8 @@ impl InstantiatorState {
                             .iter()
                             .map(|(v, t)| (Rc::clone(v), Rc::clone(t))),
                     );
-                    let (instantiated_expression, new_instantiated) =
+                    let instantiated_expression =
                         self.resolve_expression(expression, &type_information);
-                    instantiated.merge(new_instantiated);
                     instantiated_rules.push(Rc::new(FunctionRule::LetRule(
                         Rc::clone(loc),
                         let_type_information.clone(),
@@ -447,139 +358,159 @@ impl InstantiatorState {
                 }
             }
         }
-        (
-            Rc::new(FunctionBody {
-                name: Rc::clone(&function_body.name),
-                location: Rc::clone(&function_body.location),
-                type_information: function_body.type_information.clone(),
-                match_expressions: function_body.match_expressions.clone(),
-                rules: instantiated_rules,
-                // There are no local definitions at this point.
-                local_function_definitions: HashMap::new(),
-                local_adt_definitions: HashMap::new(),
-                local_record_definitions: HashMap::new(),
-            }),
-            instantiated,
-        )
+        Rc::new(FunctionBody {
+            name: Rc::clone(&function_body.name),
+            location: Rc::clone(&function_body.location),
+            type_information: function_body.type_information.clone(),
+            match_expressions: function_body.match_expressions.clone(),
+            rules: instantiated_rules,
+            // There are no local definitions at this point.
+            local_function_definitions: HashMap::new(),
+            local_adt_definitions: HashMap::new(),
+            local_record_definitions: HashMap::new(),
+        })
     }
 
     fn resolve_expression(
-        &self,
+        &mut self,
         expression: &Rc<Expression>,
         type_information: &HashMap<Rc<String>, Rc<TypeScheme>>,
-    ) -> (Rc<Expression>, Instantiated) {
+    ) -> Rc<Expression> {
         match expression.borrow() {
-            Expression::BoolLiteral(loc, b) => (
-                Rc::new(Expression::BoolLiteral(Rc::clone(loc), *b)),
-                Instantiated::new(),
-            ),
-            Expression::StringLiteral(loc, s) => (
-                Rc::new(Expression::StringLiteral(Rc::clone(loc), Rc::clone(s))),
-                Instantiated::new(),
-            ),
-            Expression::CharacterLiteral(loc, c) => (
-                Rc::new(Expression::CharacterLiteral(Rc::clone(loc), *c)),
-                Instantiated::new(),
-            ),
-            Expression::IntegerLiteral(loc, i) => (
-                Rc::new(Expression::IntegerLiteral(Rc::clone(loc), *i)),
-                Instantiated::new(),
-            ),
-            Expression::FloatLiteral(loc, f) => (
-                Rc::new(Expression::FloatLiteral(Rc::clone(loc), *f)),
-                Instantiated::new(),
-            ),
-
-            Expression::TupleLiteral(loc, elements) => {
-                let mut instantiated_elements = Vec::new();
-                let mut instantiated = Instantiated::new();
-                for element in elements {
-                    let (instantiated_element, new_instantiated) =
-                        self.resolve_expression(element, type_information);
-                    instantiated.merge(new_instantiated);
-                    instantiated_elements.push(instantiated_element);
-                }
-                (
-                    Rc::new(Expression::TupleLiteral(
-                        Rc::clone(loc),
-                        instantiated_elements,
-                    )),
-                    instantiated,
-                )
+            Expression::BoolLiteral(loc, b) => Rc::new(Expression::BoolLiteral(Rc::clone(loc), *b)),
+            Expression::StringLiteral(loc, s) => {
+                Rc::new(Expression::StringLiteral(Rc::clone(loc), Rc::clone(s)))
             }
-            Expression::EmptyListLiteral(loc, list_type) => (
-                Rc::new(Expression::EmptyListLiteral(
+            Expression::CharacterLiteral(loc, c) => {
+                Rc::new(Expression::CharacterLiteral(Rc::clone(loc), *c))
+            }
+            Expression::IntegerLiteral(loc, i) => {
+                Rc::new(Expression::IntegerLiteral(Rc::clone(loc), *i))
+            }
+            Expression::FloatLiteral(loc, f) => {
+                Rc::new(Expression::FloatLiteral(Rc::clone(loc), *f))
+            }
+
+            Expression::TupleLiteral(loc, elements) => Rc::new(Expression::TupleLiteral(
+                Rc::clone(loc),
+                elements
+                    .iter()
+                    .map(|e| self.resolve_expression(e, type_information))
+                    .collect(),
+            )),
+            Expression::EmptyListLiteral(loc, list_type) => Rc::new(Expression::EmptyListLiteral(
+                Rc::clone(loc),
+                list_type.clone(),
+            )),
+            Expression::ShorthandListLiteral(loc, list_type, elements) => {
+                Rc::new(Expression::ShorthandListLiteral(
                     Rc::clone(loc),
                     list_type.clone(),
-                )),
-                Instantiated::new(),
-            ),
-            Expression::ShorthandListLiteral(loc, list_type, elements) => {
-                let mut instantiated_elements = Vec::new();
-                let mut instantiated = Instantiated::new();
-                for element in elements {
-                    let (instantiated_element, new_instantiated) =
-                        self.resolve_expression(element, type_information);
-                    instantiated.merge(new_instantiated);
-                    instantiated_elements.push(instantiated_element);
-                }
-                (
-                    Rc::new(Expression::ShorthandListLiteral(
-                        Rc::clone(loc),
-                        list_type.clone(),
-                        instantiated_elements,
-                    )),
-                    instantiated,
-                )
+                    elements
+                        .iter()
+                        .map(|e| self.resolve_expression(e, type_information))
+                        .collect(),
+                ))
             }
+
             Expression::LonghandListLiteral(loc, list_type, h, t) => {
-                let mut instantiated = Instantiated::new();
-                let (instantiated_h, new_instantiated) =
-                    self.resolve_expression(h, type_information);
-                instantiated.merge(new_instantiated);
-                let (instantiated_t, new_instantiated) =
-                    self.resolve_expression(t, type_information);
-                instantiated.merge(new_instantiated);
-                (
-                    Rc::new(Expression::LonghandListLiteral(
-                        Rc::clone(loc),
-                        list_type.clone(),
-                        instantiated_h,
-                        instantiated_t,
-                    )),
-                    instantiated,
-                )
+                Rc::new(Expression::LonghandListLiteral(
+                    Rc::clone(loc),
+                    list_type.clone(),
+                    self.resolve_expression(h, type_information),
+                    self.resolve_expression(t, type_information),
+                ))
             }
+
             Expression::ADTTypeConstructor(loc, adt_type, constructor_name, arguments) => {
-                let mut instantiated_arguments = Vec::new();
-                let mut instantiated = Instantiated::new();
-                for argument in arguments {
-                    let (instantiated_argument, new_instantiated) =
-                        self.resolve_expression(argument, type_information);
-                    instantiated.merge(new_instantiated);
-                    instantiated_arguments.push(instantiated_argument);
+                let adt_type = adt_type.as_ref().expect("ADTTypeConstructor without type");
+
+                let resolved_arguments = arguments
+                    .iter()
+                    .map(|fe| self.resolve_expression(fe, type_information))
+                    .collect();
+
+                let adt_definition_name = match adt_type.borrow() {
+                    Type::UserType(name, _) => {
+                        name.split(ADT_SEPARATOR).next().unwrap().to_string()
+                    }
+                    other => panic!("ADTTypeConstructor without UserType, found {:?}", other),
+                };
+
+                let adt_definition =
+                    self.input_adt_definitions
+                        .get(&adt_definition_name)
+                        .expect(&format!(
+                            "Could not find ADTDefinition with name {}",
+                            &adt_definition_name
+                        ));
+
+                let type_hash = hash_type(&adt_type);
+                let instantiated_adt_name = Rc::new(format!(
+                    "{}{}{}",
+                    adt_definition_name, MONOMORPHIC_PREFIX, type_hash
+                ));
+
+                if self.adts.contains_key(&instantiated_adt_name) {
+                    return Rc::new(Expression::ADTTypeConstructor(
+                        Rc::clone(loc),
+                        Some(self.resolve_type(&adt_type)),
+                        Rc::clone(constructor_name),
+                        resolved_arguments,
+                    ));
                 }
 
-                let (instantiated_adt_type, new_instantiated) =
-                    self.resolve_type(adt_type.as_ref().unwrap());
-                instantiated.merge(new_instantiated);
-                (
-                    Rc::new(Expression::ADTTypeConstructor(
-                        Rc::clone(loc),
-                        Some(instantiated_adt_type),
-                        Rc::clone(constructor_name),
-                        instantiated_arguments,
+                let subs = unify(
+                    &adt_type,
+                    &Rc::new(Type::UserType(
+                        Rc::new(adt_definition_name),
+                        adt_definition
+                            .type_variables
+                            .iter()
+                            .map(|tv| Rc::new(Type::Variable(Rc::clone(tv))))
+                            .collect(),
                     )),
-                    instantiated,
                 )
+                .unwrap();
+
+                let substituted_adt_definition =
+                    substitute_adt_definition(&instantiated_adt_name, &adt_definition, &subs);
+                self.add_adt(substituted_adt_definition);
+
+                Rc::new(Expression::ADTTypeConstructor(
+                    Rc::clone(loc),
+                    Some(self.resolve_type(&adt_type)),
+                    Rc::clone(constructor_name),
+                    resolved_arguments,
+                ))
             }
+
             Expression::Record(loc, record_type, record_name, field_expressions) => {
-                let record_definition = self.record_definitions.get(record_name).unwrap();
+                let resolved_field_expressions = field_expressions
+                    .iter()
+                    .map(|(fname, fe)| {
+                        (
+                            Rc::clone(fname),
+                            self.resolve_expression(fe, type_information),
+                        )
+                    })
+                    .collect();
+
+                let record_definition = self.input_record_definitions.get(record_name).unwrap();
                 let type_hash = hash_type(record_type.as_ref().unwrap());
                 let new_record_name = Rc::new(format!(
                     "{}{}{}",
                     record_name, MONOMORPHIC_PREFIX, type_hash
                 ));
+
+                if self.records.contains_key(&new_record_name) {
+                    return Rc::new(Expression::Record(
+                        Rc::clone(loc),
+                        Some(self.resolve_type(record_type.as_ref().unwrap())),
+                        Rc::clone(&new_record_name),
+                        resolved_field_expressions,
+                    ));
+                }
 
                 let subs = unify(
                     record_type.as_ref().unwrap(),
@@ -594,49 +525,30 @@ impl InstantiatorState {
                 )
                 .unwrap();
 
-                let mut instantiated_field_expressions = Vec::new();
-                let mut instantiated = Instantiated::new();
-                instantiated.records.insert(
-                    Rc::clone(&new_record_name),
-                    substitute_record_definition(&new_record_name, &subs, record_definition),
-                );
-                for (field_name, field_expression) in field_expressions {
-                    let (instantiated_field_expression, new_instantiated) =
-                        self.resolve_expression(field_expression, type_information);
-                    instantiated.merge(new_instantiated);
-                    instantiated_field_expressions
-                        .push((Rc::clone(field_name), instantiated_field_expression));
-                }
+                let substituted_record_definition =
+                    substitute_record_definition(&new_record_name, &subs, record_definition);
+                self.add_record(substituted_record_definition);
 
-                let (instantiated_record_type, new_instantiated) =
-                    self.resolve_type(record_type.as_ref().unwrap());
-                instantiated.merge(new_instantiated);
-                (
-                    Rc::new(Expression::Record(
-                        Rc::clone(loc),
-                        Some(instantiated_record_type),
-                        Rc::clone(&new_record_name),
-                        instantiated_field_expressions,
-                    )),
-                    instantiated,
-                )
+                let instantiated_record_type = self.resolve_type(record_type.as_ref().unwrap());
+
+                Rc::new(Expression::Record(
+                    Rc::clone(loc),
+                    Some(instantiated_record_type),
+                    Rc::clone(&new_record_name),
+                    resolved_field_expressions,
+                ))
             }
             Expression::Case(loc, expression, rules, result_type) => {
-                let mut instantiated = Instantiated::new();
-                let (instantiated_expression, new_instantiated) =
-                    self.resolve_expression(expression, type_information);
-                instantiated.merge(new_instantiated);
+                let instantiated_expression = self.resolve_expression(expression, type_information);
 
                 let mut instantiated_rules = Vec::new();
-
                 for rule in rules {
                     let mut combined_type_information = HashMap::new();
                     combined_type_information.extend(type_information.clone());
                     combined_type_information.extend(rule.type_information.clone());
 
-                    let (instantiated_result_rule, new_instantiated) =
+                    let instantiated_result_rule =
                         self.resolve_expression(&rule.result_rule, &combined_type_information);
-                    instantiated.merge(new_instantiated);
 
                     instantiated_rules.push(Rc::new(CaseRule {
                         loc_info: Rc::clone(&rule.loc_info),
@@ -646,142 +558,97 @@ impl InstantiatorState {
                     }))
                 }
 
-                (
-                    Rc::new(Expression::Case(
-                        Rc::clone(loc),
-                        instantiated_expression,
-                        instantiated_rules,
-                        result_type.clone(),
-                    )),
-                    instantiated,
-                )
+                Rc::new(Expression::Case(
+                    Rc::clone(loc),
+                    instantiated_expression,
+                    instantiated_rules,
+                    result_type.clone(),
+                ))
             }
             Expression::Call(loc, function_type, function_name, arguments) => {
-                let (new_call, arguments, instantiated) = self.resolve_function_call(
+                let (new_call, arguments) = self.resolve_function_call(
                     function_name,
                     function_type.as_ref().unwrap(),
                     arguments,
                     type_information,
                 );
-                (
-                    Rc::new(Expression::Call(
-                        Rc::clone(loc),
-                        function_type.clone(),
-                        new_call,
-                        arguments,
-                    )),
-                    instantiated,
-                )
+                Rc::new(Expression::Call(
+                    Rc::clone(loc),
+                    function_type.clone(),
+                    new_call,
+                    arguments,
+                ))
             }
-            Expression::Variable(loc, name) => (
-                Rc::new(Expression::Variable(Rc::clone(loc), Rc::clone(name))),
-                Instantiated::new(),
-            ),
-            Expression::Negation(loc, expression) => {
-                let (instantiated_expression, new_instantiated) =
-                    self.resolve_expression(expression, type_information);
-                (
-                    Rc::new(Expression::Negation(
-                        Rc::clone(loc),
-                        instantiated_expression,
-                    )),
-                    new_instantiated,
-                )
+            Expression::Variable(loc, name) => {
+                Rc::new(Expression::Variable(Rc::clone(loc), Rc::clone(name)))
             }
-            Expression::Minus(loc, expression) => {
-                let (instantiated_expression, new_instantiated) =
-                    self.resolve_expression(expression, type_information);
-                (
-                    Rc::new(Expression::Minus(Rc::clone(loc), instantiated_expression)),
-                    new_instantiated,
-                )
-            }
+            Expression::Negation(loc, expression) => Rc::new(Expression::Negation(
+                Rc::clone(loc),
+                self.resolve_expression(expression, type_information),
+            )),
+            Expression::Minus(loc, expression) => Rc::new(Expression::Minus(
+                Rc::clone(loc),
+                self.resolve_expression(expression, type_information),
+            )),
             Expression::Times(loc, l, r) => {
-                let (l, r, instantiated) = self.resolve_duo(l, r, type_information);
-                (
-                    Rc::new(Expression::Times(Rc::clone(loc), l, r)),
-                    instantiated,
-                )
+                let (l, r) = self.resolve_duo(l, r, type_information);
+                Rc::new(Expression::Times(Rc::clone(loc), l, r))
             }
             Expression::Divide(loc, l, r) => {
-                let (l, r, instantiated) = self.resolve_duo(l, r, type_information);
-                (
-                    Rc::new(Expression::Divide(Rc::clone(loc), l, r)),
-                    instantiated,
-                )
+                let (l, r) = self.resolve_duo(l, r, type_information);
+                Rc::new(Expression::Divide(Rc::clone(loc), l, r))
             }
             Expression::Modulo(loc, l, r) => {
-                let (l, r, instantiated) = self.resolve_duo(l, r, type_information);
-                (
-                    Rc::new(Expression::Modulo(Rc::clone(loc), l, r)),
-                    instantiated,
-                )
+                let (l, r) = self.resolve_duo(l, r, type_information);
+                Rc::new(Expression::Modulo(Rc::clone(loc), l, r))
             }
             Expression::Add(loc, l, r) => {
-                let (l, r, instantiated) = self.resolve_duo(l, r, type_information);
-                (Rc::new(Expression::Add(Rc::clone(loc), l, r)), instantiated)
+                let (l, r) = self.resolve_duo(l, r, type_information);
+                Rc::new(Expression::Add(Rc::clone(loc), l, r))
             }
             Expression::Subtract(loc, l, r) => {
-                let (l, r, instantiated) = self.resolve_duo(l, r, type_information);
-                (
-                    Rc::new(Expression::Subtract(Rc::clone(loc), l, r)),
-                    instantiated,
-                )
+                let (l, r) = self.resolve_duo(l, r, type_information);
+                Rc::new(Expression::Subtract(Rc::clone(loc), l, r))
             }
             Expression::ShiftLeft(loc, l, r) => {
-                let (l, r, instantiated) = self.resolve_duo(l, r, type_information);
-                (
-                    Rc::new(Expression::ShiftLeft(Rc::clone(loc), l, r)),
-                    instantiated,
-                )
+                let (l, r) = self.resolve_duo(l, r, type_information);
+                Rc::new(Expression::ShiftLeft(Rc::clone(loc), l, r))
             }
             Expression::ShiftRight(loc, l, r) => {
-                let (l, r, instantiated) = self.resolve_duo(l, r, type_information);
-                (
-                    Rc::new(Expression::ShiftRight(Rc::clone(loc), l, r)),
-                    instantiated,
-                )
+                let (l, r) = self.resolve_duo(l, r, type_information);
+                Rc::new(Expression::ShiftRight(Rc::clone(loc), l, r))
             }
             Expression::Greater(loc, l, r) => {
-                let (l, r, instantiated) = self.resolve_duo(l, r, type_information);
-                (
-                    Rc::new(Expression::Greater(Rc::clone(loc), l, r)),
-                    instantiated,
-                )
+                let (l, r) = self.resolve_duo(l, r, type_information);
+                Rc::new(Expression::Greater(Rc::clone(loc), l, r))
             }
             Expression::Greq(loc, l, r) => {
-                let (l, r, instantiated) = self.resolve_duo(l, r, type_information);
-                (
-                    Rc::new(Expression::Greq(Rc::clone(loc), l, r)),
-                    instantiated,
-                )
+                let (l, r) = self.resolve_duo(l, r, type_information);
+                Rc::new(Expression::Greq(Rc::clone(loc), l, r))
             }
             Expression::Leq(loc, l, r) => {
-                let (l, r, instantiated) = self.resolve_duo(l, r, type_information);
-                (Rc::new(Expression::Leq(Rc::clone(loc), l, r)), instantiated)
+                let (l, r) = self.resolve_duo(l, r, type_information);
+                Rc::new(Expression::Leq(Rc::clone(loc), l, r))
             }
             Expression::Lesser(loc, l, r) => {
-                let (l, r, instantiated) = self.resolve_duo(l, r, type_information);
-                (
-                    Rc::new(Expression::Lesser(Rc::clone(loc), l, r)),
-                    instantiated,
-                )
+                let (l, r) = self.resolve_duo(l, r, type_information);
+                Rc::new(Expression::Lesser(Rc::clone(loc), l, r))
             }
             Expression::Eq(loc, l, r) => {
-                let (l, r, instantiated) = self.resolve_duo(l, r, type_information);
-                (Rc::new(Expression::Eq(Rc::clone(loc), l, r)), instantiated)
+                let (l, r) = self.resolve_duo(l, r, type_information);
+                Rc::new(Expression::Eq(Rc::clone(loc), l, r))
             }
             Expression::Neq(loc, l, r) => {
-                let (l, r, instantiated) = self.resolve_duo(l, r, type_information);
-                (Rc::new(Expression::Neq(Rc::clone(loc), l, r)), instantiated)
+                let (l, r) = self.resolve_duo(l, r, type_information);
+                Rc::new(Expression::Neq(Rc::clone(loc), l, r))
             }
             Expression::And(loc, l, r) => {
-                let (l, r, instantiated) = self.resolve_duo(l, r, type_information);
-                (Rc::new(Expression::And(Rc::clone(loc), l, r)), instantiated)
+                let (l, r) = self.resolve_duo(l, r, type_information);
+                Rc::new(Expression::And(Rc::clone(loc), l, r))
             }
             Expression::Or(loc, l, r) => {
-                let (l, r, instantiated) = self.resolve_duo(l, r, type_information);
-                (Rc::new(Expression::Or(Rc::clone(loc), l, r)), instantiated)
+                let (l, r) = self.resolve_duo(l, r, type_information);
+                Rc::new(Expression::Or(Rc::clone(loc), l, r))
             }
             Expression::RecordFieldAccess(
                 loc,
@@ -790,7 +657,7 @@ impl InstantiatorState {
                 record_expression,
                 field_expression,
             ) => {
-                let (instantiated_expression, new_instantiated) =
+                let instantiated_expression =
                     self.resolve_expression(record_expression, type_information);
                 let new_record_name = format!(
                     "{}{}{}",
@@ -798,31 +665,37 @@ impl InstantiatorState {
                     MONOMORPHIC_PREFIX,
                     hash_type(record_type.as_ref().unwrap())
                 );
-                (
-                    Rc::new(Expression::RecordFieldAccess(
-                        Rc::clone(loc),
-                        record_type.clone(),
-                        Rc::new(new_record_name),
-                        instantiated_expression,
-                        Rc::clone(field_expression),
-                    )),
-                    new_instantiated,
-                )
+                Rc::new(Expression::RecordFieldAccess(
+                    Rc::clone(loc),
+                    record_type.clone(),
+                    Rc::new(new_record_name),
+                    instantiated_expression,
+                    Rc::clone(field_expression),
+                ))
             }
             Expression::Lambda(_, _, _, _, _) => unreachable!(),
         }
     }
 
     fn resolve_function_call(
-        &self,
+        &mut self,
         name: &Rc<String>,
         function_type: &Rc<Type>,
         arguments: &Vec<Rc<Expression>>,
         type_information: &HashMap<Rc<String>, Rc<TypeScheme>>,
-    ) -> (Rc<String>, Vec<Rc<Expression>>, Instantiated) {
-        let function_definition = self.function_definitions.get(name).unwrap();
+    ) -> (Rc<String>, Vec<Rc<Expression>>) {
+        let function_definition = self.input_function_definitions.get(name).cloned().unwrap();
         let type_hash = hash_type(function_type);
         let call_name = Rc::new(format!("{}{}{}", name, MONOMORPHIC_PREFIX, type_hash));
+
+        if self.functions.contains_key(&call_name) {
+            // We already generated this function with this specific type.
+            let resolved_arguments = arguments
+                .iter()
+                .map(|a| self.resolve_expression(a, type_information))
+                .collect();
+            return (call_name, resolved_arguments);
+        }
 
         let subs = unify(
             &function_definition
@@ -834,41 +707,59 @@ impl InstantiatorState {
         )
         .unwrap();
 
-        let mut resolved_arguments = Vec::new();
-        let mut instantiated = Instantiated::new();
-        instantiated.functions.insert(
-            Rc::clone(&call_name),
-            substitute_function_definition(
-                &self.adt_definitions,
-                &self.record_definitions,
-                &call_name,
-                &subs,
-                function_definition,
-            ),
-        );
-        for argument in arguments {
-            let (resolved_argument, new_instantiated) =
-                self.resolve_expression(argument, type_information);
-            instantiated.merge(new_instantiated);
-            resolved_arguments.push(resolved_argument);
-        }
+        self.add_function(substitute_function_definition(
+            &self.input_adt_definitions,
+            &self.input_record_definitions,
+            &call_name,
+            &subs,
+            &function_definition,
+        ));
 
-        (Rc::clone(&call_name), resolved_arguments, instantiated)
+        (
+            Rc::clone(&call_name),
+            arguments
+                .iter()
+                .map(|a| self.resolve_expression(a, type_information))
+                .collect(),
+        )
     }
 
     fn resolve_duo(
-        &self,
+        &mut self,
         l: &Rc<Expression>,
         r: &Rc<Expression>,
         type_information: &HashMap<Rc<String>, Rc<TypeScheme>>,
-    ) -> (Rc<Expression>, Rc<Expression>, Instantiated) {
-        let mut instantiated = Instantiated::new();
-        let (instantiated_l, new_instantiated) = self.resolve_expression(l, type_information);
-        instantiated.merge(new_instantiated);
-        let (instantiated_r, new_instantiated) = self.resolve_expression(r, type_information);
-        instantiated.merge(new_instantiated);
-        (instantiated_l, instantiated_r, instantiated)
+    ) -> (Rc<Expression>, Rc<Expression>) {
+        let instantiated_l = self.resolve_expression(l, type_information);
+        let instantiated_r = self.resolve_expression(r, type_information);
+        (instantiated_l, instantiated_r)
     }
+}
+
+fn substitute_adt_definition(
+    instantiated_name: &Rc<String>,
+    adt_definition: &Rc<ADTDefinition>,
+    subs: &Substitutions,
+) -> Rc<ADTDefinition> {
+    Rc::new(ADTDefinition {
+        name: Rc::clone(instantiated_name),
+        location: Rc::clone(&adt_definition.location),
+        type_variables: Vec::new(),
+        constructors: adt_definition
+            .constructors
+            .iter()
+            .map(|c| {
+                Rc::new(ADTConstructor {
+                    name: Rc::clone(&c.name),
+                    elements: c
+                        .elements
+                        .iter()
+                        .map(|e| substitute_type(subs, e))
+                        .collect(),
+                })
+            })
+            .collect(),
+    })
 }
 
 fn substitute_function_definition(
@@ -1063,7 +954,7 @@ fn substitute_type_references(
                 Rc::clone(l),
                 Rc::new(format!(
                     "{}{}{}{}{}",
-                    name, ADT_SEPARATOR, &constructor_name, MONOMORPHIC_PREFIX, type_hash
+                    name, MONOMORPHIC_PREFIX, type_hash, ADT_SEPARATOR, &constructor_name
                 )),
                 arguments
                     .iter()
@@ -1291,7 +1182,7 @@ fn substitute_expression(substitutions: &Substitutions, target: &Rc<Expression>)
                 Rc::clone(field),
             )
         }
-        Expression::Lambda(loc, _, type_information, match_expression, expression) => {
+        Expression::Lambda(_loc, _, _type_information, _match_expression, _expression) => {
             unreachable!()
         }
     })

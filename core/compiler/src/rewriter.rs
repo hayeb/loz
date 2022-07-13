@@ -10,9 +10,8 @@ use crate::generator::ir::{
     IRADTConstructor, IRADTDefinition, IRCaseRule, IRExpression, IRFunctionBody,
     IRFunctionDefinition, IRFunctionRule, IRMatchExpression, IRRecordDefinition, IRType,
 };
-
 use crate::rewriter::flattener::flatten;
-use crate::rewriter::instantiator::{instantiate, Instantiated};
+use crate::rewriter::instantiator::{instantiate, InstantiatorState};
 use crate::rewriter::renamer::rename;
 use crate::{Import, Type, TypeScheme};
 
@@ -26,14 +25,8 @@ pub struct IRModule {
     pub main_function_type: Rc<Type>,
 
     pub functions: HashMap<Rc<String>, Rc<IRFunctionDefinition>>,
-    pub adts: HashMap<Rc<String>, Monomorphized<IRADTDefinition>>,
-    pub records: HashMap<Rc<String>, Monomorphized<IRRecordDefinition>>,
-}
-
-#[derive(Clone, Debug)]
-pub struct Monomorphized<T> {
-    pub base: Rc<T>,
-    pub instances: HashMap<Rc<String>, Rc<T>>,
+    pub adts: HashMap<Rc<String>, Rc<IRADTDefinition>>,
+    pub records: HashMap<Rc<String>, Rc<IRRecordDefinition>>,
 }
 
 pub fn rewrite(
@@ -70,7 +63,7 @@ pub fn rewrite(
     //         f_0 :: [Int] Int -> Maybe Int
     //         f_1 :: [Char] Int -> Maybe Char
     //         main = (f_0 [1, 2, 3] 0, f_1 ['a', 'b', 'c'] 1)
-    let (combined_adts, combined_records, instantiated) = instantiate_definitions(
+    let instantiated = instantiate_definitions(
         &main_function_name,
         adts,
         records,
@@ -80,13 +73,8 @@ pub fn rewrite(
     );
 
     // 4. Build a runtime module with the newly generated definitions.
-    let runtime_module = build_runtime_module(
-        &main_module_name,
-        &main_function_name,
-        combined_adts,
-        combined_records,
-        &instantiated,
-    );
+    let runtime_module =
+        build_runtime_module(&main_module_name, &main_function_name, &instantiated);
 
     return Rc::new(runtime_module);
 }
@@ -94,9 +82,7 @@ pub fn rewrite(
 fn build_runtime_module(
     main_module_name: &Rc<String>,
     main_function_name: &Rc<String>,
-    combined_adts: HashMap<Rc<String>, Rc<ADTDefinition>>,
-    combined_records: HashMap<Rc<String>, Rc<RecordDefinition>>,
-    instantiated: &Instantiated,
+    instantiated: &InstantiatorState,
 ) -> IRModule {
     let runtime_module = IRModule {
         name: Rc::clone(&main_module_name),
@@ -116,43 +102,15 @@ fn build_runtime_module(
             .iter()
             .map(|(n, f)| (n.clone(), to_ir_functions(f)))
             .collect(),
-        adts: combined_adts
+        adts: instantiated
+            .adts
             .iter()
-            .map(|(n, d)| (n, to_ir_adt(d)))
-            .map(|(name, definition)| {
-                (
-                    Rc::clone(name),
-                    Monomorphized {
-                        base: definition,
-                        instances: instantiated
-                            .adts
-                            .iter()
-                            .filter(|(n, _)| n.starts_with(&name.to_string()))
-                            .map(|(_, d)| (Rc::clone(&d.name), to_ir_adt(d)))
-                            .collect(),
-                    },
-                )
-            })
-            .filter(|(_, m)| m.instances.len() > 0)
+            .map(|(n, d)| (Rc::clone(n), to_ir_adt(d)))
             .collect(),
-        records: combined_records
+        records: instantiated
+            .records
             .iter()
-            .map(|(n, d)| (n, to_ir_record(d)))
-            .map(|(name, definition)| {
-                (
-                    Rc::clone(name),
-                    Monomorphized {
-                        base: definition,
-                        instances: instantiated
-                            .records
-                            .iter()
-                            .filter(|(n, _)| n.starts_with(&name.to_string()))
-                            .map(|(_, d)| (Rc::clone(&d.name), to_ir_record(d)))
-                            .collect(),
-                    },
-                )
-            })
-            .filter(|(_, m)| m.instances.len() > 0)
+            .map(|(n, d)| (Rc::clone(n), to_ir_record(d)))
             .collect(),
     };
     runtime_module
@@ -165,11 +123,7 @@ fn instantiate_definitions(
     local_adts: HashMap<Rc<String>, Rc<ADTDefinition>>,
     local_records: HashMap<Rc<String>, Rc<RecordDefinition>>,
     functions: HashMap<Rc<String>, Rc<FunctionDefinition>>,
-) -> (
-    HashMap<Rc<String>, Rc<ADTDefinition>>,
-    HashMap<Rc<String>, Rc<RecordDefinition>>,
-    Instantiated,
-) {
+) -> InstantiatorState {
     let mut combined_adts = HashMap::new();
     combined_adts.extend(adts);
     combined_adts.extend(local_adts);
@@ -178,16 +132,16 @@ fn instantiate_definitions(
     combined_records.extend(records);
     combined_records.extend(local_records);
 
-    let instantiated = instantiate(
+    instantiate(
         &main_function_name,
         functions.clone(),
         combined_adts.clone(),
         combined_records.clone(),
-    );
-    (combined_adts, combined_records, instantiated)
+    )
 }
 
 fn to_ir_functions(function: &Rc<FunctionDefinition>) -> Rc<IRFunctionDefinition> {
+    println!("Function {}", &function.name);
     Rc::new(IRFunctionDefinition {
         location: function.location.clone(),
         name: function.name.clone(),
@@ -414,6 +368,7 @@ fn to_ir_adt(adt: &Rc<ADTDefinition>) -> Rc<IRADTDefinition> {
         constructors: adt
             .constructors
             .iter()
+            .filter(|c| !c.elements.iter().any(|t| matches!(t.borrow(), Type::Variable(_))))
             .map(|c| {
                 Rc::new(IRADTConstructor {
                     name: c.name.clone(),

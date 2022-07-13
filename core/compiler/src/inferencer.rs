@@ -9,7 +9,7 @@ use crate::ast::{
 };
 use crate::inferencer::substitutor::{substitute, substitute_list, substitute_type, Substitutions};
 use crate::inferencer::unifier::{unify, unify_one_of};
-use crate::{Location, Type, TypeScheme};
+use crate::{Location, Type, TypeScheme, TypeVar};
 
 mod grapher;
 pub mod substitutor;
@@ -113,7 +113,7 @@ impl Display for InferenceError {
             => write!(f, "Expected record type on LHS of '.', got {}", got),
 
             ExpectedRecordFieldAccessor(got)
-            => write!(f, "Expected record field accessor on RLHS of '.', got {}", got),
+            => write!(f, "Expected record field accessor on RHS of '.', got {}", got),
 
             UndefinedVariable(name) => write!(f, "Variable {} is not defined", name),
 
@@ -138,9 +138,6 @@ fn write_error_context(f: &mut Formatter<'_>, context: &Location) -> Result<(), 
     }
 }
 
-#[derive(Debug)]
-pub struct InferencerResult {}
-
 struct VariableNameStream {
     n: usize,
 }
@@ -163,6 +160,7 @@ pub struct InferencerOptions {
 
 struct InferencerState {
     type_variable_iterator: Box<dyn Iterator<Item = Rc<String>>>,
+
     options: InferencerOptions,
 
     frames: Vec<InferencerFrame>,
@@ -299,76 +297,6 @@ fn build_record_cache(
                 .map(|(n, d)| (Rc::clone(n), Rc::clone(d))),
         )
         .collect()
-}
-
-impl InferencerState {
-    fn new(
-        module: &Module,
-        options: InferencerOptions,
-        external_definitions: &ExternalDefinitions,
-    ) -> Result<InferencerState, Vec<InferenceError>> {
-        // 1. Check whether all functions are uniquely defined.
-        check_unique_definitions(&module, &external_definitions)?;
-
-        // 2. Register all functions which have a type.
-        let function_name_to_type =
-            build_function_scheme_cache(&module.function_name_to_definition, &external_definitions);
-
-        // 3. Check whether all called functions are defined
-        check_function_calls_defined(
-            &module.function_name_to_definition,
-            &module
-                .function_name_to_definition
-                .iter()
-                .map(|(n, _)| Rc::clone(n))
-                .chain(
-                    external_definitions
-                        .function_name_to_definition
-                        .keys()
-                        .cloned(),
-                )
-                .collect(),
-        )?;
-
-        // 4. Register all user-defined types.
-        let adt_name_to_definition =
-            build_adt_cache(&module.adt_name_to_definition, &external_definitions);
-
-        let record_name_to_definition =
-            build_record_cache(&module.record_name_to_definition, &external_definitions);
-
-        // 5. Check whether al referred types are defined
-        let defined_adt_names = (&module.adt_name_to_definition)
-            .iter()
-            .map(|(n, _)| Rc::clone(&n))
-            .chain(
-                external_definitions
-                    .adt_name_to_definition
-                    .iter()
-                    .map(|(n, _)| Rc::clone(n)),
-            )
-            .collect();
-        let defined_record_names = (&module.record_name_to_definition)
-            .iter()
-            .map(|(n, _)| Rc::clone(n))
-            .collect();
-
-        check_type_references_defined(
-            &module.function_name_to_definition,
-            &defined_adt_names,
-            &defined_record_names,
-        )?;
-
-        return Ok(InferencerState {
-            options,
-            type_variable_iterator: Box::new(VariableNameStream { n: 1 }),
-            frames: vec![InferencerFrame {
-                adt_name_to_definition,
-                record_name_to_definition,
-                type_scheme_context: function_name_to_type,
-            }],
-        });
-    }
 }
 
 fn check_type_references_defined(
@@ -685,6 +613,75 @@ fn map_unify(
 }
 
 impl InferencerState {
+
+    fn new(
+        module: &Module,
+        options: InferencerOptions,
+        external_definitions: &ExternalDefinitions,
+    ) -> Result<InferencerState, Vec<InferenceError>> {
+        // 1. Check whether all functions are uniquely defined.
+        check_unique_definitions(&module, &external_definitions)?;
+
+        // 2. Register all functions which have a type.
+        let function_name_to_type =
+            build_function_scheme_cache(&module.function_name_to_definition, &external_definitions);
+
+        // 3. Check whether all called functions are defined
+        check_function_calls_defined(
+            &module.function_name_to_definition,
+            &module
+                .function_name_to_definition
+                .iter()
+                .map(|(n, _)| Rc::clone(n))
+                .chain(
+                    external_definitions
+                        .function_name_to_definition
+                        .keys()
+                        .cloned(),
+                )
+                .collect(),
+        )?;
+
+        // 4. Register all user-defined types.
+        let adt_name_to_definition =
+            build_adt_cache(&module.adt_name_to_definition, &external_definitions);
+
+        let record_name_to_definition =
+            build_record_cache(&module.record_name_to_definition, &external_definitions);
+
+        // 5. Check whether al referred types are defined
+        let defined_adt_names = (&module.adt_name_to_definition)
+            .iter()
+            .map(|(n, _)| Rc::clone(&n))
+            .chain(
+                external_definitions
+                    .adt_name_to_definition
+                    .iter()
+                    .map(|(n, _)| Rc::clone(n)),
+            )
+            .collect();
+        let defined_record_names = (&module.record_name_to_definition)
+            .iter()
+            .map(|(n, _)| Rc::clone(n))
+            .collect();
+
+        check_type_references_defined(
+            &module.function_name_to_definition,
+            &defined_adt_names,
+            &defined_record_names,
+        )?;
+
+        return Ok(InferencerState {
+            options: options,
+            type_variable_iterator: Box::new(VariableNameStream { n: 1 }),
+            frames: vec![InferencerFrame {
+                adt_name_to_definition,
+                record_name_to_definition,
+                type_scheme_context: function_name_to_type,
+            }],
+        });
+    }
+
     fn fresh(&mut self) -> Rc<Type> {
         Rc::new(Type::Variable(self.type_variable_iterator.next().unwrap()))
     }
@@ -829,7 +826,7 @@ impl InferencerState {
             // Generalize all definitions in a component
             for d in &inferred_component {
                 let derived_scheme = self.get_type_scheme(&d.name).unwrap();
-                let generalized_scheme = self.generalize(&Rc::clone(&derived_scheme.enclosed_type));
+                let generalized_scheme = self.generalize(&derived_scheme.enclosed_type);
 
                 if self.options.print_types {
                     println!(
@@ -1875,6 +1872,7 @@ impl InferencerState {
                 )
             }
             Expression::EmptyListLiteral(loc, _) => {
+                println!("expected_type {:#?}", expected_type);
                 let fresh_list_type = Rc::new(Type::List(self.fresh()));
                 let subs = map_unify(loc, unify(&fresh_list_type, &expected_type))?;
                 (

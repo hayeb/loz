@@ -1,5 +1,7 @@
-:: T = A String | B Int | C Int
+:: T = A | B | C
 
-choose (A _) = "Cheese"
+choose A = "Cheese"
+choose B = "Bacon"
+choose C = "A salad"
 
-main = choose (A "bla")
+main = (choose A, choose B, choose C)

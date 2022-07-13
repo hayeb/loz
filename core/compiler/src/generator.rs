@@ -39,9 +39,13 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
-use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple};
-use inkwell::types::{BasicType, BasicTypeEnum, PointerType, BasicMetadataTypeEnum, AnyType};
-use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, PointerValue, BasicMetadataValueEnum, AnyValue};
+use inkwell::targets::{
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
+};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, PointerType};
+use inkwell::values::{
+    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, PointerValue,
+};
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 use itertools::{EitherOrBoth, Itertools};
 
@@ -50,7 +54,7 @@ use crate::generator::ir::{
     IRMatchExpression, IRRecordDefinition, IRType,
 };
 use crate::module_system::CompilerOptions;
-use crate::rewriter::{IRModule, Monomorphized};
+use crate::rewriter::IRModule;
 use crate::{ADT_SEPARATOR, MODULE_SEPARATOR, MONOMORPHIC_PREFIX};
 use number_prefix::NumberPrefix;
 use std::collections::hash_map::DefaultHasher;
@@ -101,7 +105,7 @@ fn build_command(object_path: &Path, executable_path: &Path) -> io::Result<Outpu
 }
 
 #[cfg(target_os = "linux")]
-fn build_command(object_path: &Path, executable_path: &Path) -> &mut Command {
+fn build_command(object_path: &Path, executable_path: &Path) -> io::Result<Output> {
     Command::new("ld")
         .arg("/usr/lib/x86_64-linux-gnu/crti.o")
         .arg("/usr/lib/x86_64-linux-gnu/crtn.o")
@@ -112,11 +116,11 @@ fn build_command(object_path: &Path, executable_path: &Path) -> &mut Command {
         .arg("-lc")
         .arg("-dynamic-linker")
         .arg("/lib64/ld-linux-x86-64.so.2")
+        .output()
 }
 
 fn link(object_path: &Path, executable_path: &Path) -> Result<(), String> {
-    match build_command(object_path, executable_path)
-    {
+    match build_command(object_path, executable_path) {
         Ok(r) => {
             if r.status.success() {
                 let executable_size = File::open(executable_path)
@@ -132,8 +136,14 @@ fn link(object_path: &Path, executable_path: &Path) -> Result<(), String> {
                 Ok(())
             } else {
                 println!("ld error code: {}", r.status);
-                println!("ld error err output: {}", String::from_utf8(r.stderr).unwrap());
-                println!("ld error std output: {}", String::from_utf8(r.stdout).unwrap());
+                println!(
+                    "ld error err output: {}",
+                    String::from_utf8(r.stderr).unwrap()
+                );
+                println!(
+                    "ld error std output: {}",
+                    String::from_utf8(r.stdout).unwrap()
+                );
                 Err(format!("Error linking, see previous output."))
             }
         }
@@ -145,8 +155,8 @@ struct GeneratorState<'a> {
     functions: HashMap<Rc<String>, Rc<IRFunctionDefinition>>,
     function_name_to_type: HashMap<Rc<String>, Rc<IRType>>,
 
-    records: HashMap<Rc<String>, Monomorphized<IRRecordDefinition>>,
-    adts: HashMap<Rc<String>, Monomorphized<IRADTDefinition>>,
+    records: HashMap<Rc<String>, Rc<IRRecordDefinition>>,
+    adts: HashMap<Rc<String>, Rc<IRADTDefinition>>,
 
     llvm_context: &'a Context,
     module: Module<'a>,
@@ -203,7 +213,9 @@ impl<'a> GeneratorState<'a> {
         self.generate_records(g);
         self.generate_adts(g);
 
-        println!("Module: {:#?}", self.functions);
+        println!("Module functions: {:#?}", self.functions);
+        println!("Module adts: {:#?}", self.adts);
+        println!("Module records: {:#?}", self.records);
 
         let main_type = &self
             .functions
@@ -245,7 +257,10 @@ impl<'a> GeneratorState<'a> {
             self.llvm_context
                 .i32_type()
                 .ptr_type(AddressSpace::Generic)
-                .fn_type(&[self.llvm_context.i64_type().as_basic_type_enum().into()], false),
+                .fn_type(
+                    &[self.llvm_context.i64_type().as_basic_type_enum().into()],
+                    false,
+                ),
             Some(Linkage::External),
         );
         self.module.add_function(
@@ -301,9 +316,10 @@ impl<'a> GeneratorState<'a> {
         self.module
             .add_function(
                 "exit",
-                self.llvm_context
-                    .void_type()
-                    .fn_type(&[self.llvm_context.i32_type().as_basic_type_enum().into()], false),
+                self.llvm_context.void_type().fn_type(
+                    &[self.llvm_context.i32_type().as_basic_type_enum().into()],
+                    false,
+                ),
                 Some(Linkage::External),
             )
             .add_attribute(
@@ -313,7 +329,7 @@ impl<'a> GeneratorState<'a> {
     }
 
     fn generate_records(&self, _g: &mut VarGenerator) {
-        for r in self.records.values().flat_map(|r| r.instances.values()) {
+        for r in self.records.values() {
             let struct_type = self.llvm_context.opaque_struct_type(&r.name);
             let field_types = r
                 .fields
@@ -325,11 +341,11 @@ impl<'a> GeneratorState<'a> {
     }
 
     fn generate_adts(&self, _g: &mut VarGenerator) {
-        for adt in self.adts.values().flat_map(|a| a.instances.values()) {
+        for adt in self.adts.values() {
             self.llvm_context.opaque_struct_type(&adt.name);
         }
 
-        for adt in self.adts.values().flat_map(|a| a.instances.values()) {
+        for adt in self.adts.values() {
             let field_tag_type = self.llvm_context.i8_type().as_basic_type_enum();
             let field_content_size = adt
                 .constructors
@@ -628,7 +644,11 @@ impl<'a> GeneratorState<'a> {
                 let strcmp = self.module.get_function("strcmp").unwrap();
                 let compared = self
                     .builder
-                    .build_call(strcmp, &[bla.as_basic_value_enum().into(), match_value.into()], &g.var())
+                    .build_call(
+                        strcmp,
+                        &[bla.as_basic_value_enum().into(), match_value.into()],
+                        &g.var(),
+                    )
                     .try_as_basic_value()
                     .left()
                     .unwrap()
@@ -648,7 +668,11 @@ impl<'a> GeneratorState<'a> {
                 let strcmp = self.module.get_function("strcmp").unwrap();
                 let compared = self
                     .builder
-                    .build_call(strcmp, &[bla.as_basic_value_enum().into(), match_value.into()], &g.var())
+                    .build_call(
+                        strcmp,
+                        &[bla.as_basic_value_enum().into(), match_value.into()],
+                        &g.var(),
+                    )
                     .try_as_basic_value()
                     .left()
                     .unwrap()
@@ -889,19 +913,17 @@ impl<'a> GeneratorState<'a> {
                 self.builder.build_unconditional_branch(match_block);
             }
             IRMatchExpression::ADT(_, adt_constructor_name, arguments) => {
-                let mut bla = adt_constructor_name.split(MONOMORPHIC_PREFIX);
-                let mut blie = bla.next().unwrap().split(ADT_SEPARATOR);
-                let adt_name = blie.next().unwrap();
-                let constructor_name = blie.next().unwrap();
-                let type_str = bla.next().unwrap();
+                println!("adt_constructor_name {:#?}", adt_constructor_name);
+                let mut split = adt_constructor_name.split(ADT_SEPARATOR);
+                let adt_definition_name = split.next().unwrap();
+                let adt_constructor_name = split.next().unwrap();
 
-                let adt_definition = self.adts.get(&adt_name.to_string()).unwrap();
+                let adt_definition = self.adts.get(&adt_definition_name.to_string()).unwrap();
                 let constructor_index = adt_definition
-                    .base
                     .constructors
                     .iter()
                     .enumerate()
-                    .filter(|(_, c)| &c.name == &Rc::new(constructor_name.to_string()))
+                    .filter(|(_, c)| &c.name == &Rc::new(adt_constructor_name.to_string()))
                     .map(|(i, _)| i)
                     .next()
                     .unwrap();
@@ -944,10 +966,7 @@ impl<'a> GeneratorState<'a> {
                         .build_struct_gep(match_value.into_pointer_value(), 1 as u32, &g.var())
                         .unwrap();
 
-                    let struct_name = format!(
-                        "{}{}{}__{}",
-                        adt_name, MONOMORPHIC_PREFIX, type_str, constructor_name
-                    );
+                    let struct_name = format!("{}__{}", adt_definition_name, adt_constructor_name);
                     let value_struct_pointer_type = self
                         .module
                         .get_struct_type(&struct_name)
@@ -1005,7 +1024,6 @@ impl<'a> GeneratorState<'a> {
                     .unwrap();
                 for field in fields {
                     let index = record_definition
-                        .base
                         .fields
                         .iter()
                         .enumerate()
@@ -1119,7 +1137,11 @@ impl<'a> GeneratorState<'a> {
                         .builder
                         .build_call(
                             self.module.get_function("malloc").unwrap(),
-                            &[list_struct_type.size_of().unwrap().as_basic_value_enum().into()],
+                            &[list_struct_type
+                                .size_of()
+                                .unwrap()
+                                .as_basic_value_enum()
+                                .into()],
                             &g.var(),
                         )
                         .try_as_basic_value()
@@ -1175,7 +1197,11 @@ impl<'a> GeneratorState<'a> {
                     .builder
                     .build_call(
                         self.module.get_function("malloc").unwrap(),
-                        &[list_struct_type.size_of().unwrap().as_basic_value_enum().into()],
+                        &[list_struct_type
+                            .size_of()
+                            .unwrap()
+                            .as_basic_value_enum()
+                            .into()],
                         &g.var(),
                     )
                     .try_as_basic_value()
@@ -1202,23 +1228,21 @@ impl<'a> GeneratorState<'a> {
                     IRType::UserType(name) => name,
                     _ => unreachable!("ADTTypeConstuctor without Type::UserType type"),
                 };
-                let adt_definition = self
-                    .adts
-                    .get(
-                        &adt_name
-                            .split(MONOMORPHIC_PREFIX)
-                            .next()
-                            .unwrap()
-                            .to_string(),
-                    )
-                    .unwrap();
+                let adt_definition = self.adts.get(adt_name).expect(&format!(
+                    "Unable to find ADT definition by name {}",
+                    adt_name
+                ));
                 let adt_llvm_type = self.module.get_struct_type(adt_name).unwrap();
 
                 let allocated_pointer = self
                     .builder
                     .build_call(
                         self.module.get_function("malloc").unwrap(),
-                        &[adt_llvm_type.size_of().unwrap().as_basic_value_enum().into()],
+                        &[adt_llvm_type
+                            .size_of()
+                            .unwrap()
+                            .as_basic_value_enum()
+                            .into()],
                         &g.var(),
                     )
                     .try_as_basic_value()
@@ -1226,10 +1250,13 @@ impl<'a> GeneratorState<'a> {
                     .unwrap()
                     .into_pointer_value();
 
-                println!("adt_llvm_type: {:#?}", adt_llvm_type);
-                println!("allocated_pointer: {:#?}", allocated_pointer);
-
-                let adt_value_pointer = self.builder.build_bitcast(allocated_pointer, adt_llvm_type.ptr_type(AddressSpace::Generic), &g.var())
+                let adt_value_pointer = self
+                    .builder
+                    .build_bitcast(
+                        allocated_pointer,
+                        adt_llvm_type.ptr_type(AddressSpace::Generic),
+                        &g.var(),
+                    )
                     .into_pointer_value();
 
                 let adt_constructor_llvm_type = self
@@ -1237,7 +1264,6 @@ impl<'a> GeneratorState<'a> {
                     .get_struct_type(&format!("{}__{}", adt_name, name))
                     .unwrap();
                 let constructor_index = adt_definition
-                    .base
                     .constructors
                     .iter()
                     .enumerate()
@@ -1284,7 +1310,11 @@ impl<'a> GeneratorState<'a> {
                     .builder
                     .build_call(
                         self.module.get_function("malloc").unwrap(),
-                        &[record_llvm_type.size_of().unwrap().as_basic_value_enum().into()],
+                        &[record_llvm_type
+                            .size_of()
+                            .unwrap()
+                            .as_basic_value_enum()
+                            .into()],
                         &g.var(),
                     )
                     .try_as_basic_value()
@@ -1293,12 +1323,8 @@ impl<'a> GeneratorState<'a> {
                     .into_pointer_value()
                     .const_cast(record_llvm_type.ptr_type(AddressSpace::Generic));
 
-                for (i, (_, (_, field_expression))) in record_definition
-                    .base
-                    .fields
-                    .iter()
-                    .zip(d.iter())
-                    .enumerate()
+                for (i, (_, (_, field_expression))) in
+                    record_definition.fields.iter().zip(d.iter()).enumerate()
                 {
                     let v = self.generate_expression(g, field_expression, value_information);
                     let field_ptr = self
@@ -1694,7 +1720,6 @@ impl<'a> GeneratorState<'a> {
                     )
                     .unwrap();
                 let record_field_index = record_definition
-                    .base
                     .fields
                     .iter()
                     .enumerate()
@@ -1808,12 +1833,14 @@ impl<'a> GeneratorState<'a> {
         target_machine
     }
 
-
     fn generate_abort(&self, g: &mut VarGenerator, message: String, exitcode: i32) {
         let puts = self.module.get_function("puts").unwrap();
         let message_pointer = self.builder.build_global_string_ptr(&message, &g.global());
-        self.builder
-            .build_call(puts, &[message_pointer.as_basic_value_enum().into()], &g.var());
+        self.builder.build_call(
+            puts,
+            &[message_pointer.as_basic_value_enum().into()],
+            &g.var(),
+        );
         let exit = self.module.get_function("exit").unwrap();
         self.builder.build_call(
             exit,
@@ -1861,10 +1888,10 @@ impl<'a> GeneratorState<'a> {
     }
 
     fn generate_print_bool(&self, g: &mut VarGenerator) -> FunctionValue {
-        let print_bool_type = self
-            .llvm_context
-            .void_type()
-            .fn_type(&[self.llvm_context.bool_type().as_basic_type_enum().into()], false);
+        let print_bool_type = self.llvm_context.void_type().fn_type(
+            &[self.llvm_context.bool_type().as_basic_type_enum().into()],
+            false,
+        );
         let print_bool =
             self.module
                 .add_function("print_bool", print_bool_type, Some(Linkage::External));
@@ -1917,7 +1944,8 @@ impl<'a> GeneratorState<'a> {
         let print_bool = self.module.get_function("print_bool").unwrap();
         match type_to_print.borrow() {
             IRType::Bool => {
-                self.builder.build_call(print_bool, &[value.into()], &g.var());
+                self.builder
+                    .build_call(print_bool, &[value.into()], &g.var());
             }
 
             IRType::Char => {
@@ -1973,8 +2001,7 @@ impl<'a> GeneratorState<'a> {
                 );
             }
             IRType::UserType(name) => {
-                let base_name = name.split(MONOMORPHIC_PREFIX).next().unwrap().to_string();
-                if self.records.contains_key(&base_name) {
+                if self.records.contains_key(name) {
                     let print_string = self
                         .builder
                         .build_global_string_ptr("%s", "print_string")
@@ -1995,17 +2022,18 @@ impl<'a> GeneratorState<'a> {
                         .builder
                         .build_global_string_ptr(", ", "record_field_separator")
                         .as_basic_value_enum();
-                    self.builder
-                        .build_call(printf, &[print_string.into(), record_prefix.into()], &g.var());
+                    self.builder.build_call(
+                        printf,
+                        &[print_string.into(), record_prefix.into()],
+                        &g.var(),
+                    );
 
                     let record_definition = self
                         .records
                         .get(&name.split(MONOMORPHIC_PREFIX).next().unwrap().to_string())
                         .unwrap();
-                    let record_instance_definition = record_definition.instances.get(name).unwrap();
                     let struct_value = value.into_pointer_value();
-                    for (i, (field_name, field_type)) in
-                        record_instance_definition.fields.iter().enumerate()
+                    for (i, (field_name, field_type)) in record_definition.fields.iter().enumerate()
                     {
                         let field_pointer = self
                             .builder
@@ -2024,13 +2052,17 @@ impl<'a> GeneratorState<'a> {
                             &g.var(),
                         );
                         self.generate_print_code(g, field_type, field_value);
-                        if i < record_instance_definition.fields.len() - 1 {
-                            self.builder
-                                .build_call(printf, &[record_field_separator.into()], &g.var());
+                        if i < record_definition.fields.len() - 1 {
+                            self.builder.build_call(
+                                printf,
+                                &[record_field_separator.into()],
+                                &g.var(),
+                            );
                         }
                     }
-                    self.builder.build_call(printf, &[record_suffix.into()], &g.var());
-                } else if self.adts.contains_key(&base_name) {
+                    self.builder
+                        .build_call(printf, &[record_suffix.into()], &g.var());
+                } else if self.adts.contains_key(name) {
                     // TODO: Extend printing ADTs with their respective constructors.
                     let adt_name_string = self
                         .builder
@@ -2042,7 +2074,7 @@ impl<'a> GeneratorState<'a> {
                     self.builder
                         .build_call(printf, &[adt_name_string.into()], &g.var());
                 } else {
-                    unreachable!("Printing ADTs")
+                    unreachable!("Printing ADTs {}", name)
                 }
             }
             IRType::Tuple(elements) => {
@@ -2058,7 +2090,8 @@ impl<'a> GeneratorState<'a> {
                     .builder
                     .build_global_string_ptr(")", "tuple_suffix")
                     .as_basic_value_enum();
-                self.builder.build_call(printf, &[tuple_prefix.into()], &g.var());
+                self.builder
+                    .build_call(printf, &[tuple_prefix.into()], &g.var());
                 for (i, element_type) in elements.iter().enumerate() {
                     let element_pointer = self
                         .builder
@@ -2071,14 +2104,16 @@ impl<'a> GeneratorState<'a> {
                             .build_call(printf, &[tuple_separator.into()], &g.var());
                     }
                 }
-                self.builder.build_call(printf, &[tuple_suffix.into()], &g.var());
+                self.builder
+                    .build_call(printf, &[tuple_suffix.into()], &g.var());
             }
             IRType::List(element_type) => {
                 let list_open = self
                     .builder
                     .build_global_string_ptr("[", "list_open")
                     .as_basic_value_enum();
-                self.builder.build_call(printf, &[list_open.into()], &g.var());
+                self.builder
+                    .build_call(printf, &[list_open.into()], &g.var());
 
                 let print_list_function = self.generate_print_list(g, element_type);
                 self.builder
@@ -2088,7 +2123,8 @@ impl<'a> GeneratorState<'a> {
                     .builder
                     .build_global_string_ptr("]", "list_close")
                     .as_basic_value_enum();
-                self.builder.build_call(printf, &[list_close.into()], &g.var());
+                self.builder
+                    .build_call(printf, &[list_close.into()], &g.var());
             }
             IRType::Function(_, _) => unreachable!("Printing function type"),
         };
@@ -2190,7 +2226,8 @@ impl<'a> GeneratorState<'a> {
             .builder
             .build_global_string_ptr(", ", "list_separator")
             .as_basic_value_enum();
-        self.builder.build_call(printf, &[list_separator.into()], &g.var());
+        self.builder
+            .build_call(printf, &[list_separator.into()], &g.var());
         self.builder
             .build_call(print_list_function, &[next_pointer.into()], &g.var());
         self.builder.build_return(None);
@@ -2218,16 +2255,8 @@ impl<'a> GeneratorState<'a> {
             IRType::Bool => Box::new(self.llvm_context.bool_type().as_basic_type_enum()),
             IRType::Int => Box::new(self.llvm_context.i64_type().as_basic_type_enum()),
             IRType::Float => Box::new(self.llvm_context.f64_type().as_basic_type_enum()),
-            IRType::Char => Box::new(
-                self.llvm_context
-                    .i8_type()
-                    .ptr_type(AddressSpace::Generic),
-            ),
-            IRType::String => Box::new(
-                self.llvm_context
-                    .i8_type()
-                    .ptr_type(AddressSpace::Generic),
-            ),
+            IRType::Char => Box::new(self.llvm_context.i8_type().ptr_type(AddressSpace::Generic)),
+            IRType::String => Box::new(self.llvm_context.i8_type().ptr_type(AddressSpace::Generic)),
             IRType::UserType(name) => Box::new(
                 self.module
                     .get_struct_type(name)
